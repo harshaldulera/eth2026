@@ -50,13 +50,18 @@ Honest answer to "swap Arkiv for Postgres": a raider, or anyone building their o
 
 No decision needed from Lane A/B.
 
-## 4. Ownership: arena keeps it (decision to confirm)
+## 4. Ownership: each Castellan owns their castle record (decided, Sujal 6 Nov)
 
-All entities are owned by the arena wallet, and every read filters `.ownedBy(arena)`. I propose we keep that and say why in `how-you-use-arkiv.md`: pots and streaks are settled on Hedera by the arena, so only the arena may write them, and the owner filter is what stops a stranger from planting a castle on the board under our schema name.
+This is the center of the "why Arkiv" answer: a Castellan owns their listing the way no Postgres row can be owned.
 
-The alternative, per-Castellan ownership via `changeOwnership`, needs an EVM address per Castellan (we only have Hedera ids), wallet connect for delisting, and breaks the outbox's patch model. Half a day for one line of markdown.
+On Arkiv only the owner may edit an entity, so a castle becomes two entities:
 
-**Decision needed:** agree arena ownership, or ask for the split.
+- **`castle`** (identity): name, guardian name, tier, transport, protected tool, deadline, portrait. The arena creates it, then `changeOwnership` to the Castellan's wallet. Created `readonly`: nobody, including the arena, can change it afterwards. The Castellan can delete it from their own wallet, which is how they delist. Expires at the vault deadline.
+- **`castleState`** (mutable): pot, fee, streak, siege count, status, vault state, last seen. Owned by the arena, because these values change only through settlement the arena performs on Hedera. Expires at the vault deadline. Carries `castleId`, `name` and `tier` too, so the board filters on one entity (no joins on Arkiv).
+
+Visible to users: "owned by 0x…" on every card with an explorer link; a Castellan deleting their `castle` entity removes their listing; the live numbers still come from `castleState`.
+
+**Needs from Lane A (notice, not a question):** a Castellan wallet address column on `castles` (an EVM address, since Arkiv cannot use a Hedera `0.0.x` id as owner), set when a castle is created. The Build a Guardian form (Lane C) collects it. Seeded castles get generated addresses. Sieges and profiles stay arena-owned.
 
 ## 5. Keep off Arkiv, stated in the docs (no decision)
 
