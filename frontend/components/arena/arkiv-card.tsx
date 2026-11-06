@@ -16,7 +16,7 @@ import { untilText } from "@/components/grid/vault-card";
  * @example <ArkivCard castleId={castle.id} />
  */
 export function ArkivCard({ castleId }: { castleId: string }) {
-  const { data, error } = usePolling(() => api.arkivCastle(castleId), 15_000, { key: castleId });
+  const { data, error } = usePolling(() => api.arkivVault(castleId), 15_000, { key: castleId });
   const now = useNow(30_000);
   if (error && !data) return null;
   return (
@@ -45,8 +45,8 @@ export function ArkivCard({ castleId }: { castleId: string }) {
             hint="Created readonly by the arena, then handed to the owner. Nobody can edit it; only this wallet can delete it, which delists the vault."
           >
             owned by{" "}
-            <a href={data.castellanUrl} target="_blank" rel="noreferrer" className="font-mono text-ink underline-offset-4 hover:underline">
-              {shortAccount(data.listing?.owner ?? data.castellan)}
+            <a href={data.ownerWalletUrl} target="_blank" rel="noreferrer" className="font-mono text-ink underline-offset-4 hover:underline">
+              {shortAccount(data.listing?.owner ?? data.ownerWallet)}
             </a>
             {data.listing?.readonly ? <span className="ml-2 font-ui text-[10px] tracking-[0.1em] text-ink-dim uppercase">readonly</span> : null}
             {data.listing?.expiresAtMs ? <span className="block text-xs text-ink-dim">expires {untilText(data.listing.expiresAtMs, now)}, at the vault deadline</span> : null}

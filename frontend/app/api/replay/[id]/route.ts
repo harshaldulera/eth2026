@@ -68,8 +68,13 @@ function buildPixelReplay(siege: Siege, castle: Castle): ReplayResponse {
     if (rec) {
       out.protectedToolCalled = rec.protectedToolCalled;
       out.toolCalls = namesOf(rec.toolCalls);
-      out.promptHash = rec.promptHash;
-      out.responseHash = rec.responseHash;
+      // Never send rec.promptHash or rec.responseHash to the browser. promptHash is an unsalted
+      // sha256 of the guard's whole system prompt, and that prompt is public template text plus the
+      // guard's secret orders. Anyone holding the hash can guess orders offline and check each guess
+      // against it, with no rate limit and no pay-per-op, which is exactly what operators pay to try.
+      // responseHash is the same kind of oracle for the model's raw reply. The verifier checks both
+      // server-side (lib/siege/verifier.ts); the replay only needs to know a proxy record exists.
+      out.proxied = true;
       out.model = rec.model;
       out.mock = rec.mock;
     } else if (calls.length) {

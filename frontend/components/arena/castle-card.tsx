@@ -1,5 +1,5 @@
 import type { Castle } from "@/lib/types";
-import type { ArkivCastleMeta } from "@/lib/api/client";
+import type { ArkivVaultMeta } from "@/lib/api/client";
 import { VaultCard } from "@/components/grid/vault-card";
 
 /** Kept for existing imports; the card lives in components/grid/vault-card.tsx. */
@@ -21,7 +21,7 @@ export function CastleCard({
   className,
 }: {
   castle: Castle;
-  arkiv?: ArkivCastleMeta;
+  arkiv?: ArkivVaultMeta;
   underSiege?: boolean;
   now?: number;
   href?: string;

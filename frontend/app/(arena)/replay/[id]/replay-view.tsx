@@ -22,6 +22,7 @@ import { summarizeTurns, type TurnSummary } from "./turns";
 import { Scrubber } from "./scrubber";
 import { StepChips } from "./step-chips";
 import { ProofPanel } from "./proof-panel";
+import { voidHeadline } from "@/lib/siege/text";
 import { providerOf } from "./verify-checks";
 import { OwnerLayer } from "./owner-layer";
 import { FORK_KEY, type ForkPayload } from "@/lib/hooks/useFork";
@@ -192,7 +193,11 @@ function ReplayDeck({ replay, autoplay }: { replay: ReplayWithVerify; autoplay: 
     router.push(`/castle/${castle.id}?fork=${encodeURIComponent(siege.id)}`);
   };
 
-  const live = siege.status === "in_progress" || siege.status === "created";
+  // A voided op is over even if its status never left in_progress (voided under the operator).
+  const live = (siege.status === "in_progress" || siege.status === "created") && siege.settlement?.state !== "void";
+  // A voided op says why, in words, and what happened to the fee: the scene alone would show a
+  // breach that never paid out, or an op that simply stopped.
+  const voidLineText = voidHeadline(siege, castle.guardianName);
 
   const banner = live ? (
     <Link
@@ -202,6 +207,11 @@ function ReplayDeck({ replay, autoplay }: { replay: ReplayWithVerify; autoplay: 
       <Radio className="size-4 shrink-0 text-threat" />
       <span className="font-ui text-xs tracking-[0.08em] text-threat">LIVE · watching in the Op room ▸</span>
     </Link>
+  ) : voidLineText ? (
+    <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-panel px-4 py-3 px-frame [--frame:var(--color-warn)]">
+      <span className="font-ui text-xs tracking-[0.08em] text-warn">OP VOID</span>
+      <span className="font-term text-lg text-ink">{voidLineText}</span>
+    </div>
   ) : siege.free ? (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-panel px-4 py-3 px-frame [--frame:var(--color-money)]">
       <span className="font-ui text-xs tracking-[0.08em] text-money">RECON · no receipt, no payout</span>

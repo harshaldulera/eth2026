@@ -49,7 +49,9 @@ describe("castles", () => {
     expect((await arkiv.liveSieges()).map((x) => x.id)).toEqual([s.id]);
     for (const t of WOODEN_BREAK) await siege.message(s.id, t);
     expect(await arkiv.liveSieges()).toEqual([]);
-    expect(await arkiv.profile("0.0.r")).toMatchObject({ kind: "raider", sieges: 1, breaks: 1 });
+    // Free recon ops never count toward a profile (they are unlimited, so they could farm the
+    // leaderboards); only paid, non-voided ops do.
+    expect(await arkiv.profile("0.0.r")).toBeNull();
     expect(await arkiv.profile("0.0.nobody")).toBeNull();
     expect((await arkiv.listCastles({ tier: "iron" }))[0].id).toBe("castle_iron_warden");
   });

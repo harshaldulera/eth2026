@@ -15,11 +15,20 @@ export type HcsEntry = {
   /** HCS sequence number once on the topic; null while queued. */
   seq: number | null;
   state: "pending" | "submitted";
+  /** The topic this message was written to (a siege can straddle a topic rotation). */
+  topicId: string;
   /** Hash the message carries (message hash for siege.message, transcript hash for siege.end/vault.*). */
   hash?: string;
   requestId?: string;
   txId?: string;
-  /** Mirror-node check of this exact message on the public topic (testnet only). */
+  /** siege.end: the outcome it committed (held / broken / banished). */
+  result?: string;
+  turn?: number;
+  /**
+   * Mirror-node check of this exact message on the public topic (testnet only). "missing": the
+   * mirror already has a later message on the topic but not this one. "unchecked": not read, the
+   * read failed, or the mirror is behind.
+   */
   mirror: "confirmed" | "mismatch" | "missing" | "unchecked";
 };
 
@@ -30,8 +39,10 @@ export type ReplayTurn = {
     /** keccak256 of the message's UTF-8 bytes, as the audit log commits it. */
     hash: `0x${string}`;
     hcs?: HcsEntry;
-    /** The HCS hash equals the hash of the text shown here. */
+    /** The HCS hash equals the hash of the text shown here, and the topic carries that row. */
     matches: boolean | null;
+    /** Why it does not match: the audit hash differs, or the topic differs from / lacks the audit row. */
+    issue?: "hash" | "mirror-mismatch" | "mirror-missing";
   };
   guardian?: {
     text: string;
@@ -44,6 +55,8 @@ export type ReplayTurn = {
     record?: { provider: string; model: string; protectedToolCalled: boolean; mock: boolean; at: string };
     /** Replies from a test guardian (the stub, or the SDK test harness) have no inference record. */
     stub: boolean;
+    /** The record or its request id does not belong to this siege and turn. */
+    issue?: string;
   };
 };
 
@@ -65,10 +78,15 @@ export type ReplayData = {
     topicUrl?: string;
     /** Stub topics live only in this server's database. */
     stub: boolean;
+    /** Not audited at all: the castle had no topic when this siege ran. */
+    noTopic: boolean;
     entries: HcsEntry[];
     /** The siege.end message's transcript hash. */
     endHash?: string;
-    mirror: "checked" | "unavailable" | "skipped";
+    /** checked: every read answered; partial: some reads failed; unavailable: none answered; skipped: not testnet. */
+    mirror: "checked" | "partial" | "unavailable" | "skipped";
+    /** Failed reads are tried again on the next load: the op is live, or something happened recently. */
+    retrying: boolean;
   };
   verdict: (Verification & { applicable: boolean }) | null;
   checks: ReplayCheck[];

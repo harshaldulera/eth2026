@@ -25,6 +25,7 @@ import * as guardHello from "@/app/api/guard/hello/route";
 import * as guardNext from "@/app/api/guard/next/route";
 import * as guardReply from "@/app/api/guard/reply/route";
 import * as proxyCompletions from "@/app/api/proxy/v1/chat/completions/route";
+import * as replay from "@/app/api/replay/[id]/route";
 
 /**
  * In-process fetch over the real route handlers (no Next server): used by scripts/demo.ts and any
@@ -64,6 +65,8 @@ const ROUTES: [string, RouteModule][] = [
   ["/api/guard/reply", guardReply],
   ["/api/castles/[id]/guard-key", castleGuardKey],
   ["/api/proxy/v1/chat/completions", proxyCompletions],
+  // Public read: the replay (lib/replay tests drive it end to end through this dispatcher).
+  ["/api/replay/[id]", replay],
 ];
 
 function match(pattern: string, path: string): Record<string, string> | null {

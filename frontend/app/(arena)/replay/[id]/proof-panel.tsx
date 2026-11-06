@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { ReplayWithVerify } from "@/lib/api/client";
 import { formatAmount, shortAccount } from "@/lib/money/format";
 import { MONEY, STAMPS, TOASTS } from "@/lib/vocab";
+import { reasonText, refundText } from "@/lib/siege/text";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { PixelPanel } from "@/components/pixel";
 import { playCue } from "@/components/pixel/sfx-link";
@@ -120,11 +121,11 @@ export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; cl
             <span className="text-ink-dim">{MONEY.reconNoPayout}</span>
           ) : settlement?.state === "void" ? (
             <span className="text-warn">
-              void · {settlement.reason?.replaceAll("_", " ")}
-              {settlement.refund ? ` · ${formatAmount(settlement.refund.amount, castle.asset)} refund ${settlement.refund.state}` : ""}
+              void · {reasonText(settlement.reason, "public", { ended: siege.status === "held" || siege.status === "banished" })} · {refundText(siege)}
+              {settlement.refund ? ` (${formatAmount(settlement.refund.amount, castle.asset)})` : ""}
             </span>
           ) : settlement?.state === "failed" ? (
-            <span className="text-threat">settlement failed · {settlement.reason}</span>
+            <span className="text-threat">settlement failed · {reasonText(settlement.reason, "public")}</span>
           ) : siege.status === "in_progress" || siege.status === "created" ? (
             <span className="text-ink-dim">op in progress</span>
           ) : (
@@ -162,8 +163,8 @@ export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; cl
                   <span className="truncate text-ink" title={q.requestId}>
                     {q.requestId}
                   </span>
-                  <span className={cn("font-ui text-[10px]", q.promptHash ? (q.mock ? "text-warn" : "text-safe") : "text-ink-dim")}>
-                    {q.promptHash ? (q.mock ? "MOCK" : "PROXY ✓") : q.requestId.startsWith("0g-stub") ? "STUB" : "—"}
+                  <span className={cn("font-ui text-[10px]", q.proxied ? (q.mock ? "text-warn" : "text-safe") : "text-ink-dim")}>
+                    {q.proxied ? (q.mock ? "MOCK" : "PROXY ✓") : q.requestId.startsWith("0g-stub") ? "STUB" : "—"}
                   </span>
                   {q.toolCalls?.length ? <span className="text-money">{q.toolCalls.join(", ")}</span> : null}
                   {rec?.record ? (

@@ -27,7 +27,7 @@ export type CastleEntity = {
 
 export function castleEntity(castle: Castle): CastleEntity {
   return {
-    key: `arkiv-stub:castle:${castle.id}`,
+    key: `arkiv-stub:vault:${castle.id}`,
     owner: castle.owner,
     expiresAt: castle.deadline,
     annotations: {

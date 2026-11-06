@@ -4,7 +4,7 @@ import type * as React from "react";
 import Link from "next/link";
 import type { Castle } from "@/lib/types";
 import { HOSTED_PROTECTED_TOOL } from "@/lib/types";
-import type { ArkivCastleMeta, LiveSiege } from "@/lib/api/client";
+import type { ArkivVaultMeta, LiveSiege } from "@/lib/api/client";
 import { vaultStateOf } from "@/lib/money/vault";
 import { assetSymbol, formatAmount, shortAccount } from "@/lib/money/format";
 import { guardRank, guardRankLevel } from "@/lib/vocab";
@@ -37,15 +37,15 @@ export function PotDigits({ castle: c, size, className }: { castle: Pick<Castle,
 }
 
 /** Sujal's Arkiv footer: who owns the listing and when the entity expires. */
-export function ArkivFooter({ arkiv, now }: { arkiv: ArkivCastleMeta; now: number }) {
+export function ArkivFooter({ arkiv, now }: { arkiv: ArkivVaultMeta; now: number }) {
   const expires = untilText(arkiv.expiresAtMs, now);
   return (
     <div className="flex items-center justify-between gap-2 font-term text-base leading-none text-ink-dim">
-      <span className="inline-flex min-w-0 items-center gap-1.5" title={`Listing owned by ${arkiv.castellan} on Arkiv. Only this wallet can delist it.`}>
+      <span className="inline-flex min-w-0 items-center gap-1.5" title={`Listing owned by ${arkiv.ownerWallet} on Arkiv. Only this wallet can delist it.`}>
         <span aria-hidden className="text-safe">
           ⚿
         </span>
-        owner <span className="truncate font-mono text-xs text-ink/80">{shortAccount(arkiv.castellan)}</span>
+        owner <span className="truncate font-mono text-xs text-ink/80">{shortAccount(arkiv.ownerWallet)}</span>
       </span>
       {expires ? (
         <span className="shrink-0" title="The Arkiv entity expires at the vault deadline; the vault then leaves the Grid on its own">
@@ -59,7 +59,7 @@ export function ArkivFooter({ arkiv, now }: { arkiv: ArkivCastleMeta; now: numbe
 export type VaultCardProps = {
   castle: Castle;
   /** Arkiv listing meta (owner + expiry) when the Grid read the vault from Arkiv. */
-  arkiv?: ArkivCastleMeta;
+  arkiv?: ArkivVaultMeta;
   /** The live op on this vault (from api.liveSieges), or `true` when only "under siege" is known. */
   live?: LiveSiege | boolean;
   now?: number;

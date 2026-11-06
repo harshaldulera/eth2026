@@ -28,10 +28,11 @@ export function CheckLed({ state, label, className }: { state: CheckState; label
 export function VerifyChecklist({ verify, className }: { verify: ReplayData; className?: string }) {
   const failed = verify.checks.some((c) => c.state === "fail");
   const pending = verify.checks.some((c) => c.state === "pending");
+  const ran = verify.checks.some((c) => c.state !== "na");
   return (
     <section className={className} aria-label="Checks">
-      <p className={cn("font-ui text-[11px] tracking-[0.12em] uppercase", failed ? "text-threat" : pending ? "text-warn" : "text-safe")}>
-        {failed ? "A check failed" : pending ? "Checks in progress" : "Every check passes"}
+      <p className={cn("font-ui text-[11px] tracking-[0.12em] uppercase", failed ? "text-threat" : pending ? "text-warn" : ran ? "text-safe" : "text-ink-dim")}>
+        {failed ? "A check failed" : pending ? "Checks in progress" : ran ? "Every check passes" : "Nothing to check for this op"}
       </p>
       <ul className="mt-2 flex flex-col gap-2.5">
         {verify.checks.map((c) => (
@@ -52,7 +53,9 @@ export function VerifyChecklist({ verify, className }: { verify: ReplayData; cla
           </li>
         ))}
       </ul>
-      <p className="mt-3 font-term text-base leading-snug text-ink-dim">Each check is recomputed from the transcript when this page loads, not read from a stored result.</p>
+      <p className="mt-3 font-term text-base leading-snug text-ink-dim">
+        Hashes and audit messages are recomputed and compared every time this page loads. The payout and refund come from the arena&apos;s records, cross-checked against the audit log.
+      </p>
     </section>
   );
 }
@@ -84,9 +87,26 @@ export function TranscriptSource({ transcript }: { transcript: ReplayData["trans
   );
 }
 
-function entryState(e: HcsEntry): CheckState {
+/**
+ * On a stub topic a row only exists in this server, so "submitted" is all there is. On a real topic
+ * a row passes only once the mirror node has confirmed it byte for byte.
+ */
+export function entryState(e: HcsEntry, local: boolean): CheckState {
   if (e.state === "pending") return "pending";
-  return e.mirror === "mismatch" || e.mirror === "missing" ? "fail" : "pass";
+  if (e.mirror === "mismatch" || e.mirror === "missing") return "fail";
+  return e.mirror === "confirmed" || local ? "pass" : "pending";
+}
+
+/** The audit log's heading: why it was or was not checked on the public topic. */
+export function auditHeading(hcs: ReplayData["hcs"]): string {
+  if (hcs.noTopic) return "NOT AUDITED · THIS VAULT HAD NO HCS TOPIC";
+  if (hcs.stub) return "STUB TOPIC · THIS SERVER ONLY";
+  if (hcs.mirror === "checked") return "CHECKED ON THE MIRROR NODE";
+  // "RETRYING" only while lib/replay really re-reads: it gives up a while after the op ended.
+  const retry = hcs.retrying ? " · RETRYING" : "";
+  if (hcs.mirror === "partial") return `MIRROR NODE PARTLY UNREACHABLE${retry}`;
+  if (hcs.mirror === "unavailable") return `MIRROR NODE UNREACHABLE${retry}`;
+  return "AUDIT LOG";
 }
 
 /** This op's messages on the castle's HCS topic, as lib/replay checked them. */
@@ -94,24 +114,24 @@ export function AuditEntries({ hcs }: { hcs: ReplayData["hcs"] }) {
   return (
     <span className="mt-1.5 block">
       <span className="font-ui text-[10px] tracking-[0.1em] text-ink-dim">
-        {hcs.stub ? "STUB TOPIC · THIS SERVER ONLY" : hcs.mirror === "checked" ? "CHECKED ON THE MIRROR NODE" : hcs.mirror === "unavailable" ? "MIRROR NODE UNAVAILABLE" : "AUDIT LOG"}
+        {auditHeading(hcs)}
       </span>
       {hcs.entries.length === 0 ? (
-        <span className="block font-term text-base text-ink-dim">nothing audited for this op yet</span>
+        <span className="block font-term text-base text-ink-dim">{hcs.noTopic ? "this op was not audited" : "nothing audited for this op yet"}</span>
       ) : (
         <ol className="mt-1 flex flex-col gap-0.5">
           {hcs.entries.map((e, i) => (
             <li key={`${e.type}:${e.seq ?? "q"}:${i}`} className="flex min-w-0 items-center gap-2 font-mono text-[11px]">
-              <CheckLed state={entryState(e)} label={false} />
+              <CheckLed state={entryState(e, hcs.stub)} label={false} />
               <span className="w-9 shrink-0 text-ink-dim tabular-nums">{e.seq != null ? `#${e.seq}` : "…"}</span>
               <span className="shrink-0 text-ink">{e.type}</span>
               {e.hash ? <span className="truncate text-ink-dim">{shortHex(e.hash, 6)}</span> : null}
               {e.mirror === "confirmed" ? (
                 <span className="shrink-0 font-ui text-[10px] text-safe">ON CHAIN</span>
               ) : e.mirror === "missing" ? (
-                <span className="shrink-0 font-ui text-[10px] text-threat">NOT ON MIRROR</span>
+                <span className="shrink-0 font-ui text-[10px] text-threat">NOT ON THE TOPIC</span>
               ) : e.mirror === "mismatch" ? (
-                <span className="shrink-0 font-ui text-[10px] text-threat">MISMATCH</span>
+                <span className="shrink-0 font-ui text-[10px] text-threat">DIFFERS ON THE TOPIC</span>
               ) : null}
             </li>
           ))}
@@ -129,20 +149,32 @@ export function providerOf(t: ReplayTurn | undefined): string {
   return "0G";
 }
 
+/** An operator message's hash check, saying exactly what failed. */
+export function messageCheck(r: NonNullable<ReplayTurn["raider"]>, audited: boolean): { state: CheckState; led: string; text: string } {
+  const h = `msg hash ${shortHex(r.hash)}`;
+  const seq = r.hcs?.seq != null ? `#${r.hcs.seq}` : "";
+  const at = seq ? `audit ${seq}` : "the audit log";
+  if (!audited) return { state: "na", led: "NOT AUDITED", text: `${h} · this vault had no HCS topic` };
+  if (r.issue === "hash") return { state: "fail", led: `HCS ${seq} ✗`, text: `${h} does not match ${at}` };
+  if (r.issue === "mirror-mismatch") return { state: "fail", led: `HCS ${seq} ✗`, text: `${h} matches ${at}, but the topic carries different bytes` };
+  if (r.issue === "mirror-missing") return { state: "fail", led: `HCS ${seq} ✗`, text: `${h} matches ${at}, but that message is not on the topic` };
+  if (r.matches === null) return { state: "pending", led: "HCS QUEUED", text: `${h} · not in the audit log yet` };
+  if (r.matches === false) return { state: "fail", led: `HCS ${seq} ✗`, text: `${h} does not match ${at}` };
+  return { state: "pass", led: `HCS ${seq || "(QUEUED)"} ✓`, text: `${h} matches ${at}${r.hcs?.mirror === "confirmed" ? ", on the topic" : ""}` };
+}
+
 /** One message's evidence: its hash against the audit log, the reply's tool calls and inference record. */
-export function TurnEvidence({ t, protectedTool }: { t: ReplayTurn; protectedTool: string }) {
+export function TurnEvidence({ t, protectedTool, audited = true }: { t: ReplayTurn; protectedTool: string; audited?: boolean }) {
   const r = t.raider;
   const g = t.guardian;
+  const msg = r ? messageCheck(r, audited) : null;
   return (
     <span className="flex flex-col gap-1">
-      {r ? (
+      {r && msg ? (
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-          <CheckLed
-            state={r.matches === null ? "pending" : r.matches ? "pass" : "fail"}
-            label={r.matches === null ? "HCS QUEUED" : r.matches ? `HCS ${r.hcs?.seq != null ? `#${r.hcs.seq}` : "(QUEUED)"} ✓` : `HCS ${r.hcs?.seq != null ? `#${r.hcs.seq}` : ""} ✗`}
-          />
-          <span className="truncate font-mono text-[11px] text-ink-dim" title={r.hash}>
-            msg hash {shortHex(r.hash)} {r.matches === null ? "· not in the audit log yet" : r.matches ? "matches the audit log" : "does not match the audit log"}
+          <CheckLed state={msg.state} label={msg.led} />
+          <span className={cn("truncate font-mono text-[11px]", msg.state === "fail" ? "text-threat" : "text-ink-dim")} title={r.hash}>
+            {msg.text}
           </span>
         </span>
       ) : null}
@@ -166,6 +198,7 @@ export function TurnEvidence({ t, protectedTool }: { t: ReplayTurn; protectedToo
           ) : (
             <span className="text-threat">· no inference record</span>
           )}
+          {g.issue ? <span className="text-threat">· the model record {g.issue}</span> : null}
         </span>
       ) : null}
     </span>

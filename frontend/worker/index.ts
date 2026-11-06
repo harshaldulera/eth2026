@@ -65,7 +65,7 @@ export function main(): void {
   ];
   // Lane C: publish the board to Arkiv from this process (one wallet, one nonce sequence).
   if (isArkivLive()) {
-    log.info("arkiv: ARKIV_MODE=live, publishing castles, sieges and profiles");
+    log.info("arkiv: ARKIV_MODE=live, publishing vaults, ops and profiles");
     loops.push(loop("arkiv", arkivTick, () => stopping));
   }
   // ─── Onboarding loops (plans/siege-onboarding-plan.md) register here, one push each: ───

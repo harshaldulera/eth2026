@@ -21,7 +21,7 @@ import { castleEntity, stubWrites } from "./stub";
 export { arkivStubWrites, castleEntity, type CastleEntity } from "./stub";
 export { arkivLinks, isArkivLive } from "./config";
 export { describeCastleQuery } from "./queries";
-export type { CastleArkivMeta, CastleOnArkiv } from "./codec";
+export type { VaultArkivMeta, CastleOnArkiv } from "./codec";
 export { delistedCastles } from "./outbox";
 
 /** Where a read came from. `block` is the Arkiv block it was read at (live reads only). */
@@ -62,18 +62,18 @@ export const arkiv: ArkivPort = {
       stubWrites.set(entity.key, entity);
       return { key: entity.key };
     }
-    const r = enqueue({ kind: "castle", data: castle });
-    return { key: r.key ?? `arkiv-pending:castle:${castle.id}` };
+    const r = enqueue({ kind: "vault", data: castle });
+    return { key: r.key ?? `arkiv-pending:vault:${castle.id}` };
   },
 
   async writeSiege(siege: Siege) {
     if (!isArkivLive()) {
-      const key = `arkiv-stub:siege:${siege.id}`;
+      const key = `arkiv-stub:op:${siege.id}`;
       stubWrites.set(key, siege);
       return { key };
     }
-    const r = enqueue({ kind: "siege", data: siege, swarmRef: swarmRefFor(siege.id) });
-    return { key: r.key ?? `arkiv-pending:siege:${siege.id}` };
+    const r = enqueue({ kind: "op", data: siege, swarmRef: swarmRefFor(siege.id) });
+    return { key: r.key ?? `arkiv-pending:op:${siege.id}` };
   },
 
   /**
