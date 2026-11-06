@@ -1,0 +1,81 @@
+/**
+ * Live reads from Arkiv. Every query filters `.ownedBy(arena)`: only entities the arena wrote count.
+ * Each result carries the block it was read at — the board prints it as proof the data came from
+ * the chain, not from our database.
+ */
+import { and, eq, gte, type Expression } from "@arkiv-network/sdk/query";
+import { asc, desc } from "@arkiv-network/sdk/query";
+import { u64 } from "@arkiv-network/sdk/schema";
+import type { Castle, CastleFilter, Profile, Siege } from "@/lib/types";
+import { arenaAddress, arkivReader } from "./client";
+import { rowToCastle, rowToProfile, rowToSiege, type Row } from "./codec";
+import { schemas } from "./schema";
+
+export type Read<T> = { data: T; block: bigint };
+
+type Fetchable = { fetch(): Promise<{ entities: readonly Row[]; blockNumber: bigint }> };
+type Builder = Fetchable & {
+  where(e: Expression): Builder;
+  ownedBy(a: string): Builder;
+  orderBy(o: unknown): Builder;
+  limit(n: number): Builder;
+};
+/** The typed builder fights dynamic filters; this keeps the call sites readable. */
+const from = (kind: keyof ReturnType<typeof schemas>): Builder =>
+  (arkivReader() as unknown as { select(): { from(s: unknown): Builder } }).select().from(schemas()[kind]).ownedBy(arenaAddress());
+
+/** Human-readable form of the board query, for the query bar. */
+export function describeCastleQuery(f: CastleFilter = {}, opts: { allStates?: boolean } = {}): string {
+  const parts: string[] = [];
+  if (f.tier) parts.push(`tier = "${f.tier}"`);
+  if (f.status) parts.push(`status = "${f.status}"`);
+  if (f.vaultState || !opts.allStates) parts.push(`vaultState = "${f.vaultState ?? "guarding"}"`);
+  if (f.transport) parts.push(`transport = "${f.transport}"`);
+  if (f.minPot) parts.push(`pot >= ${f.minPot}`);
+  const order = f.sort === "streak" ? "streak DESC" : f.sort === "fee" ? "fee ASC" : f.sort === "recent" ? "createdAtMs DESC" : "pot DESC";
+  return `castle${parts.length ? ` WHERE ${parts.join(" AND ")}` : ""} ORDER BY ${order}`;
+}
+
+/**
+ * Board query. With no vaultState it lists guarding castles only (the only state that takes sieges),
+ * unless `allStates` asks for every castle the arena publishes.
+ */
+export async function listCastlesLive(f: CastleFilter = {}, opts: { allStates?: boolean } = {}): Promise<Read<Castle[]>> {
+  const conds: Expression[] = [];
+  if (f.vaultState || !opts.allStates) conds.push(eq("vaultState", f.vaultState ?? "guarding"));
+  if (f.tier) conds.push(eq("tier", f.tier));
+  if (f.status) conds.push(eq("status", f.status));
+  if (f.transport) conds.push(eq("transport", f.transport));
+  if (f.minPot && /^\d+$/.test(f.minPot)) conds.push(gte("pot", u64(BigInt(f.minPot))));
+  const order =
+    f.sort === "streak" ? desc("streak") : f.sort === "fee" ? asc("fee") : f.sort === "recent" ? desc("createdAtMs") : desc("pot");
+  const q = from("castle");
+  const res = await (conds.length ? q.where(conds.length === 1 ? conds[0] : and(...conds)) : q).orderBy(order).limit(100).fetch();
+  return { data: res.entities.map(rowToCastle), block: res.blockNumber };
+}
+
+export async function liveSiegesLive(): Promise<Read<Siege[]>> {
+  const res = await from("siege").where(eq("status", "in_progress")).limit(100).fetch();
+  return { data: res.entities.map(rowToSiege), block: res.blockNumber };
+}
+
+export async function siegeLive(siegeId: string): Promise<Read<(Siege & { swarmRef?: string }) | null>> {
+  const res = await from("siege").where(eq("siegeId", siegeId)).limit(1).fetch();
+  return { data: res.entities[0] ? rowToSiege(res.entities[0]) : null, block: res.blockNumber };
+}
+
+export async function profileLive(wallet: string): Promise<Read<Profile | null>> {
+  const g = await from("guardianProfile").where(eq("wallet", wallet)).limit(1).fetch();
+  if (g.entities[0]) return { data: rowToProfile(g.entities[0], "guardian"), block: g.blockNumber };
+  const r = await from("raiderProfile").where(eq("wallet", wallet)).limit(1).fetch();
+  return { data: r.entities[0] ? rowToProfile(r.entities[0], "raider") : null, block: r.blockNumber };
+}
+
+/** Leaderboards (C5): top guardians by streak, top raiders by breaks. */
+export async function topProfilesLive(kind: "guardian" | "raider", limit = 20): Promise<Read<Profile[]>> {
+  const res =
+    kind === "guardian"
+      ? await from("guardianProfile").orderBy(desc("streak")).limit(limit).fetch()
+      : await from("raiderProfile").orderBy(desc("breaks")).limit(limit).fetch();
+  return { data: res.entities.map((r) => rowToProfile(r, kind)), block: res.blockNumber };
+}
