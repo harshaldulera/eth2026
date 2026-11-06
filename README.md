@@ -328,6 +328,25 @@ Five ways in, all against the same arena. Full reference: [docs/API.md](docs/API
 
 Recording the onboarding journeys: in stub mode a published or plugged-in guard answers with offline lines in its chosen voice (`mock-…` request ids, never verified). For the judge video run J1 and J2 with `INFERENCE_PROVIDER=claude` or a real 0G key so the guard speaks with its own orders. `SIEGE_STUB_DEPOSIT_DELAY_MS=8000` holds each stub deposit in WAITING FOR DEPOSIT and then steps through SETTING UP 1/3 to 3/3, so a stub rehearsal shows the deposit beat. Behind a proxy or tunnel, set `TRUSTED_IP_HEADER` (or `TRUSTED_PROXY_HOPS`) so the free-recon per-IP cap reads an address the client cannot set.
 
+## Deploying on Railway
+
+The web app and the worker share one SQLite file, and a Railway volume attaches to one service, so both run in **one service**: `npm run serve` (`frontend/scripts/serve.mjs`) starts `next start` on `$PORT` and the worker beside it. If either stops, the other is stopped too and the service exits, so Railway restarts both. `frontend/railway.json` holds the build, start, health check (`/api/config`) and restart policy.
+
+1. **Service.** New project → deploy from this GitHub repo → service settings: **Root Directory** `frontend`. Node 20 comes from `engines` in `package.json`; the build is `npm run build`.
+2. **Volume.** Add a volume to the service mounted at `/app/data`. It holds the database and the local Swarm store.
+3. **Variables.** Copy every line of `frontend/.env.testnet` into the service's variables (Raw Editor), then set:
+   - `DATABASE_URL=file:./data/testnet.db`
+   - `APP_URL=https://<your-service>.up.railway.app` (the public domain, from Settings → Networking → Generate Domain). The SDK hands this URL to plugged-in agents, and the worker calls the app through it.
+   - `TRUSTED_IP_HEADER=x-real-ip` (or `TRUSTED_PROXY_HOPS=1`) so the free-recon per-IP cap reads the client address set by Railway's proxy.
+4. **Carry the live database over** (vault ids, HCS topics, units, keys). Do not start from an empty database: `npm run seed` would open new vaults and topics, costing HBAR and duplicating Arkiv listings. Stop your local `npm run worker` first, then copy the file into the volume, for example with the Railway CLI:
+   ```bash
+   cd frontend && base64 -w0 data/testnet.db | railway ssh -- "base64 -d > /app/data/testnet.db"
+   ```
+   Redeploy afterwards. Migrations apply on the first open. The database holds unit keys, guard keys and 0G keys: never commit it or host it at a URL.
+5. **Cutover check.** The deploy log shows `[serve] web on :…` and `worker up — CHAIN_MODE=testnet, GUARDIAN_MODE=0g`, and no contract warning. `/api/config` returns 200, the Grid lists the vaults from Arkiv, and `/api/castles/castle_splinter_gate` shows the current pot. Only one worker may run against the testnet accounts: keep the local one stopped.
+
+Phones then reach the pager and the QR recon directly (no tunnel), and outside agents point `siege-guard` or the raid bot at the public URL. Settlement still goes through the public Hashio relay, so a payout can take minutes when it is slow.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
