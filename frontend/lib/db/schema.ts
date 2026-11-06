@@ -293,6 +293,8 @@ export const proxyRecords = sqliteTable(
     costUsdMicro: text("cost_usd_micro"),
     /** Offline mock response (no 0G call happened). Never accepted by the verifier unless allowed. */
     mock: integer("mock", { mode: "boolean" }).notNull().default(false),
+    /** Who answered: "0g" (0G Private Computer), "claude" (Anthropic API, testing) or "mock". */
+    provider: text("provider").notNull().default("0g"),
     at: text("at").notNull(),
   },
   (t) => [index("proxy_records_siege_idx").on(t.siegeId)],

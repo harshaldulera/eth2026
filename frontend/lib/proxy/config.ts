@@ -1,7 +1,29 @@
-/** 0G Private Computer router config. Server-side only; read lazily so scripts can load .env first. */
+/**
+ * Inference config for the proxy. Server-side only; read lazily so scripts can load .env first.
+ *
+ * INFERENCE_PROVIDER picks who answers guardian requests:
+ *   0g     → 0G Private Computer router (ZG_*), the default and the demo setting
+ *   claude → Anthropic API (ANTHROPIC_*), for testing without 0G credits
+ */
 const env = (k: string) => process.env[k] ?? "";
 
+export type InferenceProvider = "0g" | "claude";
+
 export const zgConfig = {
+  get provider(): InferenceProvider {
+    return env("INFERENCE_PROVIDER") === "claude" ? "claude" : "0g";
+  },
+  get anthropicKey() {
+    return env("ANTHROPIC_API_KEY");
+  },
+  /** Claude model used when INFERENCE_PROVIDER=claude. */
+  get anthropicModel() {
+    return env("ANTHROPIC_MODEL") || "claude-opus-5-5";
+  },
+  /** The key for the active provider (empty = no real inference available). */
+  get activeKey() {
+    return this.provider === "claude" ? this.anthropicKey : this.apiKey;
+  },
   get baseUrl() {
     return env("ZG_BASE_URL") || "https://router-api.0g.ai/v1";
   },
@@ -34,9 +56,9 @@ export const zgConfig = {
   get requireTee() {
     return env("ZG_REQUIRE_TEE") === "1";
   },
-  /** Mock mode: deterministic offline agent. On automatically when no key is set. */
+  /** Mock mode: deterministic offline agent. On automatically when the active provider has no key. */
   get mock() {
-    return env("ZG_MOCK") === "1" || !this.apiKey;
+    return env("ZG_MOCK") === "1" || !this.activeKey;
   },
   /** Allow mock request ids to pass the verifier (local dev only). */
   get allowMockVerify() {
