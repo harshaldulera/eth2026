@@ -200,11 +200,12 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
       // A vault on another contract (a redeploy) is forgotten whatever else happens, with a fresh
       // deadline: otherwise the worker's chain-state check refuses to start on it, or its
       // expired-vault close takes the castle before the harness can connect.
+      const sdkId = row.id;
       const forget = () =>
         db()
           .update(C)
           .set({ vaultId: null, vaultAddress: null, potTinybar: f.potTinybar, streak: f.streak, deadline: Date.now() + VAULT_DAYS * 24 * 60 * 60 * 1000 })
-          .where(eq(C.id, row.id))
+          .where(eq(C.id, sdkId))
           .run();
       if (rearm && row.vaultState !== "created") {
         if (row.vaultId != null && !foreign && row.status === "open" && VAULT_OPEN_STATES.has(row.vaultState)) {
