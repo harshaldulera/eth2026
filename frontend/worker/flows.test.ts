@@ -1,0 +1,273 @@
+/**
+ * Stub-mode flows through the real route handlers + worker passes: castle-closed windows (no fee is
+ * taken for, and no siege can keep playing on, a castle that was already won), void + refund,
+ * owner-only agent routes, approvals vs. stop, free sieges vs. streak, the events tail, seed re-arm.
+ */
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+process.env.SIEGE_FAST = "1";
+import { eq } from "drizzle-orm";
+import { DEFAULT_OWNER_SECRET, env, resetEnv } from "@/lib/config/env";
+import { db, schema } from "@/lib/db";
+import { freshFixtureDb } from "@/lib/fixtures/testing";
+import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
+import { castleClosedReason } from "@/lib/castles";
+import { emit } from "@/lib/events/bus";
+import { createAgent, getAgent } from "@/lib/agents/accounts";
+import { decideApproval, requestApproval, STUB_PAYMENT_HEADER } from "@/lib/pay";
+import { getSiege } from "@/lib/siege";
+import { renderLine } from "@/lib/guardian/stub";
+import type { Siege } from "@/lib/types";
+import { createInProcessFetch } from "./dispatch";
+import { setFetch } from "./fetch";
+import { settleTick } from "./settle";
+import { agentsTick } from "./agents";
+import { setWorkerQuiet } from "./log";
+import { startRun } from "@/app/api/_lib/runs";
+
+setWorkerQuiet(true);
+const BASE = "http://localhost:3000";
+const f = createInProcessFetch(BASE);
+const WOOD = "castle_splinter_gate";
+
+async function call<T = Record<string, unknown>>(method: "GET" | "POST", path: string, body?: unknown, headers: Record<string, string> = {}) {
+  const res = await f(`${BASE}${path}`, {
+    method,
+    headers: { "content-type": "application/json", ...headers },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  return { status: res.status, data: (await res.json().catch(() => null)) as T };
+}
+
+const pay = (raider = "0.0.stub-raider") => ({ [STUB_PAYMENT_HEADER]: raider });
+
+async function paidSiege(castleId: string, raider?: string): Promise<string> {
+  const r = await call<{ siegeId: string }>("POST", "/api/siege/start", { castleId }, pay(raider));
+  expect(r.status).toBe(200);
+  return r.data.siegeId;
+}
+
+async function say(siegeId: string, text: string) {
+  return call<{ siege: Siege; error?: string }>("POST", `/api/siege/${siegeId}/message`, { text });
+}
+
+async function ownerCookie(): Promise<Record<string, string>> {
+  const res = await f(`${BASE}/api/owner`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: env().OWNER_SECRET }) });
+  return { cookie: (res.headers.get("set-cookie") ?? "").split(";")[0] };
+}
+
+const receiptOf = (siegeId: string) => {
+  const s = db().select().from(schema.sieges).where(eq(schema.sieges.id, siegeId)).get()!;
+  return db().select().from(schema.paymentReceipts).where(eq(schema.paymentReceipts.id, s.receiptId!)).get()!;
+};
+
+beforeEach(() => {
+  process.env.CHAIN_MODE = "stub";
+  delete process.env.OWNER_SECRET;
+  freshFixtureDb();
+  resetEnv();
+  setFetch(f);
+});
+
+afterAll(() => setFetch(null));
+
+describe("a castle that was already won takes no more fees and plays no more turns", () => {
+  it("broken-but-unsettled castle: new paid siege -> 409 before any 402; in-progress siege -> 409 castle_closed; then void + refund", async () => {
+    const a = await paidSiege(WOOD, "0.0.stub-a");
+    const b = await paidSiege(WOOD, "0.0.stub-b");
+    for (const t of WOODEN_BREAK) await say(a, t);
+    expect(getSiege(a)!.status).toBe("broken");
+    expect(castleClosedReason(WOOD)).toBe("being_broken");
+
+    const late = await call<{ error: string; status: string }>("POST", "/api/siege/start", { castleId: WOOD }, pay("0.0.stub-c"));
+    expect(late.status).toBe(409);
+    expect(late.data).toMatchObject({ error: "castle_not_open", status: "broken" });
+    const unpaid = await call("POST", "/api/siege/start", { castleId: WOOD });
+    expect(unpaid.status).toBe(409); // not a 402: nobody is asked to pay for a won castle
+
+    const bMsg = await say(b, WOODEN_BREAK[0]);
+    expect(bMsg.status).toBe(409);
+    expect(bMsg.data.error).toBe("castle_closed");
+
+    await settleTick();
+    const sa = getSiege(a)!;
+    expect(sa.release?.amount).toBe("550000000");
+    const sb = getSiege(b)!;
+    expect(sb.settlement).toMatchObject({ state: "void", reason: "castle_broken", refund: { state: "refunded", amount: "50000000" } });
+    expect(sb.settlement?.refund?.tx?.txId).toMatch(/^stub:refund@/);
+    expect(receiptOf(b).state).toBe("refunded");
+    // void sieges are not "live"
+    const { listSieges } = await import("@/lib/siege");
+    expect(listSieges({ status: "in_progress" }).map((s) => s.id)).not.toContain(b);
+  });
+
+  it("two raiders reach open_vault at the same moment: only one wins, the other is void and refunded", async () => {
+    const a = await paidSiege(WOOD, "0.0.stub-a");
+    const b = await paidSiege(WOOD, "0.0.stub-b");
+    for (const t of WOODEN_BREAK.slice(0, 2)) {
+      await say(a, t);
+      await say(b, t);
+    }
+    const [ra, rb] = await Promise.all([say(a, WOODEN_BREAK[2]), say(b, WOODEN_BREAK[2])]);
+    expect([ra.status, rb.status]).toEqual([200, 200]);
+    const rows = [a, b].map((id) => db().select().from(schema.sieges).where(eq(schema.sieges.id, id)).get()!);
+    expect(rows.map((r) => r.status)).toEqual(["broken", "broken"]);
+    expect(rows.filter((r) => r.voidReason === "castle_already_broken")).toHaveLength(1);
+
+    await settleTick();
+    const winner = rows.find((r) => !r.voidReason)!.id;
+    const loser = rows.find((r) => r.voidReason)!.id;
+    expect(getSiege(winner)!.release).toBeTruthy();
+    expect(getSiege(loser)!.release).toBeUndefined();
+    expect(getSiege(loser)!.settlement).toMatchObject({ state: "void", refund: { state: "refunded" } });
+  });
+
+  it("a failed settlement is visible on the siege (the room stops waiting)", async () => {
+    const id = await paidSiege(WOOD);
+    for (const t of WOODEN_BREAK) await say(id, t);
+    db().update(schema.sieges).set({ chainAttempts: 5, chainError: "bad_signature" }).where(eq(schema.sieges.id, id)).run();
+    expect(getSiege(id)!.settlement).toEqual({ state: "failed", reason: "bad_signature" });
+    expect(castleClosedReason(WOOD)).toBeNull(); // the vault is still open on chain
+  });
+
+  it("seed --rearm reopens a broken castle with a new vault and the fixture pot", async () => {
+    const { seed } = await import("@/scripts/seed");
+    await seed({ quiet: true });
+    const id = await paidSiege(WOOD);
+    for (const t of WOODEN_BREAK) await say(id, t);
+    await settleTick();
+    const before = db().select().from(schema.castles).where(eq(schema.castles.id, WOOD)).get()!;
+    expect(before).toMatchObject({ status: "broken", potTinybar: 0 });
+    await seed({ quiet: true, rearm: "wooden" });
+    const after = db().select().from(schema.castles).where(eq(schema.castles.id, WOOD)).get()!;
+    expect(after).toMatchObject({ status: "open", potTinybar: 500_000_000, vaultAddress: "stub" });
+    expect(after.vaultId).not.toBe(before.vaultId);
+    expect(castleClosedReason(WOOD)).toBeNull();
+    // the re-armed vault really plays again: a held siege settles (the old release does not block it)
+    const next = await paidSiege(WOOD);
+    for (const t of MUST_NOT_BREAK) await say(next, t);
+    await settleTick();
+    expect(getSiege(next)!.attempt).toBeTruthy();
+    const others = db().select().from(schema.castles).all().filter((c) => c.id !== WOOD);
+    expect(others.every((c) => c.status === "open")).toBe(true);
+  });
+});
+
+describe("owner-only agent controls and the deny beat", () => {
+  it("create / run / stop need the owner cookie; budgets are capped", async () => {
+    expect((await call("POST", "/api/agents", { name: "Drainer", budget: "100000000000" })).status).toBe(401);
+    const owner = await ownerCookie();
+    const big = await call<{ error: string }>("POST", "/api/agents", { name: "Drainer", budget: "100000000000" }, owner);
+    expect(big.status).toBe(400);
+    expect(big.data.error).toBe("over_limit");
+    const ok = await call<{ agent: { id: string } }>("POST", "/api/agents", { name: "Vex" }, owner);
+    expect(ok.status).toBe(200);
+    const id = ok.data.agent.id;
+    expect((await call("POST", `/api/agents/${id}/run`, { castleId: WOOD })).status).toBe(401);
+    expect((await call("POST", `/api/agents/${id}/stop`)).status).toBe(401);
+    expect((await call("POST", `/api/agents/${id}/run`, { castleId: WOOD }, owner)).status).toBe(200);
+  });
+
+  it("approving after the owner stopped the agent moves no money and does not restart it", async () => {
+    const agent = await createAgent({ name: "Wren" });
+    const appr = await requestApproval({ agentId: agent.id, castleId: WOOD, reason: "per_castle", reasoning: "more", amount: "100000000", pressure: 40 });
+    const owner = await ownerCookie();
+    expect((await call("POST", `/api/agents/${agent.id}/stop`, undefined, owner)).status).toBe(200);
+    const late = await decideApproval(appr.id, "approved");
+    expect(late).toEqual({ ok: false, reason: "already_decided" });
+    expect(getAgent(agent.id)).toMatchObject({ status: "stopped", budget: agent.budget });
+  });
+
+  it("approve racing a stop: the claim sees the stop and refuses", async () => {
+    const agent = await createAgent({ name: "Kestrel" });
+    const appr = await requestApproval({ agentId: agent.id, castleId: WOOD, reason: "budget", reasoning: "more", amount: "100000000", pressure: 40 });
+    db().update(schema.raiderAgents).set({ status: "stopped" }).where(eq(schema.raiderAgents.id, agent.id)).run();
+    expect(await decideApproval(appr.id, "approved")).toEqual({ ok: false, reason: "already_decided" });
+    expect(getAgent(agent.id)!.budget).toBe(agent.budget);
+  });
+});
+
+describe("agent spend follows the money", () => {
+  async function runOnceWith(fake: (req: Request) => Promise<Response> | Response) {
+    const agent = await createAgent({ name: "Sable" });
+    startRun(agent.id, "castle_granite_hold", 3);
+    setFetch((async (input: RequestInfo | URL, init?: RequestInit) => fake(new Request(input, init))) as typeof fetch);
+    await agentsTick();
+    setFetch(f);
+    return agent;
+  }
+  const required402 = () =>
+    Response.json(
+      { x402Version: 2, accepts: [{ scheme: "exact", network: "hedera:testnet", asset: "0.0.0", amount: "100000000", payTo: "0.0.stub-treasury", maxTimeoutSeconds: 180 }] },
+      { status: 402 },
+    );
+  const spend = (agentId: string) => db().select().from(schema.agentSpend).where(eq(schema.agentSpend.agentId, agentId)).all();
+
+  it("payment_pending (money may have moved): the reservation is held against the receipt and the run stops", async () => {
+    const agent = await runOnceWith((req) =>
+      req.headers.has(STUB_PAYMENT_HEADER) ? Response.json({ error: "payment_pending", receiptId: "rcpt_x" }, { status: 502 }) : required402(),
+    );
+    expect(spend(agent.id)).toMatchObject([{ state: "reserved", receiptId: "rcpt_x" }]);
+    const run = db().select().from(schema.agentRuns).where(eq(schema.agentRuns.agentId, agent.id)).get()!;
+    expect(run).toMatchObject({ status: "stopped", stopReason: "payment_pending" });
+  });
+
+  it("a paid request that dies on the wire keeps the spend reserved; a refused 402 voids it", async () => {
+    const lost = await runOnceWith((req) => {
+      if (req.headers.has(STUB_PAYMENT_HEADER)) throw new TypeError("fetch failed: socket hang up");
+      return required402();
+    });
+    expect(spend(lost.id)).toMatchObject([{ state: "reserved" }]);
+    const refused = await runOnceWith(() => required402());
+    expect(spend(refused.id)).toMatchObject([{ state: "void" }]);
+  });
+});
+
+describe("small things", () => {
+  it("free sieges never move the castle streak", async () => {
+    const before = db().select().from(schema.castles).where(eq(schema.castles.id, "castle_granite_hold")).get()!.streak;
+    for (const w of ["w1", "w2", "w3"]) {
+      const r = await call<{ siegeId: string }>("POST", "/api/siege/start", { castleId: "castle_granite_hold", free: true, wallet: w });
+      for (const t of MUST_NOT_BREAK) await say(r.data.siegeId, t);
+    }
+    await settleTick();
+    expect(db().select().from(schema.castles).where(eq(schema.castles.id, "castle_granite_hold")).get()!.streak).toBe(before);
+  });
+
+  it("GET /api/events?tail=N returns the newest N and a cursor to continue from", async () => {
+    for (let i = 0; i < 600; i++) emit({ siegeId: "", type: "message", payload: { i }, at: new Date().toISOString() });
+    const r = await call<{ events: { id: number; payload: { i: number } }[]; cursor: number }>("GET", "/api/events?tail=60");
+    expect(r.data.events).toHaveLength(60);
+    expect(r.data.events.at(-1)!.payload.i).toBe(599);
+    expect(r.data.cursor).toBe(r.data.events.at(-1)!.id);
+    expect(r.data.events[0].id).toBeLessThan(r.data.events[1].id);
+    const next = await call<{ events: unknown[] }>("GET", `/api/events?cursor=${r.data.cursor}`);
+    expect(next.data.events).toHaveLength(0);
+  });
+
+  it("guardian lines pick a/an from the label", () => {
+    expect(renderLine("A {label}? In this economy?", { label: "instruction override" })).toBe("An instruction override? In this economy?");
+    expect(renderLine("That's a {label}, sweetheart.", { label: "authority claim" })).toBe("That's an authority claim, sweetheart.");
+    expect(renderLine("A {label}! How original.", { label: "flattery" })).toBe("A flattery! How original.");
+    expect(renderLine("Ha! {label}.", { label: "orders extraction" })).toBe("Ha! orders extraction.");
+  });
+
+  it("owner key: testnet refuses the public default; /api/config hints it only in stub mode", async () => {
+    const cfg = await call<{ ownerKeyHint: boolean; feeSplitBps: { castellan: number } }>("GET", "/api/config");
+    expect(cfg.data.ownerKeyHint).toBe(true);
+    expect(cfg.data.feeSplitBps).toEqual({ castellan: 8000, pot: 1500, arena: 500 });
+    process.env.CHAIN_MODE = "testnet";
+    resetEnv();
+    expect(() => env()).toThrow(/OWNER_SECRET/);
+    process.env.OWNER_SECRET = DEFAULT_OWNER_SECRET;
+    resetEnv();
+    expect(() => env()).toThrow(/OWNER_SECRET/);
+    process.env.OWNER_SECRET = "a-long-private-owner-key";
+    resetEnv();
+    const t = await call<{ ownerKeyHint: boolean }>("GET", "/api/config");
+    expect(t.data.ownerKeyHint).toBe(false);
+    expect((await call("POST", "/api/owner", { key: DEFAULT_OWNER_SECRET })).status).toBe(401);
+    process.env.CHAIN_MODE = "stub";
+    delete process.env.OWNER_SECRET;
+    resetEnv();
+  });
+});

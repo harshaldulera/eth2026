@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
   },
   cacheComponents: true,
   partialPrefetching: true,
+  // Native / node-only packages used by server code (SQLite, Hedera SDK).
+  serverExternalPackages: ["better-sqlite3", "@hiero-ledger/sdk", "@x402/hedera"],
   turbopack: {
     rules: {
       "*.css": {

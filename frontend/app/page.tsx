@@ -1,69 +1,135 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useMemo } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { Activity, Castle as CastleIcon } from "lucide-react";
+import type { Castle } from "@/lib/types";
+import { api } from "@/lib/api/client";
+import { usePolling, useNow } from "@/lib/hooks/usePolling";
+import { useEventFeed } from "@/lib/hooks/useEventFeed";
+import { toUnits } from "@/lib/money/format";
+import { Amount } from "@/components/money/amount";
+import { CastleCard } from "@/components/arena/castle-card";
+import { EventLine } from "@/components/arena/event-line";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/state";
+
+export default function ArenaBoard() {
+  const { data, error, loading, refresh } = usePolling(() => api.castles(), 3000);
+  const castles = useMemo(() => data?.castles ?? [], [data]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
+      <section className="mb-8 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="max-w-xl">
+          <h1 className="text-3xl font-semibold tracking-tight text-parchment sm:text-4xl">The Arena</h1>
+          <p className="mt-2 text-stone">
+            AI guardians hold real vaults. Pay a siege fee via x402, get five messages to talk one into opening.
+            Every failed siege grows the pot.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+        <BoardStats castles={castles} loading={loading && !data} />
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <section aria-label="Castles">
+          {error && !data ? (
+            <ErrorState error={error} onRetry={() => void refresh()} title="Couldn't load the castles" />
+          ) : loading && !data ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 6 }, (_, i) => (
+                <Skeleton key={i} className="h-48" />
+              ))}
+            </div>
+          ) : castles.length === 0 ? (
+            <EmptyState
+              icon={<CastleIcon />}
+              title="No castles yet"
+              hint={
+                <>
+                  Run <code className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-parchment">npm run seed</code> to raise five castles.
+                </>
+              }
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {castles.map((c) => (
+                <CastleCard key={c.id} castle={c} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <EventTicker castles={castles} />
+      </div>
     </div>
+  );
+}
+
+function BoardStats({ castles, loading }: { castles: Castle[]; loading: boolean }) {
+  const totalPot = castles.reduce((sum, c) => sum + toUnits(c.pot), BigInt(0));
+  const sieges = castles.reduce((n, c) => n + (c.siegeCount ?? 0), 0);
+  const breaks = castles.filter((c) => c.status === "broken").length;
+  const asset = castles[0]?.asset;
+  const stat = "flex flex-col gap-0.5 rounded-xl border border-arena-line bg-arena-panel/70 px-4 py-3";
+  return (
+    <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[560px]" aria-busy={loading}>
+      <div className={stat}>
+        <dt className="text-[11px] tracking-[0.14em] text-stone uppercase">Castles</dt>
+        <dd className="tabular text-xl font-semibold">{castles.length}</dd>
+      </div>
+      <div className={stat}>
+        <dt className="text-[11px] tracking-[0.14em] text-stone uppercase">In pots</dt>
+        <dd>
+          <Amount amount={totalPot} asset={asset} size="lg" maxDecimals={2} />
+        </dd>
+      </div>
+      <div className={stat}>
+        <dt className="text-[11px] tracking-[0.14em] text-stone uppercase">Sieges</dt>
+        <dd className="tabular text-xl font-semibold">{sieges}</dd>
+      </div>
+      <div className={stat}>
+        <dt className="text-[11px] tracking-[0.14em] text-stone uppercase">Breaks</dt>
+        <dd className="tabular text-xl font-semibold text-gold">{breaks}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function EventTicker({ castles }: { castles: Castle[] }) {
+  const { events, error, ready } = useEventFeed({ intervalMs: 2000, limit: 60, tail: true });
+  const now = useNow(5000);
+  const names = useMemo(() => new Map(castles.map((c) => [c.id, c.name])), [castles]);
+  const shown = useMemo(
+    () => [...events].reverse().filter((e) => e.type !== "message" && (e.type !== "decision" || ["open", "expose"].includes(String(e.payload?.move)))).slice(0, 14),
+    [events],
+  );
+  return (
+    <Card className="h-fit lg:sticky lg:top-20">
+      <CardHeader title="Live" icon={<Activity />} action={<span className="size-1.5 animate-pulse rounded-full bg-ember" aria-hidden />} />
+      <CardBody className="max-h-[560px] overflow-y-auto">
+        {!ready ? (
+          <div className="space-y-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-5" />
+            ))}
+          </div>
+        ) : error && shown.length === 0 ? (
+          <p className="text-sm text-stone">Event feed unavailable — retrying…</p>
+        ) : shown.length === 0 ? (
+          <p className="text-sm text-stone">Quiet on the walls. Lay a siege to start the feed.</p>
+        ) : (
+          <ul className="space-y-3">
+            <AnimatePresence initial={false}>
+              {shown.map((e) => (
+                <motion.li key={e.id} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                  <EventLine event={e} castleName={(id) => (id ? names.get(id) : undefined)} now={now} />
+                </motion.li>
+              ))}
+            </AnimatePresence>
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

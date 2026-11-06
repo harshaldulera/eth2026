@@ -1,0 +1,56 @@
+/**
+ * The Siege worker:  npm run worker   (tsx worker/index.ts)
+ *
+ * Two independent loops, every second: settlement (chain.recordAttempt / verifier + release) and the
+ * raider-agent runner. The only process that holds VERIFIER_KEY. Talks to the Next server at APP_URL
+ * for agent sieges (the real x402 round-trip). `tick()` runs one pass of both, for scripts.
+ */
+import "@/lib/config/load-env";
+import { env } from "@/lib/config/env";
+import { chainStateProblems } from "@/lib/chain";
+import { agentsTick } from "./agents";
+import { log } from "./log";
+import { settleTick } from "./settle";
+
+export { tick } from "./tick";
+export { setFetch } from "./fetch";
+
+const INTERVAL_MS = 1000;
+
+function loop(name: string, fn: () => Promise<unknown>, stopped: () => boolean): Promise<void> {
+  return (async () => {
+    while (!stopped()) {
+      try {
+        await fn();
+      } catch (e) {
+        log.fail(`${name} loop: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      await new Promise((r) => setTimeout(r, INTERVAL_MS));
+    }
+  })();
+}
+
+export function main(): void {
+  const e = env();
+  // Never settle real money against a stub-seeded DB or vaults on an old deployment.
+  const problems = chainStateProblems();
+  if (problems.length) {
+    log.fail(`CHAIN_MODE=${e.CHAIN_MODE} but ${e.DATABASE_URL} holds state from another chain:`);
+    for (const p of problems) log.fail(`  ${p}`);
+    log.fail("Run `npm run seed` (it recreates vaults/topics/agents for this env), then start the worker again.");
+    process.exit(1);
+  }
+  let stopping = false;
+  log.info(`worker up — CHAIN_MODE=${e.CHAIN_MODE}, db ${e.DATABASE_URL}, api ${e.APP_URL}`);
+  const done = Promise.all([loop("settle", settleTick, () => stopping), loop("agents", agentsTick, () => stopping)]);
+  const shutdown = (sig: string) => {
+    if (stopping) process.exit(1);
+    stopping = true;
+    log.info(`${sig}: finishing the current pass…`);
+    void done.then(() => process.exit(0));
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+}
+
+if (/worker[\\/]index\.[cm]?[jt]s$/.test(process.argv[1] ?? "")) main();
