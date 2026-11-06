@@ -32,6 +32,7 @@ import { PixelButton, pixelButtonVariants } from "@/components/pixel/button";
 import { PixelPanel } from "@/components/pixel/panel";
 import { playCue } from "@/components/pixel/sfx-link";
 import { Loading } from "@/components/ui/state";
+import { vaultPath } from "@/lib/vault-path";
 
 const STEPS = [PUBLISH.stepGuard, PUBLISH.stepConnect, PUBLISH.stepMoney, PUBLISH.stepLive] as const;
 
@@ -386,7 +387,7 @@ function Published({ result, save, origin, onAnother }: { result: StoredResult; 
         </PixelPanel>
         <PlugInAgent castleId={result.castleId} guardKey={result.guardKey ?? "YOUR_GUARD_KEY"} baseURL={origin} />
         <div className="flex flex-wrap items-center gap-3">
-          <Link href={`/castle/${result.castleId}`} className={pixelButtonVariants({ variant: "safe", size: "lg" })} onClick={() => playCue("ui_blip")}>
+          <Link href={`${vaultPath(result.castleId)}`} className={pixelButtonVariants({ variant: "safe", size: "lg" })} onClick={() => playCue("ui_blip")}>
             {PUBLISH.openVault}
           </Link>
           <PixelButton variant="ghost" size="sm" onClick={onAnother}>

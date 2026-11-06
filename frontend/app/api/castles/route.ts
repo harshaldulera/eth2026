@@ -11,6 +11,7 @@ import { newId, nowIso } from "@/lib/util/ids";
 import { connectZg, revokeZg } from "@/lib/zg/connect";
 import type { CastleFilter, CastleStatus, Tier, TransportKind, VaultState } from "@/lib/types";
 import { atRequestTime, err, json, readBody, vaultKeysCookie } from "../_lib/http";
+import { vaultPath } from "@/lib/vault-path";
 
 const TIERS: Tier[] = ["wooden", "stone", "iron"];
 const STATUSES: CastleStatus[] = ["open", "broken", "closed"];
@@ -117,7 +118,7 @@ export async function POST(req: Request) {
   const ownerKeyHash = hashKey(ownerKey);
   // Its own cookie (siege_vaults): the arena owner's siege_owner and this browser's other vault keys stay.
   const cookie = { "Set-Cookie": vaultKeysCookie(req, ownerKey, THIRTY_DAYS) };
-  const shareUrl = `/castle/${castleId}`;
+  const shareUrl = `${vaultPath(castleId)}`;
   const protectedTool = protectedToolOf(form);
 
   if (form.transport === "sdk") {

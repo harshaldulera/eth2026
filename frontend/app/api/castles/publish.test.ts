@@ -130,7 +130,7 @@ describe("POST /api/castles: validation", () => {
 describe("POST /api/castles: hosted publish in stub mode", () => {
   it("201: funded inline, castle guarding with its published tools, owner key + cookie, no secrets", async () => {
     const { res, text, j } = await publishOk(hostedForm());
-    expect(j).toMatchObject({ transport: "hosted", state: "funded", shareUrl: `/castle/${j.castleId}` });
+    expect(j).toMatchObject({ transport: "hosted", state: "funded", shareUrl: `/vault/${j.castleId.replace(/^castle_/, "")}` });
     expect(j.ownerKey).toMatch(/^ok_[A-Za-z0-9_-]{24}$/);
     expect(j.deposit).toMatchObject({ amount: String(5 * 100_000_000), memo: expect.stringMatching(/^siege:[a-z0-9]{8}$/) });
     const cookie = res.headers.get("set-cookie") ?? "";

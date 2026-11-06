@@ -26,6 +26,7 @@ import { voidHeadline } from "@/lib/siege/text";
 import { providerOf } from "./verify-checks";
 import { OwnerLayer } from "./owner-layer";
 import { FORK_KEY, type ForkPayload } from "@/lib/hooks/useFork";
+import { vaultPath } from "@/lib/vault-path";
 
 /** sessionStorage key the vault page / Op room read to queue a forked op's opening lines (lib/hooks/useFork). */
 export { FORK_KEY, type ForkPayload };
@@ -190,7 +191,7 @@ function ReplayDeck({ replay, autoplay }: { replay: ReplayWithVerify; autoplay: 
     } catch {
       /* private mode: the ?fork= param still says where it came from */
     }
-    router.push(`/castle/${castle.id}?fork=${encodeURIComponent(siege.id)}`);
+    router.push(`${vaultPath(castle.id)}?fork=${encodeURIComponent(siege.id)}`);
   };
 
   // A voided op is over even if its status never left in_progress (voided under the operator).
@@ -232,7 +233,7 @@ function ReplayDeck({ replay, autoplay }: { replay: ReplayWithVerify; autoplay: 
         streak={cash.streakAfter}
         takeover={state.playing}
         guardProviders={guardProviders}
-        backHref={`/castle/${castle.id}`}
+        backHref={`${vaultPath(castle.id)}`}
         empty={`${castle.guardianName} watches the road. Press ▶ or Space to play the tape.`}
         headerExtra={
           <div className="flex flex-wrap gap-2">

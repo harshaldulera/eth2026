@@ -42,6 +42,7 @@ import { PotDigits } from "@/components/grid/vault-card";
 import { isReconUsed } from "@/components/grid/recon-briefing";
 import { cn } from "@/lib/utils";
 import { clearFork, useFork } from "@/lib/hooks/useFork";
+import { castleIdFromSlug } from "@/lib/vault-path";
 
 /** Fallback until /api/config arrives (the contract default). */
 const DEFAULT_SPLIT_BPS = { castellan: 8000, pot: 1500, arena: 500 };
@@ -56,7 +57,9 @@ const VOICE: Record<string, string> = {
 };
 
 export function CastleView() {
-  const { id } = useParams<{ id: string }>();
+  const { id: slug } = useParams<{ id: string }>();
+  // /vault/<slug> and /castle/<id> both land here.
+  const id = castleIdFromSlug(slug);
   const { data, error, loading, refresh } = usePolling(() => api.castle(id), 3000, { key: id });
 
   if (error && !data) {

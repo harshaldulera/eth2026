@@ -18,7 +18,7 @@ import { playCue } from "@/components/pixel/sfx-link";
 type NavItem = { href: string; label: string; icon: LucideIcon; match: (p: string) => boolean; pager?: boolean };
 
 const LINKS: NavItem[] = [
-  { href: "/", label: NAV.grid, icon: LayoutGrid, match: (p) => p === "/" || p.startsWith("/castle") || p.startsWith("/siege") },
+  { href: "/", label: NAV.grid, icon: LayoutGrid, match: (p) => p === "/" || p.startsWith("/castle") || p.startsWith("/vault") || p.startsWith("/siege") },
   { href: "/hall", label: NAV.hall, icon: Trophy, match: (p) => p.startsWith("/hall") || p.startsWith("/replay") },
   { href: "/raider", label: NAV.agents, icon: Bot, match: (p) => p === "/raider" },
   { href: "/raider/approvals", label: NAV.pager, icon: Radio, match: (p) => p.startsWith("/raider/approvals"), pager: true },

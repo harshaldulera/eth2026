@@ -15,6 +15,7 @@ import { TierPips } from "@/components/arena/tier";
 import { ProtectedTool, TransportBadge, VaultStateBadge } from "@/components/arena/vault-state";
 import { cn } from "@/lib/utils";
 import { GuardPost, RankChevrons } from "./guard-post";
+import { vaultPath } from "@/lib/vault-path";
 
 /** "in 2d 21h", "in 45m", "soon", or "expired". Block-based estimate, so never a seconds countdown. */
 export function untilText(ms: number | undefined, now: number): string {
@@ -80,7 +81,7 @@ export type VaultCardProps = {
  *
  * @example <VaultCard castle={c} arkiv={c.arkiv} live={liveByCastle.get(c.id)} now={now} />
  */
-export function VaultCard({ castle: c, arkiv, live, now = 0, href = `/castle/${c.id}`, badges, extras, footer, className }: VaultCardProps) {
+export function VaultCard({ castle: c, arkiv, live, now = 0, href = `${vaultPath(c.id)}`, badges, extras, footer, className }: VaultCardProps) {
   const state = vaultStateOf(c);
   const open = state === "guarding";
   const transport = c.transport ?? "hosted";

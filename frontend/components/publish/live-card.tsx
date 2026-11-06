@@ -11,6 +11,7 @@ import { QrCode } from "@/components/raider/qr-code";
 import { cn } from "@/lib/utils";
 import { CopyField } from "./copy-field";
 import { DryRun } from "./dry-run";
+import { vaultPath } from "@/lib/vault-path";
 
 const noSub = () => () => {};
 /** The page origin, "" on the server and during hydration. */
@@ -37,7 +38,7 @@ export type LiveCardProps = {
  * YOUR VAULT IS LIVE: stamp, share link + QR, the owner key (once), RUN A DRY OP and OPEN VAULT PAGE.
  * Plays `ui_confirm` when it lands.
  *
- * @example <LiveCard castleId={id} shareUrl="/castle/abc" ownerKey={key} />
+ * @example <LiveCard castleId={id} shareUrl="/vault/abc" ownerKey={key} />
  */
 export function LiveCard({ castleId, shareUrl, ownerKey, onKeySaved, onAnother, className }: LiveCardProps) {
   const origin = useOrigin();
@@ -82,7 +83,7 @@ export function LiveCard({ castleId, shareUrl, ownerKey, onKeySaved, onAnother, 
         <PixelButton variant="money" size="lg" pressed={dry} onClick={() => setDry((d) => !d)}>
           {dry ? PUBLISH.dryOpOpen : PUBLISH.dryOp}
         </PixelButton>
-        <Link href={`/castle/${castleId}`} onClick={() => playCue("ui_blip")} className={pixelButtonVariants({ variant: "safe", size: "lg" })}>
+        <Link href={`${vaultPath(castleId)}`} onClick={() => playCue("ui_blip")} className={pixelButtonVariants({ variant: "safe", size: "lg" })}>
           {PUBLISH.openVault}
         </Link>
         {onAnother ? (

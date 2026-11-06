@@ -9,6 +9,7 @@ import { LED } from "@/components/pixel/led";
 import { PixelPanel } from "@/components/pixel/panel";
 import { vaultStateLed } from "@/components/arena/vault-state";
 import { GuardPost } from "./guard-post";
+import { vaultPath } from "@/lib/vault-path";
 
 /**
  * Vaults that are not taking ops (offline, setting up, breached, closed), one terminal row each
@@ -32,7 +33,7 @@ export function NotTakingOps({ castles, now, noneGuarding, className }: { castle
           const label = state === "dormant" && c.lastSeenAt && now ? LED_TEXT.offline(timeAgo(c.lastSeenAt, now)) : led.label;
           return (
             <li key={c.id}>
-              <Link href={`/castle/${c.id}`} className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-raised focus-visible:bg-raised">
+              <Link href={`${vaultPath(c.id)}`} className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-raised focus-visible:bg-raised">
                 <GuardPost castle={c} scale={1} className="hidden sm:block" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-ui text-xs tracking-[0.04em] text-ink uppercase">{c.name}</span>

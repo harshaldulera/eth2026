@@ -17,6 +17,7 @@ import { Sprite } from "@/components/pixel/sprite";
 import { playCue } from "@/components/pixel/sfx-link";
 import { cn } from "@/lib/utils";
 import { GuardPost } from "./guard-post";
+import { vaultPath } from "@/lib/vault-path";
 
 /** The QR's target: the lowest-tier guarding vault (cheapest fee, then smallest pot, breaks ties). */
 export function reconTarget<T extends Castle>(castles: readonly T[]): T | undefined {
@@ -147,7 +148,7 @@ export function ReconBriefing({
             <Link
               // Every paid op is paid from your own account: with one in this browser the vault page's RUN OP
               // pays from it; without one, the vault page opens FUND YOUR OPERATOR ACCOUNT (`?fund=1`).
-              href={hasAccount ? `/castle/${target.id}` : `/castle/${target.id}?fund=1`}
+              href={hasAccount ? `${vaultPath(target.id)}` : `${vaultPath(target.id)}?fund=1`}
               onClick={() => playCue("ui_blip")}
               className={cn(pixelButtonVariants({ variant: "money", size: "xl" }), "w-full")}
             >

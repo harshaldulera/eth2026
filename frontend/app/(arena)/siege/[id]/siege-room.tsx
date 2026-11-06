@@ -36,6 +36,7 @@ import { PixelPanel } from "@/components/pixel/panel";
 import { FrozenBar, OpScene, OutcomeHeadline, SoundStrip, money, useBeatCues, useTickSounds } from "@/components/scene";
 import { EmptyState, ErrorState, Loading } from "@/components/ui/state";
 import { cn } from "@/lib/utils";
+import { vaultPath } from "@/lib/vault-path";
 
 const ENDED = new Set(["held", "broken", "banished"]);
 /** localStorage: set once this browser has landed a paid breach (the RANK UP moment fires once). */
@@ -344,7 +345,7 @@ function Room({
         <Outcome siege={siege} castle={castle} events={events} frame={frame} myAccount={myAccount} />
         {frame.ended || voided ? (
           <FrozenBar frame={frame} opId={siege.id} noReplay={demo || (voided && !frame.ended)}>
-            <Link href={`/castle/${castle.id}`} className={pixelButtonVariants({ variant: "outline", size: "lg" })}>
+            <Link href={`${vaultPath(castle.id)}`} className={pixelButtonVariants({ variant: "outline", size: "lg" })}>
               Run another op
             </Link>
           </FrozenBar>
@@ -398,7 +399,7 @@ function Room({
       live
       potBefore={potBefore}
       reduced={calm}
-      backHref={`/castle/${castle.id}`}
+      backHref={`${vaultPath(castle.id)}`}
       sendingTurn={sendingTurn}
       agent={agentDriven}
       dock={dock}
@@ -551,7 +552,7 @@ function ReconNext({ castle }: { castle: Castle }) {
   const { units } = useMyUnits();
   const account = units[0];
   const demo = !account && config?.demoWalletOps === true;
-  const href = account || demo ? `/castle/${castle.id}` : `/castle/${castle.id}?fund=1`;
+  const href = account || demo ? `${vaultPath(castle.id)}` : `${vaultPath(castle.id)}?fund=1`;
   const label = account ? UNITS.reconNextPay(account.name) : demo ? BUTTONS.runOp(formatAmount(castle.fee, castle.asset)) : UNITS.reconNextFund;
   return (
     <Link href={href} data-testid="recon-next" className={cn(pixelButtonVariants({ variant: "money", size: "lg" }), "mt-3 w-full")}>

@@ -12,6 +12,7 @@ import { Digits, LED, Meter, PixelPanel, Stamp } from "@/components/pixel";
 import { Sprite } from "@/components/pixel/sprite";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/state";
 import { cn } from "@/lib/utils";
+import { vaultPath } from "@/lib/vault-path";
 
 type TabKey = "breaches" | "unbreached" | "largest" | "operators" | "opOfDay";
 const TABS: { key: TabKey; label: string }[] = [
@@ -268,7 +269,7 @@ function VaultRow({ v, i, metric }: { v: VaultEntry; i: number; metric: "streak"
   const rank = guardRank(v.title || v.streak);
   return (
     <li>
-      <Link href={`/castle/${v.castleId}`} className="flex min-h-12 items-center gap-3 px-2 py-1.5 hover:bg-raised focus-visible:outline-2 focus-visible:outline-accent">
+      <Link href={`${vaultPath(v.castleId)}`} className="flex min-h-12 items-center gap-3 px-2 py-1.5 hover:bg-raised focus-visible:outline-2 focus-visible:outline-accent">
         <Place i={i} />
         <Sprite name={`guard.${kind}.idle`} scale={2} />
         <span className="min-w-0 flex-1">
