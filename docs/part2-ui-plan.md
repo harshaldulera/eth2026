@@ -153,7 +153,7 @@ Pure and tested; drives live and replay.
 
 ### 2.9 Data additions (Lane A, under `app/api`)
 
-- `GET /api/replay/[id]` → `{siege, castle, events: eventsSince(0,{siegeId}), proof: {transcriptHash, receipt, attempt, release, requests: [{turn, requestId, protectedToolCalled?, toolCalls?, promptHash?, mock?}]}}` with `requests` from `lib/proxy` `record(requestId)` (read-only import). One round trip for the replay and the tool call that fired.
+- `GET /api/replay/[id]` → `{siege, castle, events: eventsSince(0,{siegeId}), proof: {transcriptHash, receipt, attempt, release, requests: [{turn, requestId, protectedToolCalled?, toolCalls?, proxied?, model?, mock?}]}}` (never the proxy's prompt or response hash: an unsalted hash of the guard's prompt lets anyone check guesses at the orders offline) with `requests` from `lib/proxy` `record(requestId)` (read-only import). One round trip for the replay and the tool call that fired.
 - `GET /api/stats` → `{season: {vaults, guarding, production, ops, breaches, inPots, longestStreak}, boards: {unbreached[], largest[], operators[], opOfDay}, breaches: [...], live: [{siegeId, castleId, castleName, turn, maxPressure}], asOf}` read from `db()`/`schema` like `app/api/_lib/runs.ts`. Op of the day = highest `maxPressure` op in 24 h that still held (computed, not voted; labelled so).
 - `POST /api/siege/[id]/message` additionally returns `referee: {pressure, tactic}` read from the latest `message` event for that siege, so the class animation plays without waiting for the next poll. `lib/api/client.ts` gets `api.replay`, `api.stats` and the new types under a `// ─── Part 2` banner, nothing removed.
 

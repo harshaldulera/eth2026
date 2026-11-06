@@ -104,16 +104,24 @@ describe("GET /api/replay/[id]", () => {
     expect(beats.some((b) => b.kind === "settle" && b.data.split)).toBe(true);
   });
 
-  it("includes what the proxy recorded for a request id (hashes and tool names, never content)", async () => {
+  it("says the proxy recorded a request, with tool names, but never sends its hashes", async () => {
     const id = await runOp("castle_splinter_gate", WOODEN_BREAK.slice(0, 1));
     const first = (await replay(id)).data.proof.requests[0];
+    expect(first.proxied).toBeUndefined();
     db()
       .insert(schema.proxyRecords)
       .values({ requestId: first.requestId, castleId: "castle_splinter_gate", siegeId: id, turn: 1, model: "test-model", promptHash: "p".repeat(64), responseHash: "r".repeat(64), protectedToolCalled: false, toolCalls: "[]", mock: true, at: new Date().toISOString() })
       .onConflictDoNothing()
       .run();
-    const q = (await replay(id)).data.proof.requests[0];
-    expect(q).toMatchObject({ turn: 1, requestId: first.requestId, protectedToolCalled: false, toolCalls: [], promptHash: "p".repeat(64), model: "test-model", mock: true });
+    const { data, status } = await replay(id);
+    expect(status).toBe(200);
+    const q = data.proof.requests[0];
+    expect(q).toMatchObject({ turn: 1, requestId: first.requestId, protectedToolCalled: false, toolCalls: [], proxied: true, model: "test-model", mock: true });
+    // An unsalted prompt hash lets anyone test guesses at the guard's orders offline: neither hash leaves the server.
+    const body = JSON.stringify(data);
+    expect(body).not.toMatch(/promptHash|responseHash/);
+    expect(body).not.toContain("p".repeat(64));
+    expect(body).not.toContain("r".repeat(64));
   });
 
   it("a live op returns its partial feed (no end event yet)", async () => {

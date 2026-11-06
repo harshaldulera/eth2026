@@ -303,8 +303,11 @@ export type ReplayRequest = {
   protectedToolCalled?: boolean;
   /** Tool names the model called (proxy record, else the decision event). */
   toolCalls?: string[];
-  promptHash?: string;
-  responseHash?: string;
+  /**
+   * The arena's model proxy recorded this reply. Its prompt and response hashes stay on the server:
+   * an unsalted hash of the guard's prompt would let anyone check guesses at the secret orders offline.
+   */
+  proxied?: boolean;
   model?: string;
   /** Offline mock response (no 0G call happened). */
   mock?: boolean;
