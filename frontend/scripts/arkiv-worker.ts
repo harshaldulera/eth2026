@@ -1,6 +1,9 @@
 /**
  * npm run arkiv — keeps Arkiv in step with the arena (needs ARKIV_MODE=live in frontend/.env).
  *
+ * `npm run worker` already does this when ARKIV_MODE=live; run this alone only when the worker is
+ * not running (e.g. a board-only demo). If both run, the lease makes one of them wait.
+ *
  * Every 3 s: reconcile (queue castles, sieges and profiles whose public values changed), then drain
  * (send the queue to Arkiv in batched transactions). Run it next to `npm run dev` and
  * `npm run worker`. Only one drainer runs at a time (a lease in SQLite), so a second copy just waits.

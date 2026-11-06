@@ -15,11 +15,11 @@
  * Tables live next to the app's SQLite tables but are created here, so Lane A's migrations stay
  * untouched: arkiv_entities (kind+id → entity key, last fingerprint, expiry), arkiv_outbox, arkiv_meta.
  */
-import type { Hex } from "viem";
+import { getAddress, type Hex } from "viem";
 import { ExpirationTime } from "@arkiv-network/sdk";
 import type { Expiry } from "@arkiv-network/sdk/entity";
 import { eq } from "@arkiv-network/sdk/query";
-import { accountEvmAddress } from "@/lib/chain/mirror";
+import { accountEvmAddress, stubEvmAddress } from "@/lib/chain/mirror";
 import { db } from "@/lib/db";
 import type { Castle, Profile, Siege } from "@/lib/types";
 import { arenaAddress, arkivReader, arkivWriter } from "./client";
@@ -243,8 +243,18 @@ type Op = {
   extend: Plan;
 };
 
-/** The Castellan's wallet for a castle: the EVM address of the Hedera account that owns the vault. */
-export const castellanWallet = (c: Castle) => accountEvmAddress(c.owner);
+/**
+ * The Castellan's wallet for a castle: the EVM address of the Hedera account that owns the vault.
+ * Strict: if the mirror node cannot be read, this throws and the castle waits for the next pass.
+ * A fallback address would hand the listing to the wrong owner, and that cannot be taken back.
+ * Placeholder owners (seed fixtures, not real Hedera ids) get the same deterministic address in
+ * every mode.
+ */
+export async function castellanWallet(c: Castle): Promise<`0x${string}`> {
+  if (/^0x[0-9a-fA-F]{40}$/.test(c.owner)) return getAddress(c.owner);
+  if (/^\d+\.\d+\.\d+$/.test(c.owner)) return accountEvmAddress(c.owner, { strict: true });
+  return stubEvmAddress(c.owner);
+}
 
 export type DrainResult = { sent: number; skipped: number; failed: number; delisted: string[]; txs: string[]; errors: string[] };
 
