@@ -60,6 +60,19 @@ function computeStats(now = Date.now()): StatsResponse {
     handles.get(s.raider) || (s.agentId && handles.get(agentOwner.get(s.agentId) ?? "")) || (s.agentId && agents.get(s.agentId)) || short(s.raider);
 
   const breachRows = sieges.filter(isBreach).sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
+  // The Hall exhibits only breaches of each vault's CURRENT deployment: a breach that ended before the
+  // castle's latest funding belongs to a previous vault (a re-arm or a contract redeploy). Counters and
+  // boards still count every breach; it really happened.
+  const fundedAt = new Map<string, string>();
+  for (const e of d
+    .select({ castleId: schema.events.castleId, at: schema.events.at, payload: schema.events.payload })
+    .from(schema.events)
+    .where(eq(schema.events.type, "vault_state"))
+    .all()) {
+    if (!e.castleId || !String(e.payload ?? "").includes('"to":"funded"')) continue;
+    if (e.at > (fundedAt.get(e.castleId) ?? "")) fundedAt.set(e.castleId, e.at);
+  }
+  const exhibitRows = breachRows.filter((s) => (s.endedAt ?? s.createdAt) >= (fundedAt.get(s.castleId) ?? ""));
   const breachedCastles = new Set(breachRows.map((s) => s.castleId));
 
   // ── season ──
@@ -163,7 +176,7 @@ function computeStats(now = Date.now()): StatsResponse {
         .all()
     : [];
   const breaches: BreachExhibit[] = [];
-  for (const s of breachRows) {
+  for (const s of exhibitRows) {
     const c = byCastle.get(s.castleId);
     if (!c) continue;
     const line = lastTurns.filter((m) => m.siegeId === s.id && m.turn === s.turn).at(-1);
