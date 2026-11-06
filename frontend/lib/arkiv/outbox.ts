@@ -7,9 +7,9 @@
  * coalesces (only the newest payload per entity is sent) and survives RPC outages (rows stay until
  * they land).
  *
- * A queued castle becomes two entities (see schema.ts): the Castellan-owned `castle` listing,
+ * A queued castle becomes two entities (see schema.ts): the Owner-owned `castle` listing,
  * created once (readonly, then `changeOwnership`), and the arena-owned `castleState`, patched on
- * every change. If the Castellan deletes their listing, the drainer notices and removes the state
+ * every change. If the Owner deletes their listing, the drainer notices and removes the state
  * entity too: the castle is delisted, and nothing re-publishes it.
  *
  * Tables live next to the app's SQLite tables but are created here, so Lane A's migrations stay
@@ -23,9 +23,9 @@ import { accountEvmAddress, stubEvmAddress } from "@/lib/chain/mirror";
 import { db } from "@/lib/db";
 import type { Castle, Profile, Siege } from "@/lib/types";
 import { arenaAddress, arkivReader, arkivWriter } from "./client";
-import { castleIdentityValues, castleStateValues, fingerprint, profileValues, siegeValues } from "./codec";
+import { vaultListingValues, vaultStatusValues, fingerprint, profileValues, opValues } from "./codec";
 import { arkivConfig } from "./config";
-import { schemas, type EntityKind } from "./schema";
+import { SCHEMA_VERSION, schemas, type EntityKind } from "./schema";
 
 // ─── Storage ───────────────────────────────────────────────────────────────
 
@@ -54,9 +54,16 @@ function sql(): Sqlite {
     // Entity keys belong to one namespace: switching namespaces starts from a clean slate.
     const ns = arkivConfig().namespace;
     const known = (s.prepare("SELECT v FROM arkiv_meta WHERE k = 'namespace'").get() as { v: string } | undefined)?.v;
-    if (known !== ns) {
-      s.exec("DELETE FROM arkiv_entities; DELETE FROM arkiv_outbox; DELETE FROM arkiv_meta WHERE k LIKE 'delisted:%' OR k = 'delist_check'");
+    // ...and so does a schema layout change (entity names or columns): old records name old kinds.
+    const layout = (s.prepare("SELECT v FROM arkiv_meta WHERE k = 'schema_version'").get() as { v: string } | undefined)?.v;
+    if (known !== ns || layout !== SCHEMA_VERSION) {
+      s.exec("DELETE FROM arkiv_entities; DELETE FROM arkiv_outbox; DELETE FROM arkiv_meta WHERE k = 'delist_check'");
+      // An Owner's delisting is a fact about the vault, not about the column layout: keep it across
+      // a layout change, so a vault its Owner took down is never republished. A new namespace is a
+      // separate deployment, so it starts without them.
+      if (known !== ns) s.exec("DELETE FROM arkiv_meta WHERE k LIKE 'delisted:%'");
       s.prepare("INSERT INTO arkiv_meta (k, v) VALUES ('namespace', ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(ns);
+      s.prepare("INSERT INTO arkiv_meta (k, v) VALUES ('schema_version', ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(SCHEMA_VERSION);
     }
     ready.add(s);
   }
@@ -88,7 +95,7 @@ const forgetRecord = (kind: EntityKind, id: string) => sql().prepare("DELETE FRO
 const metaGet = (k: string) => (sql().prepare("SELECT v FROM arkiv_meta WHERE k = ?").get(k) as { v: string } | undefined)?.v;
 const metaSet = (k: string, v: string) => sql().prepare("INSERT INTO arkiv_meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(k, v);
 
-/** Castles whose Castellan deleted their listing. Never re-published. */
+/** Castles whose Owner deleted their listing. Never re-published. */
 export const isDelisted = (castleId: string) => metaGet(`delisted:${castleId}`) !== undefined;
 export function delistedCastles(): { castleId: string; at: string }[] {
   return (sql().prepare("SELECT k, v FROM arkiv_meta WHERE k LIKE 'delisted:%'").all() as { k: string; v: string }[]).map((r) => ({ castleId: r.k.slice(9), at: r.v }));
@@ -98,24 +105,24 @@ export function delistedCastles(): { castleId: string; at: string }[] {
 
 /** What a queued write carries: the public domain object (never orders) plus the Swarm ref for sieges. */
 export type Payload =
-  | { kind: "castle"; data: Castle }
-  | { kind: "siege"; data: Siege; swarmRef?: string }
-  | { kind: "guardianProfile" | "raiderProfile"; data: Profile };
+  | { kind: "vault"; data: Castle }
+  | { kind: "op"; data: Siege; swarmRef?: string }
+  | { kind: "guardProfile" | "operatorProfile"; data: Profile };
 type PayloadKind = Payload["kind"];
 
-const idOf = (p: Payload) => (p.kind === "castle" || p.kind === "siege" ? p.data.id : p.data.wallet);
+const idOf = (p: Payload) => (p.kind === "vault" || p.kind === "op" ? p.data.id : p.data.wallet);
 
 /** The values whose change means "send it" (castle: the state entity, minus the link columns). */
 function coreValues(p: Payload) {
   switch (p.kind) {
-    case "castle": {
-      const all: Record<string, unknown> = { ...castleStateValues(p.data, { castellan: "", identityKey: "" }) };
-      delete all.castellan;
-      delete all.identityKey;
+    case "vault": {
+      const all: Record<string, unknown> = { ...vaultStatusValues(p.data, { ownerWallet: "", listingKey: "" }) };
+      delete all.ownerWallet;
+      delete all.listingKey;
       return all;
     }
-    case "siege":
-      return siegeValues(p.data, p.swarmRef);
+    case "op":
+      return opValues(p.data, p.swarmRef);
     default:
       return profileValues(p.data);
   }
@@ -124,16 +131,16 @@ function coreValues(p: Payload) {
 export const payloadFingerprint = (p: Payload) => fingerprint(coreValues(p) as Record<string, { type: string; value: unknown }>);
 
 /** The arena-owned entity a payload maps to (castles: the state entity). */
-const stateKind = (p: Payload): EntityKind => (p.kind === "castle" ? "castleState" : p.kind);
+const stateKind = (p: Payload): EntityKind => (p.kind === "vault" ? "vaultStatus" : p.kind);
 
 /**
  * Queue a write. No-op when Arkiv already holds exactly these values (unless `force`, used to extend
- * a live siege's lifetime), or when the Castellan delisted the castle. A newer payload for the same
+ * a live siege's lifetime), or when the Owner delisted the castle. A newer payload for the same
  * entity replaces an unsent older one.
  */
 export function enqueue(p: Payload, opts: { force?: boolean } = {}): { queued: boolean; key?: Hex } {
   const id = idOf(p);
-  if (p.kind === "castle" && isDelisted(id)) return { queued: false };
+  if (p.kind === "vault" && isDelisted(id)) return { queued: false };
   const fp = payloadFingerprint(p);
   const rec = entityRecord(stateKind(p), id);
   if (rec && rec.fingerprint === fp && !opts.force) return { queued: false, key: rec.key };
@@ -157,38 +164,38 @@ export function outboxStats(): { pending: number; failing: number; oldestMs: num
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 /** A siege lives this long past its last write; live sieges are refreshed before it runs out. */
-export const SIEGE_TTL_MIN = 10;
+export const OP_TTL_MIN = 10;
 const MAX_LIFE_MS = 180 * DAY; // chain max is ~182.5 days
 
 type Plan = { expiration: Expiry; expiresAtMs: number } | null;
 
 /** Expiry for a create (null = do not create: the castle's deadline has passed). */
 function createLife(p: Payload, now: number): Plan {
-  if (p.kind === "castle") {
+  if (p.kind === "vault") {
     const target = Math.min(p.data.deadline, now + MAX_LIFE_MS);
     if (target <= now + MIN) return null;
     return { expiration: ExpirationTime.atDate(new Date(target)), expiresAtMs: target };
   }
-  if (p.kind === "siege") return { expiration: ExpirationTime.fromMinutes(SIEGE_TTL_MIN), expiresAtMs: now + SIEGE_TTL_MIN * MIN };
+  if (p.kind === "op") return { expiration: ExpirationTime.fromMinutes(OP_TTL_MIN), expiresAtMs: now + OP_TTL_MIN * MIN };
   return { expiration: ExpirationTime.max(), expiresAtMs: now + MAX_LIFE_MS };
 }
 
 /** Extension for an update, only when it moves the expiry later (the chain refuses shortening). */
 function extendLife(p: Payload, current: number, now: number): Plan {
-  if (p.kind === "castle") {
+  if (p.kind === "vault") {
     const target = Math.min(p.data.deadline, now + MAX_LIFE_MS);
     return target > current + MIN ? { expiration: ExpirationTime.atDate(new Date(target)), expiresAtMs: target } : null;
   }
-  if (p.kind === "siege") {
-    const target = now + SIEGE_TTL_MIN * MIN;
-    return target > current + 30_000 ? { expiration: ExpirationTime.fromMinutes(SIEGE_TTL_MIN), expiresAtMs: target } : null;
+  if (p.kind === "op") {
+    const target = now + OP_TTL_MIN * MIN;
+    return target > current + 30_000 ? { expiration: ExpirationTime.fromMinutes(OP_TTL_MIN), expiresAtMs: target } : null;
   }
   return current < now + 30 * DAY ? { expiration: ExpirationTime.max(), expiresAtMs: now + MAX_LIFE_MS } : null;
 }
 
 // ─── Draining ──────────────────────────────────────────────────────────────
 
-const ID_COLUMN: Record<EntityKind, string> = { castle: "castleId", castleState: "castleId", siege: "siegeId", guardianProfile: "wallet", raiderProfile: "wallet" };
+const ID_COLUMN: Record<EntityKind, string> = { vault: "vaultId", vaultStatus: "vaultId", op: "opId", guardProfile: "wallet", operatorProfile: "wallet" };
 
 type Found = { key: Hex; expiresAtMs: number };
 
@@ -244,13 +251,13 @@ type Op = {
 };
 
 /**
- * The Castellan's wallet for a castle: the EVM address of the Hedera account that owns the vault.
+ * The Owner's wallet for a castle: the EVM address of the Hedera account that owns the vault.
  * Strict: if the mirror node cannot be read, this throws and the castle waits for the next pass.
  * A fallback address would hand the listing to the wrong owner, and that cannot be taken back.
  * Placeholder owners (seed fixtures, not real Hedera ids) get the same deterministic address in
  * every mode.
  */
-export async function castellanWallet(c: Castle): Promise<`0x${string}`> {
+export async function ownerWalletOf(c: Castle): Promise<`0x${string}`> {
   if (/^0x[0-9a-fA-F]{40}$/.test(c.owner)) return getAddress(c.owner);
   if (/^\d+\.\d+\.\d+$/.test(c.owner)) return accountEvmAddress(c.owner, { strict: true });
   return stubEvmAddress(c.owner);
@@ -276,37 +283,37 @@ export async function drain(opts: { holder?: string; max?: number; log?: (m: str
     .prepare("SELECT * FROM arkiv_outbox ORDER BY attempts ASC, enqueued_at ASC LIMIT ?")
     .all(opts.max ?? BATCH * 3) as OutboxRow[];
 
-  // Phase A: Castellan-owned listings that do not exist yet.
-  type Listing = { row: OutboxRow; castle: Castle; castellan: string; values: Record<string, unknown>; plan: NonNullable<Plan> };
+  // Phase A: Owner-owned listings that do not exist yet.
+  type Listing = { row: OutboxRow; castle: Castle; ownerWallet: string; values: Record<string, unknown>; plan: NonNullable<Plan> };
   const listings: Listing[] = [];
-  const links = new Map<string, { identityKey: Hex; castellan: string }>();
+  const links = new Map<string, { listingKey: Hex; ownerWallet: string }>();
   for (const row of rows) {
-    if (row.kind !== "castle") continue;
-    const castle = (JSON.parse(row.payload) as Extract<Payload, { kind: "castle" }>).data;
+    if (row.kind !== "vault") continue;
+    const castle = (JSON.parse(row.payload) as Extract<Payload, { kind: "vault" }>).data;
     if (isDelisted(castle.id)) {
       done(row);
       continue;
     }
     try {
-      const castellan = await castellanWallet(castle);
-      const rec = entityRecord("castle", castle.id);
+      const ownerWallet = await ownerWalletOf(castle);
+      const rec = entityRecord("vault", castle.id);
       let found: Found | null = rec ? { key: rec.key, expiresAtMs: rec.expiresAtMs } : null;
       if (!found) {
-        let foundOwner = castellan;
-        found = await adopt("castle", castle.id, castellan);
+        let foundOwner = ownerWallet;
+        found = await adopt("vault", castle.id, ownerWallet);
         if (!found) {
-          found = await adopt("castle", castle.id, arenaAddress());
+          found = await adopt("vault", castle.id, arenaAddress());
           foundOwner = arenaAddress();
         }
-        if (found) saveRecord({ kind: "castle", id: castle.id, key: found.key, fingerprint: "adopted", expiresAtMs: found.expiresAtMs, tx: null, owner: foundOwner });
+        if (found) saveRecord({ kind: "vault", id: castle.id, key: found.key, fingerprint: "adopted", expiresAtMs: found.expiresAtMs, tx: null, owner: foundOwner });
       }
       if (found) {
-        links.set(castle.id, { identityKey: found.key, castellan });
+        links.set(castle.id, { listingKey: found.key, ownerWallet });
         continue;
       }
-      const plan = createLife({ kind: "castle", data: castle }, now);
+      const plan = createLife({ kind: "vault", data: castle }, now);
       if (!plan) continue; // expired castle: the state op below skips it too
-      listings.push({ row, castle, castellan, values: castleIdentityValues(castle), plan });
+      listings.push({ row, castle, ownerWallet, values: vaultListingValues(castle), plan });
     } catch (e) {
       fail(row, e, out, log);
     }
@@ -316,7 +323,7 @@ export async function drain(opts: { holder?: string; max?: number; log?: (m: str
     try {
       const res = await arkivWriter().executeBatch({
         creates: listings.map((l) => ({
-          schema: s.castle,
+          schema: s.vault,
           values: l.values,
           expiration: l.plan.expiration,
           flags: { readonly: true, permissionlessExtension: true },
@@ -325,8 +332,8 @@ export async function drain(opts: { holder?: string; max?: number; log?: (m: str
       listings.forEach((l, i) => {
         const key = res.createdEntities[i];
         if (!key) return;
-        saveRecord({ kind: "castle", id: l.castle.id, key, fingerprint: "pending-ownership", expiresAtMs: l.plan.expiresAtMs, tx: res.txHash, owner: arenaAddress() });
-        links.set(l.castle.id, { identityKey: key, castellan: l.castellan });
+        saveRecord({ kind: "vault", id: l.castle.id, key, fingerprint: "pending-ownership", expiresAtMs: l.plan.expiresAtMs, tx: res.txHash, owner: arenaAddress() });
+        links.set(l.castle.id, { listingKey: key, ownerWallet: l.ownerWallet });
       });
       out.txs.push(res.txHash);
       log(`arkiv: ${listings.length} listing(s) created`);
@@ -338,8 +345,8 @@ export async function drain(opts: { holder?: string; max?: number; log?: (m: str
   // Phase B: ownership hand-overs, arena-owned creates/patches, extensions.
   const ownership: { castleId: string; entityKey: Hex; newOwner: string }[] = [];
   for (const [castleId, link] of links) {
-    const rec = entityRecord("castle", castleId);
-    if (rec && rec.owner && rec.owner.toLowerCase() !== link.castellan.toLowerCase()) ownership.push({ castleId, entityKey: link.identityKey, newOwner: link.castellan });
+    const rec = entityRecord("vault", castleId);
+    if (rec && rec.owner && rec.owner.toLowerCase() !== link.ownerWallet.toLowerCase()) ownership.push({ castleId, entityKey: link.listingKey, newOwner: link.ownerWallet });
   }
 
   const ops: Op[] = [];
@@ -348,14 +355,14 @@ export async function drain(opts: { holder?: string; max?: number; log?: (m: str
     const payload = JSON.parse(row.payload) as Payload;
     const kind = stateKind(payload);
     let values: Record<string, unknown>;
-    if (payload.kind === "castle") {
+    if (payload.kind === "vault") {
       const link = links.get(payload.data.id);
       if (!link) continue; // delisted, expired or failed above
-      values = castleStateValues(payload.data, link);
+      values = vaultStatusValues(payload.data, link);
       // The listing's own expiry follows the deadline too (permissionlessExtension lets the arena push it).
-      const idRec = entityRecord("castle", payload.data.id);
+      const idRec = entityRecord("vault", payload.data.id);
       const idExt = idRec ? extendLife(payload, idRec.expiresAtMs, now) : null;
-      if (idRec && idExt) ops.push({ row, kind: "castle", values: {}, existing: { key: idRec.key, expiresAtMs: idRec.expiresAtMs }, create: null, extend: idExt });
+      if (idRec && idExt) ops.push({ row, kind: "vault", values: {}, existing: { key: idRec.key, expiresAtMs: idRec.expiresAtMs }, create: null, extend: idExt });
     } else values = coreValues(payload) as Record<string, unknown>;
 
     let existing: Found | null = null;
@@ -408,7 +415,7 @@ export async function drain(opts: { holder?: string; max?: number; log?: (m: str
           await send([op], [], out);
         } catch (e) {
           // A patch on an entity that expired or vanished: forget the key, the next try re-creates it.
-          if (op.existing && op.kind !== "castle") forgetRecord(op.kind, op.row.id);
+          if (op.existing && op.kind !== "vault") forgetRecord(op.kind, op.row.id);
           fail(op.row, e, out, log);
         }
       }
@@ -422,7 +429,7 @@ async function send(chunk: Op[], ownership: { castleId: string; entityKey: Hex; 
   if (!chunk.length && !ownership.length) return;
   const s = schemas();
   const creates = chunk.filter((o) => o.create);
-  const patches = chunk.filter((o) => o.existing && !o.create && o.kind !== "castle");
+  const patches = chunk.filter((o) => o.existing && !o.create && o.kind !== "vault");
   const extensions = chunk.filter((o) => o.existing && o.extend);
   const res = await arkivWriter().executeBatch({
     creates: creates.map((o) => ({ schema: s[o.kind], values: o.values, expiration: o.create!.expiration })),
@@ -440,12 +447,12 @@ async function send(chunk: Op[], ownership: { castleId: string; entityKey: Hex; 
     done(o.row);
   }
   for (const o of extensions) {
-    if (o.kind !== "castle") continue; // listing extensions: the state op above already closed the row
-    const rec = entityRecord("castle", o.row.id);
+    if (o.kind !== "vault") continue; // listing extensions: the state op above already closed the row
+    const rec = entityRecord("vault", o.row.id);
     if (rec) saveRecord({ ...rec, expiresAtMs: o.extend!.expiresAtMs, tx: res.txHash });
   }
   for (const o of ownership) {
-    const rec = entityRecord("castle", o.castleId);
+    const rec = entityRecord("vault", o.castleId);
     if (rec) saveRecord({ ...rec, fingerprint: "owned", tx: res.txHash, owner: o.newOwner });
   }
   out.sent += creates.length + patches.length + ownership.length;
@@ -455,14 +462,14 @@ async function send(chunk: Op[], ownership: { castleId: string; entityKey: Hex; 
 const DELIST_CHECK_MS = 60_000;
 
 /**
- * Every minute: is every Castellan-owned listing still there? If one is gone before its expiry,
- * the Castellan deleted it. Remove the arena's state entity and remember the castle as delisted.
+ * Every minute: is every Owner-owned listing still there? If one is gone before its expiry,
+ * the Owner deleted it. Remove the arena's state entity and remember the castle as delisted.
  */
 async function checkDelistings(now: number, log: (m: string) => void): Promise<string[]> {
   const last = Number(metaGet("delist_check") ?? 0);
   if (now - last < DELIST_CHECK_MS) return [];
   metaSet("delist_check", String(now));
-  const recs = sql().prepare("SELECT * FROM arkiv_entities WHERE kind = 'castle' AND owner IS NOT NULL AND expires_at_ms > ?").all(now + 2 * MIN) as {
+  const recs = sql().prepare("SELECT * FROM arkiv_entities WHERE kind = 'vault' AND owner IS NOT NULL AND expires_at_ms > ?").all(now + 2 * MIN) as {
     id: string;
     key: Hex;
     owner: string;
@@ -478,14 +485,14 @@ async function checkDelistings(now: number, log: (m: string) => void): Promise<s
     }
   }
   for (const castleId of gone) {
-    const state = entityRecord("castleState", castleId);
+    const state = entityRecord("vaultStatus", castleId);
     try {
       if (state) await arkivWriter().deleteEntity({ entityKey: state.key });
       metaSet(`delisted:${castleId}`, new Date(now).toISOString());
-      forgetRecord("castleState", castleId);
-      forgetRecord("castle", castleId);
-      sql().prepare("DELETE FROM arkiv_outbox WHERE kind = 'castle' AND id = ?").run(castleId);
-      log(`arkiv: castle ${castleId} delisted by its Castellan; state entity removed`);
+      forgetRecord("vaultStatus", castleId);
+      forgetRecord("vault", castleId);
+      sql().prepare("DELETE FROM arkiv_outbox WHERE kind = 'vault' AND id = ?").run(castleId);
+      log(`arkiv: castle ${castleId} delisted by its Owner; state entity removed`);
     } catch (e) {
       log(`arkiv: could not remove state of delisted castle ${castleId}: ${short(e)}`);
     }

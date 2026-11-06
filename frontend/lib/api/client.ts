@@ -128,15 +128,15 @@ export type ConfigResponse = {
 export type ArkivReadMeta = { source: "arkiv" | "sqlite"; block?: string; query: string; error?: string };
 
 /** Present on each castle when it was read from Arkiv: its entities and who owns the listing. */
-export type ArkivCastleMeta = { stateKey?: string; identityKey: string; castellan: string; expiresAtMs?: number };
-export type CastleRow = Castle & { arkiv?: ArkivCastleMeta };
+export type ArkivVaultMeta = { statusKey?: string; listingKey: string; ownerWallet: string; expiresAtMs?: number };
+export type CastleRow = Castle & { arkiv?: ArkivVaultMeta };
 
 export type LiveSiege = { id: string; castleId: string; turn: number; raider: string; agentId: string | null; createdAt: string };
 
 type ArkivEntityInfo = { key: string; owner?: string; readonly?: boolean; expiresAtMs?: number; url: string };
-export type ArkivCastleDetail =
-  | { live: false; castleId: string }
-  | { live: true; castleId: string; listing: ArkivEntityInfo | null; state: ArkivEntityInfo | null; castellan: string; castellanUrl: string; delisted: boolean; block: string };
+export type ArkivVaultDetail =
+  | { live: false; vaultId: string }
+  | { live: true; vaultId: string; listing: ArkivEntityInfo | null; state: ArkivEntityInfo | null; ownerWallet: string; ownerWalletUrl: string; delisted: boolean; block: string };
 
 export type AuditMessage = { seq: number; type: string; siegeId?: string; txId?: string; at: string };
 
@@ -199,7 +199,7 @@ export const api = {
   /** Sieges in progress, from Arkiv in live mode: the board marks castles already under attack. */
   liveSieges: () => request<{ sieges: LiveSiege[] }>("/api/arkiv/live-sieges"),
   /** A castle's two Arkiv entities with their on-chain owner, expiry and explorer links. */
-  arkivCastle: (id: string) => request<ArkivCastleDetail>(`/api/arkiv/castle/${enc(id)}`),
+  arkivVault: (id: string) => request<ArkivVaultDetail>(`/api/arkiv/vault/${enc(id)}`),
 
   /**
    * Owner-only: close the vault on chain — the pot goes back to the Castellan and every in-flight

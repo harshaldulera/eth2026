@@ -29,7 +29,7 @@ const POTS: { v: string | undefined; label: string }[] = [
 export type BoardFilterGroup = "tier" | "pot" | "sort" | "state";
 
 /**
- * The board's filter chips. Each chip is an indexed column on the Arkiv `castleState` entity, so a
+ * The board's filter chips. Each chip is an indexed column on the Arkiv `vaultStatus` entity, so a
  * click changes the `where` the server sends to the chain (shown in the bar under the grid).
  * `omit` hides groups another control already covers (the Grid's sort chips carry `sort`).
  *

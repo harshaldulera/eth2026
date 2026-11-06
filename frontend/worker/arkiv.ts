@@ -16,7 +16,7 @@ export async function arkivTick(now = Date.now()): Promise<void> {
   if (now - last < EVERY_MS) return;
   last = now;
   const r = reconcile(now);
-  if (r.castles + r.sieges + r.profiles) log.info(`arkiv: queued ${r.castles} castle(s), ${r.sieges} siege(s), ${r.profiles} profile(s)`);
+  if (r.vaults + r.ops + r.profiles) log.info(`arkiv: queued ${r.vaults} vault(s), ${r.ops} op(s), ${r.profiles} profile(s)`);
   const d = await drain({ holder: HOLDER, log: (m) => log.info(m) });
   for (const tx of d.txs) log.info(`arkiv: tx ${arkivLinks.tx(tx)}`);
   for (const e of d.errors) log.fail(`arkiv: ${e}`);
