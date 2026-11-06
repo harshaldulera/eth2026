@@ -4,17 +4,20 @@ import { siege, siegeRow } from "@/lib/siege";
 import { TransportUnavailableError } from "@/lib/transport";
 import { vaultStateOf } from "@/lib/vault";
 import { eventsSince } from "@/lib/events/bus";
+import { turnTokenCandidates, turnTokenOk } from "@/lib/auth/turn";
 import { err, errorMessage, json, readBody } from "../../../_lib/http";
 
 /**
  * POST /api/siege/[id]/message { text } — one raider turn; the guardian replies.
+ * Needs the siege's turn token (Authorization Bearer, x-siege-turn-token, body.turnToken or the siege_turn_<id>
+ * cookie) whenever the row has a hash: 401 turn_token_required. Rows without a hash (started before tokens) stay open.
  * The siege engine emits message/decision/end events itself. The HCS audit (siege.message with the
  * message hash, siege.end with the transcript hash) is derived from those persisted events by the audit
  * outbox (lib/chain/outbox.ts), in the order the engine emitted them, so the final turn's siege.message
  * always precedes siege.end and whatever the worker settles after it.
  */
 
-const Body = z.object({ text: z.string().trim().min(1).max(2000) });
+const Body = z.object({ text: z.string().trim().min(1).max(2000), turnToken: z.string().max(200).optional() });
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -24,6 +27,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // The vault this siege plays for is gone (another raider broke it, or it closed): no more turns.
   // The worker voids the siege and refunds a paid fee.
   const row = siegeRow(id);
+  if (row && !turnTokenOk(row.turnTokenHash, turnTokenCandidates(req, id, body.data.turnToken))) {
+    return err(401, "turn_token_required", { message: "Send the turnToken returned when this siege started (Authorization: Bearer, x-siege-turn-token, or the siege cookie)." });
+  }
   if (row?.status === "in_progress") {
     if (row.voidReason) return err(409, "castle_closed", { reason: row.voidReason });
     const closed = castleClosedReason(row.castleId, { exceptSiegeId: id });

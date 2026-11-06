@@ -1,0 +1,17 @@
+{
+  "name": "siege-raid-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A standalone attacking agent for Siege: lists guarding vaults, pays the x402 op fee from your own Hedera account, sends five messages, prints the replay link.",
+  "type": "module",
+  "main": "index.mjs",
+  "bin": { "raid-bot": "index.mjs" },
+  "scripts": { "start": "node index.mjs" },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@hiero-ledger/sdk": "^2.90.1",
+    "@x402/core": "^2.30.0",
+    "@x402/fetch": "^2.30.0",
+    "@x402/hedera": "^2.30.0"
+  }
+}

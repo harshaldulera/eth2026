@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   try {
     const r = await proxy.chat(key, body, { siegeId: req.headers.get("x-siege-id") ?? undefined, turn: Number.isInteger(turn) && turn > 0 ? turn : undefined });
     if (!r.ok) return Response.json({ error: { message: r.error } }, { status: r.status });
-    return Response.json(r.result.raw, { headers: { "x-siege-request-id": r.record.requestId } });
+    return Response.json(r.result.raw, { headers: { "x-siege-request-id": r.record.requestId, "x-siege-castle": r.record.castleId } });
   } catch (e) {
     return Response.json({ error: { message: `0G upstream error: ${(e as Error).message}` } }, { status: 502 });
   }

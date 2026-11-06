@@ -47,7 +47,47 @@ export const castles = sqliteTable("castles", {
   deadline: integer("deadline").notNull(),
   portraitUrl: text("portrait_url"),
   createdAt: text("created_at").notNull(),
-});
+
+  // ─── Onboarding (0007_onboarding, plans/siege-onboarding-plan.md §0) ───
+  // Every column below is nullable or defaulted: seeded fixtures never set them.
+  /** Owner-published guard (POST /api/castles): `businessAgent` builds it from `tools` + `orders`. */
+  published: integer("published", { mode: "boolean" }).notNull().default(false),
+  /** Public one-liner shown on the vault page. */
+  blurb: text("blurb"),
+  /**
+   * JSON `[{name, description, parameters, result?}]`. SECRET as a whole (mock results): only the
+   * names leave the server (`toCastle` → `toolNames`). The protected tool is the one without `result`.
+   */
+  tools: text("tools"),
+  /** sha256 hex of the castle owner's `ok_` key (lib/auth/keys.ts). The raw key is shown once. */
+  ownerKeyHash: text("owner_key_hash"),
+  /** The deposit transfer that funded this vault (publish flow). */
+  depositTx: text("deposit_tx"),
+  /** 0G inference key (`sk-`, minted or pasted). Raw at rest, never returned by any API. */
+  zgApiKey: text("zg_api_key"),
+  /** 0G management key (`mk-`) when given. Raw at rest, never returned by any API. */
+  zgMgmtKey: text("zg_mgmt_key"),
+  /** Router id of the minted `sk-` key, for revocation. */
+  zgKeyId: text("zg_key_id"),
+  /** SDK guard key (`gk_`), raw: the harness's Bearer for /api/guard/*. */
+  guardKey: text("guard_key"),
+  /** Vault proxy key (`vk_`), raw: the harness's Bearer for /api/proxy/v1. */
+  vaultKey: text("vault_key"),
+  /** Current SDK lease (newest wins). */
+  leaseId: text("lease_id"),
+  /** JSON about the lease holder (sdk version, host…). */
+  leaseMeta: text("lease_meta"),
+  /** SDK castles: system-prompt hash pinned by the first proxied self-check call (the verifier compares to it). */
+  pinnedPromptHash: text("pinned_prompt_hash"),
+  /** A later, different system-prompt hash seen on a live SDK castle (worker/guard.ts closes with orders_changed). */
+  promptDriftHash: text("prompt_drift_hash"),
+  selfCheckAt: text("self_check_at"),
+  /** JSON `{ok, at, reason?}` of the last smoke op. */
+  smokeResult: text("smoke_result"),
+}, (t) => [
+  uniqueIndex("castles_guard_key").on(t.guardKey),
+  uniqueIndex("castles_vault_key").on(t.vaultKey),
+]);
 
 /** The worker gives up on a siege's chain settlement after this many failed tries (sieges.chainAttempts). */
 export const MAX_CHAIN_ATTEMPTS = 5;
@@ -89,6 +129,8 @@ export const sieges = sqliteTable(
     endedAt: text("ended_at"),
     /** Worker finished applying this ended siege (chain result + castle update, or free-siege bookkeeping). */
     settledAt: text("settled_at"),
+    /** sha256 hex of the turn token POST /api/siege/start returned; null = legacy row (no token required). */
+    turnTokenHash: text("turn_token_hash"),
   },
   (t) => [index("sieges_castle_idx").on(t.castleId), index("sieges_status_idx").on(t.status)],
 );
@@ -189,6 +231,18 @@ export const raiderAgents = sqliteTable("raider_agents", {
   consecutiveLosses: integer("consecutive_losses").notNull().default(0),
   status: text("status", { enum: ["idle", "running", "paused", "stopped"] }).notNull().default("idle"),
   createdAt: text("created_at").notNull(),
+  // ─── Onboarding (0007) ───
+  /** sha256 hex of the unit operator's `rk_` key; null = owner-cookie unit (seed, demo). */
+  operatorKeyHash: text("operator_key_hash"),
+  /** Free-text attack strategy (system prompt for lib/agents/brain.ts) instead of a preset. */
+  strategyText: text("strategy_text"),
+  /** Who put the HBAR in the unit's account: the arena operator, or the red teamer via a deposit. */
+  fundedBy: text("funded_by", { enum: ["arena", "operator"] }).notNull().default("arena"),
+  depositTx: text("deposit_tx"),
+  /** 0G keys, raw at rest, never returned by any API (see castles.zg_*). */
+  zgApiKey: text("zg_api_key"),
+  zgMgmtKey: text("zg_mgmt_key"),
+  zgKeyId: text("zg_key_id"),
 });
 
 export const agentSpend = sqliteTable(
@@ -223,6 +277,8 @@ export const approvalRequests = sqliteTable("approval_requests", {
   topUpTx: text("top_up_tx"),
   createdAt: text("created_at").notNull(),
   resolvedAt: text("resolved_at"),
+  /** Operator-funded `budget` asks: the top-up deposit intent the approval waits on (0007). */
+  depositIntentId: text("deposit_intent_id"),
 });
 
 export const freeSieges = sqliteTable(
@@ -332,6 +388,136 @@ export const proxyRecords = sqliteTable(
     /** Who answered: "0g" (0G Private Computer), "claude" (Anthropic API, testing) or "mock". */
     provider: text("provider").notNull().default("0g"),
     at: text("at").notNull(),
+    /** Whose 0G credits paid: "team" (arena key), "castle:<id>" or "agent:<id>" (0007). */
+    billedTo: text("billed_to").notNull().default("team"),
   },
   (t) => [index("proxy_records_siege_idx").on(t.siegeId)],
+);
+
+// ─── Onboarding (0007_onboarding, plans/siege-onboarding-plan.md §0) ─────────
+
+export const DEPOSIT_KINDS = ["vault", "vault-sdk", "unit", "topup"] as const;
+export type DepositKind = (typeof DEPOSIT_KINDS)[number];
+export const DEPOSIT_STATES = ["awaiting", "underpaid", "funding", "funded", "failed", "expired"] as const;
+export type DepositState = (typeof DEPOSIT_STATES)[number];
+
+/**
+ * A memo-matched HBAR deposit to the arena operator (lib/pay/deposits.ts, worker/deposits.ts).
+ * `ref_id` points at the vault_drafts / unit_drafts / approval_requests row for `kind`.
+ */
+export const depositIntents = sqliteTable(
+  "deposit_intents",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: DEPOSIT_KINDS }).notNull(),
+    refId: text("ref_id").notNull(),
+    /** 8 chars from abcdefghjkmnpqrstuvwxyz23456789; the memo is `siege:<code>`. */
+    code: text("code").notNull(),
+    memo: text("memo").notNull(),
+    amountTinybar: integer("amount_tinybar").notNull(),
+    /** Only transfers paid by this account count (optional). */
+    payerFilter: text("payer_filter"),
+    state: text("state", { enum: DEPOSIT_STATES }).notNull().default("awaiting"),
+    receivedTinybar: integer("received_tinybar").notNull().default(0),
+    /** JSON array of counted Hedera tx ids (each counted once). */
+    txs: text("txs").notNull().default("[]"),
+    payer: text("payer"),
+    note: text("note"),
+    attempts: integer("attempts").notNull().default(0),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    fundedAt: text("funded_at"),
+    /** 0008: when the intent was claimed into `funding` (a crashed handler is moved back to `failed`). */
+    claimedAt: text("claimed_at"),
+    /** 0008: setup progress "k/n label" while funding (the deposit panel's SETTING UP k/n). */
+    step: text("step"),
+  },
+  (t) => [uniqueIndex("deposit_intents_code").on(t.code), index("deposit_intents_state_idx").on(t.state)],
+);
+
+/** A vault being published, before its deposit lands (no castle row exists until then). */
+export const vaultDrafts = sqliteTable(
+  "vault_drafts",
+  {
+    id: text("id").primaryKey(),
+    /** Pre-generated id the castle row gets once funded. */
+    castleId: text("castle_id").notNull(),
+    intentId: text("intent_id").notNull(),
+    /** JSON of the publish form. SECRET (orders, tool results, 0G keys): never returned or logged. */
+    form: text("form").notNull(),
+    ownerKeyHash: text("owner_key_hash").notNull(),
+    feeTinybar: integer("fee_tinybar").notNull(),
+    days: integer("days").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("vault_drafts_castle_id").on(t.castleId)],
+);
+
+export const UNIT_DRAFT_STATES = ["awaiting", "creating", "created", "failed", "expired"] as const;
+export type UnitDraftState = (typeof UNIT_DRAFT_STATES)[number];
+
+/** A red teamer's unit, before its deposit lands (POST /api/agents without the owner cookie). */
+export const unitDrafts = sqliteTable("unit_drafts", {
+  id: text("id").primaryKey(),
+  intentId: text("intent_id").notNull(),
+  name: text("name").notNull(),
+  strategy: text("strategy").notNull(),
+  strategyText: text("strategy_text"),
+  /** Requested budget (tinybars); the unit gets min(received, AGENT_MAX_BUDGET). */
+  budgetTinybar: integer("budget_tinybar").notNull(),
+  perCastleCapTinybar: integer("per_castle_cap_tinybar").notNull(),
+  dailyCapTinybar: integer("daily_cap_tinybar").notNull(),
+  stopAfterLosses: integer("stop_after_losses").notNull().default(10),
+  operatorKeyHash: text("operator_key_hash").notNull(),
+  zgApiKey: text("zg_api_key"),
+  zgMgmtKey: text("zg_mgmt_key"),
+  zgKeyId: text("zg_key_id"),
+  state: text("state", { enum: UNIT_DRAFT_STATES }).notNull().default("awaiting"),
+  /** 0008: the unit's ECDSA key (hex), stored before the account create is sent so a retry reuses its alias. SECRET. */
+  accountKey: text("account_key"),
+  /** The raider_agents row once created. */
+  agentId: text("agent_id"),
+  error: text("error"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const GUARD_TURN_KINDS = ["siege", "selfcheck", "smoke"] as const;
+export type GuardTurnKind = (typeof GUARD_TURN_KINDS)[number];
+export const GUARD_TURN_STATES = ["pending", "claimed", "answered", "expired"] as const;
+export type GuardTurnState = (typeof GUARD_TURN_STATES)[number];
+
+/** SDK guard work queue: the Next process enqueues, the harness long-polls /api/guard/next and replies. */
+export const guardTurns = sqliteTable(
+  "guard_turns",
+  {
+    id: text("id").primaryKey(),
+    castleId: text("castle_id").notNull(),
+    kind: text("kind", { enum: GUARD_TURN_KINDS }).notNull(),
+    siegeId: text("siege_id"),
+    turn: integer("turn"),
+    /** JSON of the conversation sent to the harness. */
+    messagesJson: text("messages_json").notNull(),
+    state: text("state", { enum: GUARD_TURN_STATES }).notNull().default("pending"),
+    leaseId: text("lease_id"),
+    /** JSON `{reply, toolCalls}` from the harness. */
+    replyJson: text("reply_json"),
+    /** Resolved server-side from proxy_records, never trusted from the harness. */
+    requestId: text("request_id"),
+    claimedAt: text("claimed_at"),
+    answeredAt: text("answered_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("guard_turns_castle_state_idx").on(t.castleId, t.state)],
+);
+
+/** Public handles for red teamers (POST /api/operators), keyed by their Hedera account. */
+export const operators = sqliteTable(
+  "operators",
+  {
+    account: text("account").primaryKey(),
+    handle: text("handle").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("operators_handle").on(t.handle)],
 );

@@ -89,10 +89,13 @@ const tx = (label: string, id: string | undefined | null): Link[] => (id ? [{ la
 
 // ── HTTP against the running app ────────────────────────────────────────────
 
+const turnTokens = new Map<string, string>();
 let ownerCookie: string | undefined;
 
 async function call<T>(method: "GET" | "POST", p: string, body?: unknown, opts: { owner?: boolean; timeoutMs?: number } = {}) {
   const headers: Record<string, string> = { accept: "application/json" };
+  const turnToken = turnTokens.get(/^\/api\/siege\/([^/]+)\/message$/.exec(p)?.[1] ?? "");
+  if (turnToken) headers["x-siege-turn-token"] = turnToken;
   if (body !== undefined) headers["content-type"] = "application/json";
   if (opts.owner && ownerCookie) headers.cookie = ownerCookie;
   let res: Response;
@@ -113,6 +116,8 @@ async function call<T>(method: "GET" | "POST", p: string, body?: unknown, opts: 
   } catch {
     /* not JSON */
   }
+  const started = data as { siegeId?: string; turnToken?: string } | null;
+  if (started && typeof started === "object" && started.siegeId && started.turnToken) turnTokens.set(started.siegeId, started.turnToken);
   return { res, status: res.status, data: data as T };
 }
 

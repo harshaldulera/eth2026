@@ -13,9 +13,15 @@ import { usePolling, useNow } from "@/lib/hooks/usePolling";
 import { useConfig } from "@/lib/hooks/useConfig";
 import { formatAmount, shortAccount, timeAgo, toUnits } from "@/lib/money/format";
 import { isTerminal, vaultStateOf } from "@/lib/money/vault";
-import { BUTTONS, EMPTY, LED as LED_TEXT, MONEY, TOASTS, guardRank, guardRankLevel, statusLabel } from "@/lib/vocab";
+import { BUTTONS, EMPTY, LED as LED_TEXT, MONEY, PUBLISH, TOASTS, UNITS, guardRank, guardRankLevel, statusLabel } from "@/lib/vocab";
+import { UnitPicker, useMyUnits } from "@/components/raider/unit-picker";
+import { rememberHandOp } from "@/lib/agents/hand-ops";
+import { useOwnerDevice } from "@/lib/publish/store";
+import { PlugInAgent } from "@/components/owner/plug-in-agent";
+import { useOrigin } from "@/components/publish/live-card";
 import { Amount } from "@/components/money/amount";
 import { HashscanLink } from "@/components/money/hashscan-link";
+import { ZgCredits } from "@/components/money/zg-credits";
 import { Dialog } from "@/components/pixel/dialog";
 import { Digits } from "@/components/pixel/digits";
 import { LED } from "@/components/pixel/led";
@@ -76,7 +82,16 @@ export function CastleView() {
 type Busy = "paid" | "free" | null;
 /** Shortest time the x402 lights stay up, so 402 → SIGN → SETTLE reads even on a stub payment. */
 const PAY_FLOOR_MS = 1200;
-type StartState = { busy: Busy; step: 0 | 1 | 2 | 3; refused: string | null; reconUsed: boolean; start: (free: boolean) => void };
+type StartState = {
+  busy: Busy;
+  step: 0 | 1 | 2 | 3;
+  refused: string | null;
+  reconUsed: boolean;
+  start: (free: boolean) => void;
+  /** Onboarding J4: the red teamer's unit that pays this op (its operator key is in the browser); absent = the demo wallet. */
+  payFrom?: { id: string; name: string };
+  units: ReturnType<typeof useMyUnits>;
+};
 
 /**
  * `api.playStart` with the x402 three-light sequence (402 → SIGN → SETTLE). The server does the
@@ -85,6 +100,8 @@ type StartState = { busy: Busy; step: 0 | 1 | 2 | 3; refused: string | null; rec
  */
 function useOpStart(c: Castle, onRefused: () => void): StartState {
   const router = useRouter();
+  const units = useMyUnits();
+  const payFrom = units.unit ? { id: units.unit.id, name: units.unit.name } : undefined;
   const [busy, setBusy] = useState<Busy>(null);
   const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
   const [refused, setRefused] = useState<string | null>(null);
@@ -124,9 +141,14 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
     setRefused(null);
     const t0 = Date.now();
     try {
-      const res = free ? await api.playRecon({ castleId: c.id, visitor: visitorId() }) : await api.playStart({ castleId: c.id });
+      const res = free
+        ? await api.playRecon({ castleId: c.id, visitor: visitorId() })
+        : payFrom
+          ? await api.playStartFromUnit({ castleId: c.id, agentId: payFrom.id })
+          : await api.playStart({ castleId: c.id });
       // Stub payments land in a blink: hold the three lights long enough to read (≈1.2 s total).
       if (!free) await new Promise((r) => setTimeout(r, Math.max(0, PAY_FLOOR_MS - (Date.now() - t0))));
+      if (!free && payFrom) rememberHandOp(res.siegeId);
       const opHref = `/siege/${res.siegeId}?go=1`;
       if (!shown.current) {
         // they left mid-payment: the op is theirs, but say so instead of yanking them back
@@ -165,12 +187,19 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
         setRefused(why);
         playCue("deny");
         toast.error(TOASTS.paymentRefused(why).title, { description: why });
+      } else if (e instanceof ApiError && e.code === "cap_reached") {
+        const why = String((e.body as { reason?: unknown } | null)?.reason ?? "spend").replace("_", "-");
+        playCue("deny");
+        toast.error(UNITS.capReached(why));
+      } else if (e instanceof ApiError && (e.code === "awaiting_approval" || e.code === "unit_stopped")) {
+        playCue("deny");
+        toast.error(e.code === "unit_stopped" ? UNITS.unitStopped : UNITS.unitBusy);
       } else if (e instanceof ApiError && e.status === 409) toast.error("NOT TAKING OPS", { description: "This vault isn't open for ops." });
       else toast.error("OP DIDN'T START", { description: describeError(e) });
     }
   }
 
-  return { busy, step, refused, reconUsed, start: (free) => void start(free) };
+  return { busy, step, refused, reconUsed, start: (free) => void start(free), payFrom, units };
 }
 
 /** Why the RUN OP button is off, in the copy deck's words (null while guarding). */
@@ -194,14 +223,19 @@ function disabledReason(c: Castle, sieges: Siege[], now: number): { text: string
   }
 }
 
+/** A paid op still running: in progress and not voided by the arena (dormant / closed vault refunds). */
+const isLiveOp = (s: Siege) => s.status === "in_progress" && s.settlement?.state !== "void";
+const opLabel = (s: Siege) => (s.status === "in_progress" && s.settlement?.state === "void" ? LED_TEXT.opVoid : statusLabel(s.status));
+
 // ─── the page ─────────────────────────────────────────────────────────────────────────────
 
 function Briefing({ detail, refresh }: { detail: CastleDetail; refresh: () => void }) {
   const { castle: c, sieges, audit } = detail;
   const op = useOpStart(c, refresh);
   const now = useNow(15_000);
-  const liveOp = sieges.find((s) => s.status === "in_progress");
+  const liveOp = sieges.find(isLiveOp);
   const reason = disabledReason(c, sieges, now);
+  const ownsThisVault = useOwnerDevice(c.id).owner;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pt-5 pb-32 sm:px-6 sm:pt-8 lg:pb-12">
@@ -211,6 +245,8 @@ function Briefing({ detail, refresh }: { detail: CastleDetail; refresh: () => vo
 
       <ForkNote castleId={c.id} />
 
+      {vaultStateOf(c) !== "guarding" ? <OwnerPlugIn castle={c} className="mb-7" /> : null}
+
       {/* phone: one column in reading order (display:contents + order); desktop: two columns */}
       <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-start lg:gap-7">
         <div className="contents lg:flex lg:flex-col lg:gap-5">
@@ -218,7 +254,8 @@ function Briefing({ detail, refresh }: { detail: CastleDetail; refresh: () => vo
           <div className="order-6">
             <ArkivCard castleId={c.id} />
           </div>
-          <OwnerPanel castle={c} onClosed={refresh} className="order-7" />
+          {/* On the owner's own device the panel (credits dropping, fee cut earned) comes right after the identity. */}
+          <OwnerPanel castle={c} onClosed={refresh} className={ownsThisVault ? "order-2" : "order-7"} />
         </div>
         <div className="contents lg:flex lg:flex-col lg:gap-5">
           <Dossier castle={c} sieges={sieges} className="order-2" />
@@ -228,8 +265,26 @@ function Briefing({ detail, refresh }: { detail: CastleDetail; refresh: () => vo
         </div>
       </div>
 
+      {vaultStateOf(c) === "guarding" ? <OwnerPlugIn castle={c} className="mt-7" /> : null}
+
       <StickyRunBar castle={c} op={op} reason={reason} />
     </div>
+  );
+}
+
+/**
+ * SDK vaults, on the owner's device: the plug-in panel (install snippet, the six-LED strip, fund) on
+ * the vault page too, so an owner who left /publish, or the seeded Refund Desk's owner, can follow
+ * connect -> self-check -> smoke op -> verified -> fund -> guarding and rotate the guard key.
+ */
+function OwnerPlugIn({ castle: c, className }: { castle: Castle; className?: string }) {
+  const { owner } = useOwnerDevice(c.id);
+  const origin = useOrigin();
+  if (c.transport !== "sdk" || !owner || isTerminal(vaultStateOf(c))) return null;
+  return (
+    <section className={className} data-testid="owner-plug-in">
+      <PlugInAgent castleId={c.id} baseURL={origin} />
+    </section>
   );
 }
 
@@ -286,10 +341,30 @@ function Identity({ castle: c, live, now, className }: { castle: Castle; live: b
             {voice}
           </span>
         </div>
+        {c.published && c.blurb ? <p className="max-w-md text-[15px] leading-relaxed text-ink">{c.blurb}</p> : null}
         <div className="flex flex-wrap items-center gap-2">
           <ProtectedTool tool={tool} />
           {transport === "sdk" ? <TransportBadge transport={transport} /> : null}
+          {c.published ? (
+            <span className="border-2 border-money/50 px-1.5 py-0.5 font-ui text-[10px] tracking-[0.14em] text-money">{PUBLISH.publishedTag}</span>
+          ) : null}
         </div>
+        {c.published && (c.toolNames?.length ?? 0) > 0 ? (
+          <ul className="flex flex-wrap gap-1.5" aria-label="Tools">
+            {c.toolNames!.map((n) => (
+              <li
+                key={n}
+                className={cn(
+                  "border-2 px-1.5 py-0.5 font-mono text-[11px]",
+                  n === tool ? "border-threat/60 text-threat" : "border-line text-ink-dim",
+                )}
+                title={n === tool ? "A call to this tool counts as a breach" : undefined}
+              >
+                {n}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <p className="max-w-md text-sm leading-relaxed text-ink-dim max-sm:hidden">{TIER_DEFENSES[c.tier]}</p>
         <StateLine castle={c} now={now} />
       </div>
@@ -358,7 +433,7 @@ function Dossier({ castle: c, sieges, className }: { castle: Castle; sieges: Sie
         <Stat k="Last op">
           {last ? (
             <span className="font-term text-lg leading-none text-ink">
-              {timeAgo(last.endedAt ?? last.createdAt, now)} <span className="text-ink-dim">· {statusLabel(last.status)}</span>
+              {timeAgo(last.endedAt ?? last.createdAt, now)} <span className="text-ink-dim">· {opLabel(last)}</span>
             </span>
           ) : (
             <span className="font-term text-lg leading-none text-ink-dim">none yet</span>
@@ -438,7 +513,7 @@ function RunOpButton({ castle: c, op, reason, className }: { castle: Castle; op:
       aria-live="polite"
       onClick={() => op.start(false)}
     >
-      {op.busy === "paid" ? <PayingLights step={op.step} /> : reason ? reason.text.toUpperCase() : BUTTONS.runOp(fee)}
+      {op.busy === "paid" ? <PayingLights step={op.step} /> : reason ? reason.text.toUpperCase() : op.payFrom ? `RUN OP — ${UNITS.payFrom(op.payFrom.name)} (${fee})` : BUTTONS.runOp(fee)}
     </PixelButton>
   );
 }
@@ -453,6 +528,7 @@ function OpConsole({ castle: c, op, reason, liveOp, className }: { castle: Castl
       className={className}
       bodyClassName="flex flex-col gap-3 p-4"
     >
+      <UnitPicker units={op.units.units} selected={op.units.selected} onSelect={op.units.setSelected} disabled={op.busy !== null} />
       <RunOpButton castle={c} op={op} reason={reason} className="max-lg:hidden" />
       <PixelButton variant="outline" size="lg" cue={null} className="w-full" disabled={Boolean(reason) || op.busy !== null || op.reconUsed} onClick={() => op.start(true)}>
         {op.busy === "free" ? "STARTING RECON…" : op.reconUsed ? "RECON USED TODAY" : BUTTONS.recon}
@@ -478,7 +554,7 @@ function OpConsole({ castle: c, op, reason, liveOp, className }: { castle: Castl
         </p>
       ) : (
         <p className="text-xs leading-relaxed text-ink-dim">
-          Five messages. The server pays from the arena&apos;s demo wallet over x402, so there is no wallet to connect. Recon is free
+          Five messages. {op.payFrom ? `${op.payFrom.name} pays from its own account over x402, so a breach pays out to it.` : "The server pays from the arena's demo wallet over x402, so there is no wallet to connect."} Recon is free
           {config ? ` (${config.freeSiegesPerDay} a day)` : ""} and never pays out.
         </p>
       )}
@@ -533,7 +609,7 @@ function RecentOps({ castle: c, sieges, now, className }: { castle: Castle; sieg
                         {statusLabel(s.status)}
                       </Stamp>
                     ) : (
-                      <LED kind={s.status === "in_progress" ? "live" : "idle"} label={statusLabel(s.status)} />
+                      <LED kind={isLiveOp(s) ? "live" : "idle"} label={opLabel(s)} />
                     )}
                   </span>
                   <span className="min-w-0">
@@ -601,6 +677,7 @@ function OwnerPanel({ castle: c, onClosed, className }: { castle: Castle; onClos
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CloseCastleResponse | null>(null);
   const terminal = isTerminal(vaultStateOf(c));
+  const { owner: ownerDevice } = useOwnerDevice(c.id);
 
   // Hidden by Activity: drop the dialog and spinner so coming back never reopens a stale confirm.
   useLayoutEffect(
@@ -611,7 +688,20 @@ function OwnerPanel({ castle: c, onClosed, className }: { castle: Castle; onClos
     [],
   );
 
-  if (terminal && !result) return null;
+  if (terminal && !result) {
+    // Closed or breached: nothing to close, but the owner still sees what the vault earned and burned.
+    if (!ownerDevice || !(c.earnings || c.zg?.connected)) return null;
+    return (
+      <PixelPanel title="Owner" className={className} bodyClassName="flex flex-col gap-3 p-4 text-sm">
+        {c.earnings ? (
+          <p className="font-term text-[20px] leading-tight text-money" data-testid="owner-earnings">
+            {PUBLISH.earned(formatAmount(BigInt(c.earnings.ownerCut), c.asset, { symbol: false }), c.earnings.heldOps)}
+          </p>
+        ) : null}
+        {c.zg?.connected ? <ZgCredits castleId={c.id} variant="hero" /> : null}
+      </PixelPanel>
+    );
+  }
 
   function dismiss() {
     if (busy) return;
@@ -666,6 +756,12 @@ function OwnerPanel({ castle: c, onClosed, className }: { castle: Castle; onClos
         </div>
       ) : (
         <>
+          {ownerDevice && c.earnings ? (
+            <p className="font-term text-[20px] leading-tight text-money" data-testid="owner-earnings">
+              {PUBLISH.earned(formatAmount(BigInt(c.earnings.ownerCut), c.asset, { symbol: false }), c.earnings.heldOps)}
+            </p>
+          ) : null}
+          {ownerDevice && c.zg?.connected ? <ZgCredits castleId={c.id} variant="hero" /> : null}
           <p className="text-xs leading-relaxed text-ink-dim">Owner only. Closing returns the pot to you on chain and refunds every paid op still live.</p>
           <PixelButton variant="threatOutline" size="md" className="w-full" onClick={() => setAsking(true)}>
             {BUTTONS.closeVault}

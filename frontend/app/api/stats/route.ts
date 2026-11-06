@@ -3,6 +3,7 @@ import { db, schema } from "@/lib/db";
 import { toCastle } from "@/lib/castles";
 import { localTxRef } from "@/lib/siege";
 import { classifyTurn } from "@/lib/scene/classify";
+import { handlesOf } from "@/lib/operators";
 import type { BreachExhibit, LiveOp, OpOfDay, OperatorEntry, StatsResponse, VaultEntry } from "@/lib/api/client";
 import { LIVE_IDLE_MS, OP_OF_DAY_RULE } from "@/lib/api/client";
 import type { Castle } from "@/lib/types";
@@ -50,8 +51,13 @@ function computeStats(now = Date.now()): StatsResponse {
   const castles = d.select().from(schema.castles).all().map(toCastle);
   const byCastle = new Map(castles.map((c) => [c.id, c]));
   const sieges = d.select().from(schema.sieges).all().filter((s) => s.status !== "created");
-  const agents = new Map(d.select({ id: schema.raiderAgents.id, name: schema.raiderAgents.name }).from(schema.raiderAgents).all().map((a) => [a.id, a.name]));
-  const opName = (s: Pick<SiegeRow, "agentId" | "raider">) => (s.agentId && agents.get(s.agentId)) || short(s.raider);
+  const agentRows = d.select({ id: schema.raiderAgents.id, name: schema.raiderAgents.name, ownerId: schema.raiderAgents.ownerId }).from(schema.raiderAgents).all();
+  const agents = new Map(agentRows.map((a) => [a.id, a.name]));
+  const agentOwner = new Map(agentRows.map((a) => [a.id, a.ownerId]));
+  // A claimed handle (POST /api/operators) wins over the callsign / account id: by the paying account, else the unit's owner account.
+  const handles = handlesOf([...sieges.map((s) => s.raider), ...agentRows.map((a) => a.ownerId)]);
+  const opName = (s: Pick<SiegeRow, "agentId" | "raider">) =>
+    handles.get(s.raider) || (s.agentId && handles.get(agentOwner.get(s.agentId) ?? "")) || (s.agentId && agents.get(s.agentId)) || short(s.raider);
 
   const breachRows = sieges.filter(isBreach).sort((a, b) => (b.endedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.createdAt));
   const breachedCastles = new Set(breachRows.map((s) => s.castleId));

@@ -8,7 +8,7 @@
  * overflow (scrollWidth > viewport) is flagged on the sheet; `--strict` makes it fail too.
  *
  * Routes: / · /castle/castle_splinter_gate · /siege/<id> · /replay/<id> · /raider ·
- *         /raider/approvals · /hall · /wall (plus /wall?slide=breach|season|pager&paused=1 at 1920×1080,
+ *         /raider/approvals · /hall · /publish · /docs · /wall (plus /wall?slide=breach|season|pager&paused=1 at 1920×1080,
  *         see --wall-slides). The op id comes from --siege, else the newest paid
  *         breach / op of the day / any ended op in /api/stats and /api/events (run `npm run qa:op` first).
  *
@@ -113,7 +113,7 @@ async function main() {
   if (cfg?.chain?.mode !== "stub") throw new Error(`refusing to run: ${BASE} is in ${cfg?.chain?.mode} mode, not stub`);
   const siege = await pickSiege();
 
-  const routes = ["/", "/castle/castle_splinter_gate", `/siege/${siege}`, `/replay/${siege}`, "/raider", "/raider/approvals", "/hall", "/wall"].filter(
+  const routes = ["/", "/castle/castle_splinter_gate", `/siege/${siege}`, `/replay/${siege}`, "/raider", "/raider/approvals", "/hall", "/publish", "/docs", "/wall"].filter(
     (r) => !args.only || list(args.only).some((o) => r === o || (o !== "/" && r.startsWith(o.replace(/<id>$/, "")))),
   );
   const viewports = list(args.viewports).map((v) => {

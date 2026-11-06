@@ -160,6 +160,10 @@ export function ReconBriefing({
               {busy ? "STARTING RECON…" : target ? BUTTONS.runRecon(target.name) : loading ? "FINDING A VAULT…" : "NO VAULT TO RECON"}
             </PixelButton>
           )}
+          {/* J5: the developer door */}
+          <Link href="/docs" onClick={onLeave} className="block text-center font-ui text-[11px] tracking-[0.08em] text-ink-dim uppercase underline decoration-line underline-offset-4 hover:text-accent">
+            {BUTTONS.bringAgent}
+          </Link>
         </div>
       </div>
     </Dialog>

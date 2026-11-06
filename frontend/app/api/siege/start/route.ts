@@ -1,17 +1,32 @@
 import { z } from "zod";
 import { getCastle } from "@/lib/castles";
 import { getAgent } from "@/lib/agents/accounts";
-import { attachReceipt, claimFree, DuplicatePaymentError, markFreeSiege, markRefundDue, pay, persistReceipt } from "@/lib/pay";
+import { attachReceipt, claimRecon, DuplicatePaymentError, markFreeSiege, markRefundDue, pay, persistReceipt } from "@/lib/pay";
 import { CastleNotGuardingError, siege } from "@/lib/siege";
 import type { FreeReceipt, PaidReceipt } from "@/lib/types";
 import { siegeBlockedReason, vaultStateOf } from "@/lib/vault";
+import {
+  clientIp,
+  hashTurnToken,
+  newTurnToken,
+  RECON_IP_HEADER,
+  RECON_TICKET_HEADER,
+  verifyBoundReconTicket,
+  verifyReconTicket,
+  visitorOfWallet,
+} from "@/lib/auth/turn";
+import { db, schema } from "@/lib/db";
+import { eq } from "drizzle-orm";
 import { err, errorMessage, json, readBody } from "../../_lib/http";
 
 /**
  * POST /api/siege/start — THE x402-gated endpoint. Any outside agent can call it:
  *   no payment  -> 402 + PAYMENT-REQUIRED (x402 v2 PaymentRequired body)
  *   paid        -> 200 { siegeId, siege, receipt } + PAYMENT-RESPONSE
- *   free: true  -> one free siege per wallet per UTC day (never pays out), 429 when used
+ *   free: true  -> free recon (never pays out): wallet must be `recon-<visitor>` AND the request must carry the
+ *                  x-siege-recon-ticket HMAC that /api/play/start mints (403 recon_requires_visitor otherwise);
+ *                  capped per visitor, per IP and arena-wide per UTC day (429 free_used {scope})
+ * Every 200 carries `turnToken` once: POST /api/siege/[id]/message needs it (only its hash is stored).
  * Order matters: the receipt is persisted BEFORE the siege starts, so a crash after a settled
  * payment leaves a receipt row we can reconcile. Money that moved without buying a siege (castle won
  * or closed during the payment, start failed) is marked refund_due and refunded by the worker; the
@@ -45,10 +60,18 @@ export async function POST(req: Request) {
   let receipt: Omit<PaidReceipt, "siegeId"> | Omit<FreeReceipt, "siegeId">;
   let headers: Record<string, string> = {};
   if (free) {
-    const who = wallet ?? "anon";
-    const claim = await claimFree(who);
-    if (!claim.ok) return err(429, "free_used");
-    receipt = { free: true, payer: who };
+    const visitor = visitorOfWallet(wallet);
+    // play/start binds the ticket to the caller IP it saw (x-siege-recon-ip); an unbound ticket (in-process
+    // callers) falls back to this request's own trusted client IP.
+    const ticket = req.headers.get(RECON_TICKET_HEADER);
+    const boundIp = req.headers.get(RECON_IP_HEADER)?.trim().toLowerCase().slice(0, 64);
+    const ok = visitor && (boundIp ? verifyBoundReconTicket(visitor, boundIp, ticket) : verifyReconTicket(visitor, ticket));
+    if (!visitor || !ok) {
+      return err(403, "recon_requires_visitor", { message: "Free recon is for browser visitors: start it from the Grid." });
+    }
+    const claim = claimRecon({ visitor, ip: boundIp || clientIp(req) });
+    if (!claim.ok) return err(429, "free_used", { scope: claim.scope });
+    receipt = { free: true, payer: wallet! };
   } else {
     const g = await pay.gate(req, {
       castle,
@@ -105,8 +128,11 @@ export async function POST(req: Request) {
     return err(500, "start_failed", { receiptId, refund: receipt.free ? undefined : "due", message: errorMessage(e) });
   }
   attachReceipt(receiptId, started.id);
+  // The raider's only handle on this siege's turns. Minted here (not in lib/siege) and stored as a hash.
+  const turnToken = newTurnToken();
+  db().update(schema.sieges).set({ turnTokenHash: hashTurnToken(turnToken) }).where(eq(schema.sieges.id, started.id)).run();
   if (receipt.free) markFreeSiege(receipt.payer, started.id);
 
   // HCS siege.start is derived from the engine's "start" event by the audit outbox (lib/chain/outbox.ts).
-  return json({ siegeId: started.id, siege: started, receipt }, 200, headers);
+  return json({ siegeId: started.id, siege: started, receipt, turnToken }, 200, headers);
 }

@@ -86,10 +86,14 @@ function check(ok: unknown, label: string, detail?: string) {
 }
 
 let f: typeof fetch;
+/** Turn tokens by siege id, remembered from /api/siege/start and /api/play/start responses and sent on every message. */
+const turnTokens = new Map<string, string>();
 async function call<T = Record<string, unknown>>(method: "GET" | "POST", p: string, body?: unknown, headers: Record<string, string> = {}, via?: typeof fetch) {
+  const msgId = /^\/api\/siege\/([^/]+)\/message$/.exec(p)?.[1];
+  const token = msgId ? turnTokens.get(msgId) : undefined;
   const res = await (via ?? f)(`${BASE}${p}`, {
     method,
-    headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers },
+    headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(token ? { "x-siege-turn-token": token } : {}), ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const text = await res.text();
@@ -99,6 +103,8 @@ async function call<T = Record<string, unknown>>(method: "GET" | "POST", p: stri
   } catch {
     data = text;
   }
+  const started = data as { siegeId?: string; turnToken?: string } | null;
+  if (started?.siegeId && started.turnToken) turnTokens.set(started.siegeId, started.turnToken);
   return { res, data: data as T };
 }
 
@@ -207,6 +213,7 @@ async function main() {
   check(hosted.every((c) => c.vaultState === "guarding" && c.protectedTool === toolFor(c.id)), "hosted castles: created → verified → funded → guarding, each protecting its own tool (game castles: unlock_vault)", hosted.map((c) => `${c.vaultState}/${c.protectedTool}`).join(" "));
   check(deskSeed?.vaultState === "created" && deskSeed.transport === "sdk" && deskSeed.protectedTool === "issue_refund" && deskSeed.vaultId == null,
     "Refund Desk (SDK, protects issue_refund) waits at \"created\" with no vault", deskSeed ? `${deskSeed.vaultState}, vault ${deskSeed.vaultId ?? "none"}` : "missing");
+  if (seeded.guardKey) console.log(`  Refund Desk harness key: SIEGE_GUARD_KEY=${seeded.guardKey.slice(0, 7)}…  (node examples/guard-refund-bot/index.mjs)`);
   const seedStates = db().select().from(schema.auditLog).where(eq(schema.auditLog.type, "vault.state")).all();
   check(seedStates.length === 3 * hosted.length, "each hosted castle's three transitions audited on its HCS topic as \"vault.state\"", `${seedStates.length} messages`);
   check(seeded.agent?.name === "Night Sapper", "demo raider agent Night Sapper exists", seeded.agent?.accountId);
@@ -304,8 +311,9 @@ async function main() {
   const topic = await chain.createTopic(yardFixture.id);
   if (topic.ok) db().update(schema.castles).set({ topicId: topic.topicId }).where(eq(schema.castles.id, yardFixture.id)).run();
   const yardBefore = await getCastle(yardFixture.id);
-  const wallet = "0.0.demo-wallet";
-  const free = await call<{ siegeId: string; receipt: { free: boolean } }>("POST", "/api/siege/start", { castleId: yardFixture.id, free: true, wallet });
+  // Free recon goes through /api/play/start, which mints the visitor ticket /api/siege/start demands.
+  const visitor = "demovisitor1";
+  const free = await call<{ siegeId: string; receipt: { free: boolean } }>("POST", "/api/play/start", { castleId: yardFixture.id, free: true, visitor });
   check(free.res.status === 200 && free.data.receipt?.free === true, "free siege started without payment", free.data?.siegeId);
   const s5 = await sendAll(free.data.siegeId, WOODEN_BREAK);
   check(s5.status === "broken", "the guardian opened the vault", `${s5.status} on turn ${s5.turn}`);
@@ -318,8 +326,8 @@ async function main() {
   check(yardAfter.status === "open" && yardAfter.pot === yardBefore.pot, "castle stays open, pot untouched", `${yardAfter.status}, ${hb(yardAfter.pot)}`);
   const freeRelease = eventsFor(s5.id).find((x) => x.type === "release");
   check(freeRelease?.payload.free === true && freeRelease.payload.title === "Breaker (practice)", "\"release\" event marks it a practice break");
-  const free2 = await call<{ error?: string }>("POST", "/api/siege/start", { castleId: granite.id, free: true, wallet });
-  check(free2.res.status === 429 && free2.data.error === "free_used", "a second free siege for the same wallet today -> 429 free_used");
+  const free2 = await call<{ error?: string }>("POST", "/api/play/start", { castleId: granite.id, free: true, visitor });
+  check(free2.res.status === 429 && free2.data.error === "free_used", "a second free siege for the same visitor today -> 429 free_used");
   story.push(`A free daily siege cracked the Practice Yard too — but free sieges can never pay out: the castle stayed open and the worker never touched the vault.`);
 
   // ── (6) The agent beat ───────────────────────────────────────────────────────
@@ -327,8 +335,14 @@ async function main() {
   const sapper = seeded.agent!;
   const anonRun = await call("POST", `/api/agents/${sapper.id}/run`, { castleId: granite.id });
   check(anonRun.res.status === 401, "running an agent without the owner cookie -> 401");
-  const anonCreate = await call("POST", "/api/agents", { name: "Drainer", budget: "99999999999999" });
-  check(anonCreate.res.status === 401, "creating a (funded) agent without the owner cookie -> 401");
+  // Onboarding 2b: without the owner cookie POST /api/agents opens a red teamer's own (self-funded) unit
+  // draft instead of an arena-funded agent, so the drain attempt must be refused by the budget cap.
+  const anonCreate = await call("POST", "/api/agents", { name: "Drainer", budget: "99999999999999", zgKey: "sk-demo" });
+  check(
+    anonCreate.res.status === 400 && anonCreate.data.error === "over_limit" && !("agent" in anonCreate.data),
+    "an agent without the owner cookie can't spend arena money (self-funded unit path, over-budget -> 400)",
+    JSON.stringify(anonCreate.data),
+  );
   const login = await call("POST", "/api/owner", { key: e.OWNER_SECRET });
   const setCookie = login.res.headers.get("set-cookie") ?? "";
   check(login.res.status === 200 && /HttpOnly/i.test(setCookie) && /SameSite=Lax/i.test(setCookie), "owner login sets an httpOnly SameSite=Lax cookie");

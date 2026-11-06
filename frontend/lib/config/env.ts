@@ -45,8 +45,41 @@ const base = z.object({
 
   /** Server-side ceilings for POST /api/agents (tinybars): nobody can make the operator fund more. */
   AGENT_MAX_BUDGET: z.coerce.number().int().positive().default(20 * 100_000_000),
-  AGENT_MAX_COUNT: z.coerce.number().int().positive().default(25),
+  /** Max units that are not stopped (arena-funded and operator-funded together). */
+  AGENT_MAX_COUNT: z.coerce.number().int().positive().default(100),
+
+  // ─── Onboarding (plans/siege-onboarding-plan.md) ───
+  /** Largest pot (tinybars) a published vault gets: pot = min(deposit received, this). Default 100 ℏ. */
+  PUBLISH_MAX_POT: z.coerce.number().int().positive().default(100 * 100_000_000),
+  /** POST /api/castles answers 429 once this many publish drafts await their deposit. */
+  PUBLISH_MAX_OPEN_DRAFTS: z.coerce.number().int().positive().default(20),
+  /** Minutes a deposit intent stays open (QR + memo panel countdown). */
+  DEPOSIT_WINDOW_MIN: z.coerce.number().int().positive().default(45),
+  /** Free recon ops per client IP per UTC day (venue Wi-Fi shares one IP). */
+  FREE_RECON_PER_IP_PER_DAY: z.coerce.number().int().positive().default(25),
+  /** Free recon ops across the whole arena per UTC day. */
+  FREE_RECON_PER_DAY_TOTAL: z.coerce.number().int().positive().default(400),
+  /** Smallest budget (tinybars) an operator-funded unit may be created with. Default 1 ℏ. */
+  UNIT_MIN_BUDGET: z.coerce.number().int().positive().default(100_000_000),
+  /**
+   * Stub rehearsals only: hold a deposit in WAITING FOR DEPOSIT this long (ms) before it auto-confirms,
+   * then walk SETTING UP k/n, so a stub recording shows the deposit beat. 0 (default) = confirm inline.
+   */
+  SIEGE_STUB_DEPOSIT_DELAY_MS: z.coerce.number().int().min(0).max(120_000).default(0),
+  /**
+   * Client IP for the free-recon / validate rate limits. TRUSTED_IP_HEADER names a header the edge sets
+   * and clients cannot (e.g. cf-connecting-ip, x-real-ip on Vercel). Otherwise the x-forwarded-for entry
+   * TRUSTED_PROXY_HOPS from the right (1 = the one your single proxy/tunnel appended).
+   */
+  TRUSTED_IP_HEADER: z.string().trim().toLowerCase().optional(),
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
+  /** 0G router base URL for connectZg (account/keys/models). Unset → ZG_BASE_URL → router-api.0g.ai/v1. */
+  ZG_ROUTER_URL: z.string().optional(),
+  /** Read only as ZG_ROUTER_URL's fallback here (lib/proxy/config.ts reads it for inference). */
+  ZG_BASE_URL: z.string().optional(),
 });
+
+export const DEFAULT_ZG_ROUTER_URL = "https://router-api.0g.ai/v1";
 
 const schema = base.superRefine((e, ctx) => {
   // Real money: the public dev key (which /api/config used to advertise) must never authorise approvals.
@@ -57,7 +90,7 @@ const schema = base.superRefine((e, ctx) => {
       message: `CHAIN_MODE=testnet needs OWNER_SECRET set to a private value of at least ${MIN_TESTNET_OWNER_SECRET} characters (not the dev default).`,
     });
   }
-});
+}).transform((e) => ({ ...e, ZG_ROUTER_URL: (e.ZG_ROUTER_URL ?? e.ZG_BASE_URL ?? DEFAULT_ZG_ROUTER_URL).replace(/\/+$/, "") }));
 
 export type Env = z.infer<typeof schema>;
 

@@ -29,13 +29,19 @@ const BASE = "http://localhost:3000";
 const f = createInProcessFetch(BASE);
 const WOOD = "castle_splinter_gate";
 
+const turnTokens = new Map<string, string>();
+
 async function call<T = Record<string, unknown>>(method: "GET" | "POST", path: string, body?: unknown, headers: Record<string, string> = {}) {
+  const token = turnTokens.get(/^\/api\/siege\/([^/]+)\/message$/.exec(path)?.[1] ?? "");
   const res = await f(`${BASE}${path}`, {
     method,
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "application/json", ...(token ? { "x-siege-turn-token": token } : {}), ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
-  return { status: res.status, data: (await res.json().catch(() => null)) as T };
+  const data = (await res.json().catch(() => null)) as T;
+  const started = data as { siegeId?: string; turnToken?: string } | null;
+  if (started?.siegeId && started.turnToken) turnTokens.set(started.siegeId, started.turnToken);
+  return { status: res.status, data };
 }
 
 const pay = (raider = "0.0.stub-raider") => ({ [STUB_PAYMENT_HEADER]: raider });
@@ -277,7 +283,8 @@ describe("vault lifecycle through the routes and the worker", () => {
 
 describe("owner-only agent controls and the deny beat", () => {
   it("create / run / stop need the owner cookie; budgets are capped", async () => {
-    expect((await call("POST", "/api/agents", { name: "Drainer", budget: "100000000000" })).status).toBe(401);
+    // Without the owner cookie this is a red teamer's own unit (2b): it needs their 0G key and never draws on the arena.
+    expect((await call("POST", "/api/agents", { name: "Drainer", budget: "100000000000" })).status).toBe(400);
     const owner = await ownerCookie();
     const big = await call<{ error: string }>("POST", "/api/agents", { name: "Drainer", budget: "100000000000" }, owner);
     expect(big.status).toBe(400);
@@ -403,8 +410,8 @@ describe("a guardian that cannot pay out or does not answer strands no fee", () 
 describe("small things", () => {
   it("free sieges never move the castle streak", async () => {
     const before = db().select().from(schema.castles).where(eq(schema.castles.id, "castle_granite_hold")).get()!.streak;
-    for (const w of ["w1", "w2", "w3"]) {
-      const r = await call<{ siegeId: string }>("POST", "/api/siege/start", { castleId: "castle_granite_hold", free: true, wallet: w });
+    for (const v of ["visitor1", "visitor2", "visitor3"]) {
+      const r = await call<{ siegeId: string }>("POST", "/api/play/start", { castleId: "castle_granite_hold", free: true, visitor: v });
       for (const t of MUST_NOT_BREAK) await say(r.data.siegeId, t);
     }
     await settleTick();

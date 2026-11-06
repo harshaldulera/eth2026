@@ -9,8 +9,11 @@ import { ApiError, api, describeError } from "@/lib/api/client";
 import { usePolling } from "@/lib/hooks/usePolling";
 import { useConfig } from "@/lib/hooks/useConfig";
 import { formatAmount } from "@/lib/money/format";
-import { BUTTONS, EMPTY, TOASTS } from "@/lib/vocab";
-import { ApprovalCard, reasonText } from "@/components/money/approval-card";
+import { BUTTONS, EMPTY, TOASTS, UNITS } from "@/lib/vocab";
+import { hasOperatorKeys, OPERATOR_KEYS_EVENT } from "@/lib/agents/operator-keys";
+import { DepositPanel } from "@/components/money/deposit-panel";
+import { PixelPanel } from "@/components/pixel/panel";
+import { ApprovalCard, approveMovesMoney, reasonText } from "@/components/money/approval-card";
 import { Pager } from "@/components/pixel/pager";
 import { PixelButton } from "@/components/pixel/button";
 import { Sprite } from "@/components/pixel/sprite";
@@ -50,6 +53,19 @@ function setAuth(ok: boolean) {
   window.dispatchEvent(new Event(AUTH_EVT));
 }
 
+// Operator keys (a red teamer's units) live in localStorage `siege.operatorKeys`: with one, the pager works without the owner key.
+function subKeys(cb: () => void) {
+  window.addEventListener(OPERATOR_KEYS_EVENT, cb);
+  window.addEventListener("storage", cb);
+  return () => {
+    window.removeEventListener(OPERATOR_KEYS_EVENT, cb);
+    window.removeEventListener("storage", cb);
+  };
+}
+function readKeys(): "yes" | "no" {
+  return hasOperatorKeys() ? "yes" : "no";
+}
+
 const PERM_EVT = "siege:notify-perm";
 function subPerm(cb: () => void) {
   window.addEventListener(PERM_EVT, cb);
@@ -63,6 +79,7 @@ type Decision = "approved" | "denied";
 
 export function OwnerApprovals() {
   const auth = useSyncExternalStore(subAuth, readAuth, () => "unknown" as const);
+  const keyed = useSyncExternalStore(subKeys, readKeys, () => "unknown" as const);
   const { data, error, loading, refresh, mutate } = usePolling(() => api.approvals("all"), 1500);
   // Decisions in flight. They override what the poll says until the server answers, so a poll that
   // left before the tap can't flip the sheet back to pending.
@@ -89,12 +106,19 @@ export function OwnerApprovals() {
     try {
       const res = await api.decideApproval(a.id, decision);
       mutate((d) => d && { approvals: d.approvals.map((x) => (x.id === a.id ? res.approval : x)) });
-      if (decision === "approved") toast.success(TOASTS.approved(a.agentName, formatAmount(a.amount)).title);
+      // A budget ask on a unit you funded answers with a top-up deposit and stays pending until it lands.
+      if (res.approval.status === "pending" && res.approval.deposit) toast(UNITS.topUpTitle, { description: UNITS.topUpHint });
+      else if (decision === "approved")
+        toast.success(
+          (approveMovesMoney(res.approval) ? TOASTS.approved(a.agentName, formatAmount(a.amount)) : TOASTS.capRaised(a.agentName, formatAmount(a.amount))).title,
+        );
       else toast(TOASTS.denied(a.agentName, a.castleName).title);
       navigator.vibrate?.(40);
     } catch (e) {
       mutate((d) => d && { approvals: d.approvals.map((x) => (x.id === a.id ? before : x)) });
-      if (e instanceof ApiError && e.status === 401) {
+      if (e instanceof ApiError && e.status === 401 && keyed === "yes") {
+        toast.error("That key doesn't cover this unit");
+      } else if (e instanceof ApiError && e.status === 401) {
         setAuth(false);
         setRetry({ id: a.id, decision });
         toast.error("Enter the owner key to decide");
@@ -113,8 +137,8 @@ export function OwnerApprovals() {
     }
   }
 
-  if (auth === "unknown") return <Skeleton className="mx-auto mt-10 h-40 max-w-md" />;
-  if (auth === "no")
+  if (auth === "unknown" || keyed === "unknown") return <Skeleton className="mx-auto mt-10 h-40 max-w-md" />;
+  if (auth === "no" && keyed === "no")
     return (
       <OwnerLogin
         onDone={() => {
@@ -129,7 +153,17 @@ export function OwnerApprovals() {
 
   // One keyed list (waiting, then decided) so a sheet decided on screen stays mounted and flips.
   const items: React.ReactNode[] = [
-    ...pending.map((a) => <ApprovalCard key={a.id} approval={a} busy={busy[a.id]?.decision ?? false} onDecide={(d) => void decide(a, d)} />),
+    ...pending.flatMap((a) => [
+      <ApprovalCard key={a.id} approval={a} busy={busy[a.id]?.decision ?? false} onDecide={(d) => void decide(a, d)} />,
+      ...(a.deposit
+        ? [
+            <PixelPanel key={`${a.id}:topup`} title={UNITS.topUpTitle} bodyClassName="space-y-3 p-4">
+              <p className="text-xs leading-relaxed text-ink-dim">{UNITS.topUpHint}</p>
+              <DepositPanel key={a.deposit.intentId} intentId={a.deposit.intentId} onFunded={() => void refresh()} />
+            </PixelPanel>,
+          ]
+        : []),
+    ]),
   ];
   if (decided.length) {
     items.push(

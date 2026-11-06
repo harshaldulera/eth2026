@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { ApprovalRequest, Asset } from "@/lib/types";
 import { HBAR, assetSymbol, timeAgo, toNumber } from "@/lib/money/format";
 import { useCalmMotion } from "@/lib/hooks/usePrefs";
-import { BUTTONS, threatWord } from "@/lib/vocab";
+import { BUTTONS, threatWord, UNITS } from "@/lib/vocab";
 import { cn } from "@/lib/utils";
 import { PixelButton } from "@/components/pixel/button";
 import { Digits } from "@/components/pixel/digits";
@@ -28,6 +28,8 @@ export function reasonText(a: Pick<ApprovalRequest, "reason" | "castleName">): s
       return "Lost too many ops in a row — its stop rule kicked in";
     case "stopped":
       return "Was stopped and wants to resume";
+    case "zg_key":
+      return "Its 0G key was rejected — check your credits at pc.0g.ai";
     default:
       return "Needs your go-ahead";
   }
@@ -49,6 +51,14 @@ export function capLine(a: Pick<ApprovalRequest, "reason" | "castleName">): stri
     default:
       return "needs your go-ahead";
   }
+}
+
+/**
+ * Does approving this ask move HBAR? Arena units: an on-chain top-up. A unit its red teamer funded: only
+ * a `budget` ask does (through a top-up deposit); a cap ask just raises the cap. Same rule as the mission log.
+ */
+export function approveMovesMoney(a: Pick<ApprovalRequest, "topUp" | "reason" | "deposit" | "fundedBy">): boolean {
+  return Boolean(a.topUp || a.deposit || a.reason === "budget" || a.fundedBy !== "operator");
 }
 
 /** `2.00 ℏ`: request amounts always show two decimals so they read like a price. */
@@ -202,6 +212,7 @@ function PendingFace({ a, asset, busy, onDecide }: { a: ApprovalRequest; asset: 
 function DecidedFace({ a, asset, slam }: { a: ApprovalRequest; asset: Asset; slam: boolean }) {
   const approved = a.status === "approved";
   const ask = askText(a.amount, asset);
+  const money = approveMovesMoney(a);
   return (
     <div className="mt-4 flex flex-col items-start gap-3">
       <Stamp kind={approved ? "hold" : "lockdown"} size="lg" slam={slam}>
@@ -213,7 +224,7 @@ function DecidedFace({ a, asset, slam }: { a: ApprovalRequest; asset: Asset; sla
             <span className="text-money">
               +{ask.num} {ask.unit}
             </span>{" "}
-            top-up
+            {money ? UNITS.decidedTopUp : UNITS.decidedCapRaised}
           </>
         ) : (
           <>agent stopped · vault stands</>
@@ -223,7 +234,11 @@ function DecidedFace({ a, asset, slam }: { a: ApprovalRequest; asset: Asset; sla
         <span>
           {approved ? "approved" : "denied"} {a.resolvedAt ? timeAgo(a.resolvedAt) : ""}
         </span>
-        {a.topUp ? <HashscanLink tx={a.topUp} label={`top-up ${ask.num} ${ask.unit}`} /> : approved ? <span>settling on Hedera…</span> : null}
+        {a.topUp ? (
+          <HashscanLink tx={a.topUp} label={`top-up ${ask.num} ${ask.unit}`} />
+        ) : approved ? (
+          <span>{money ? UNITS.settling : UNITS.noHbarMoved}</span>
+        ) : null}
       </div>
     </div>
   );

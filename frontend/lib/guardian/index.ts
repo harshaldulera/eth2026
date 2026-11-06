@@ -1,4 +1,5 @@
 import type { GuardianPort } from "@/lib/types";
+import { castleRow } from "@/lib/castles";
 import { zgConfig } from "@/lib/proxy";
 import { stubGuardian } from "./stub";
 import { zeroGGuardian } from "./zerog";
@@ -32,8 +33,22 @@ export function guardianMode(): "0g" | "stub" {
   return zgConfig.activeKey ? "0g" : "stub";
 }
 
+/** The stand-in inference key that 0G connect mints in mock mode (lib/zg/connect STUB_KEY_PREFIX). */
+const STUB_ZG_KEY_PREFIX = "sk-stub-";
+
+/**
+ * Stub mode, onboarding J1: a vault an owner published and connected with a mock 0G key thinks
+ * through the proxy's offline mock on that key (billed_to castle:<id>), so the owner panel shows
+ * their credits dropping exactly as on 0G. Fixtures and real keys keep the deterministic stub.
+ */
+function publishedOnStubKey(castleId: string): boolean {
+  const row = castleRow(castleId);
+  return Boolean(row?.published && row.transport !== "sdk" && row.zgApiKey?.startsWith(STUB_ZG_KEY_PREFIX));
+}
+
 export const guardian: GuardianPort = {
-  respond: (castleId, siegeMessages, ctx) => (guardianMode() === "0g" ? zeroGGuardian : stubGuardian).respond(castleId, siegeMessages, ctx),
+  respond: (castleId, siegeMessages, ctx) =>
+    (guardianMode() === "0g" || publishedOnStubKey(castleId) ? zeroGGuardian : stubGuardian).respond(castleId, siegeMessages, ctx),
 };
 
 export { PROTECTED_TOOL } from "./tiers";

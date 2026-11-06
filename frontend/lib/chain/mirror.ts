@@ -163,6 +163,17 @@ export async function contractLogs(
   }));
 }
 
+/** The account id whose EVM alias is `evm` ("0x…"), or null when the mirror knows none (yet). */
+export async function accountIdForEvm(evm: string): Promise<string | null> {
+  try {
+    const a = await mirrorGet<{ account?: string | null }>(`/accounts/${encodeURIComponent(evm.toLowerCase())}`);
+    return a.account ?? null;
+  } catch (err) {
+    if (err instanceof MirrorHttpError && err.status === 404) return null;
+    throw err;
+  }
+}
+
 /** Account balance in tinybars (testnet only). */
 export async function accountBalance(accountId: string): Promise<bigint> {
   const a = await mirrorGet<{ balance?: { balance?: number } }>(`/accounts/${encodeURIComponent(accountId)}`);
@@ -194,4 +205,68 @@ export async function topicMessages(topicId: string, limit = 25): Promise<TopicM
     }
     return { seq: m.sequence_number, message, json, consensusTimestamp: m.consensus_timestamp };
   });
+}
+
+export type AccountTransfer = {
+  /** Mirror transaction id ("0.0.9185802-1793983423-475432254"). */
+  txId: string;
+  /** Paying account: the transaction id before its first "-". */
+  payer: string;
+  /** Decoded memo, trimmed. */
+  memo: string;
+  /** Sum of the positive HBAR transfers to the account, in tinybar (decimal string). */
+  amountToAccount: string;
+  consensusTimestamp: string;
+};
+
+type MirrorTransfersPage = {
+  transactions?: {
+    transaction_id: string;
+    memo_base64?: string | null;
+    consensus_timestamp: string;
+    result?: string;
+    transfers?: { account: string; amount: number }[];
+  }[];
+  links?: { next?: string | null };
+};
+
+/** Max mirror pages followed per call (100 transactions each): bounds a busy operator account. */
+const MAX_TRANSFER_PAGES = 30;
+
+/**
+ * Successful CRYPTOTRANSFERs touching `accountId` since `sinceMs`, oldest first, with the HBAR that
+ * reached the account (outgoing payments and transfers where the account is the payer are dropped).
+ * Follows `links.next`. Used by the deposit matcher (lib/pay/deposits.ts).
+ */
+export async function accountTransfers(accountId: string, opts: { sinceMs: number; limit?: number }): Promise<AccountTransfer[]> {
+  const p = new URLSearchParams();
+  p.set("account.id", accountId);
+  p.set("transactiontype", "CRYPTOTRANSFER");
+  p.set("result", "success");
+  p.set("timestamp", `gte:${(Math.max(0, opts.sinceMs) / 1000).toFixed(9)}`);
+  p.set("order", "asc");
+  p.set("limit", String(opts.limit ?? 100));
+  let path: string | undefined = `/transactions?${p}`;
+  const out: AccountTransfer[] = [];
+  for (let page = 0; path && page < MAX_TRANSFER_PAGES; page++) {
+    const r: MirrorTransfersPage = await mirrorGet<MirrorTransfersPage>(path);
+    for (const t of r.transactions ?? []) {
+      if (t.result && t.result !== "SUCCESS") continue;
+      const payer = t.transaction_id.split("-")[0] ?? "";
+      if (payer === accountId) continue;
+      let amount = 0n;
+      for (const tr of t.transfers ?? []) if (tr.account === accountId && tr.amount > 0) amount += BigInt(Math.trunc(tr.amount));
+      if (amount <= 0n) continue;
+      out.push({
+        txId: t.transaction_id,
+        payer,
+        memo: Buffer.from(t.memo_base64 ?? "", "base64").toString("utf8").trim(),
+        amountToAccount: amount.toString(),
+        consensusTimestamp: t.consensus_timestamp,
+      });
+    }
+    const next: string | null | undefined = r.links?.next;
+    path = next ? next.replace(/^\/api\/v1/, "") : undefined;
+  }
+  return out;
 }

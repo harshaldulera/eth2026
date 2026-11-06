@@ -1,19 +1,23 @@
-// STUB — Lane B replaces with the @siege/guard socket relay (api/guard handshake, heartbeat, external harness replies); keep the signature.
 import { createHash } from "node:crypto";
 import { castleRow } from "@/lib/castles";
-import type { GuardianDecision } from "@/lib/types";
+import { isStub } from "@/lib/config/env";
+import { leaseLive } from "@/lib/guard/lease";
+import { resolveRequestId } from "@/lib/guard/records";
+import { AWAIT_POLL_MS, AWAIT_TIMEOUT_MS, awaitAnswer, enqueueTurn, GuardTimeoutError, type HarnessMessage } from "@/lib/guard/turns";
+import type { GuardianDecision, SiegeMessage, ToolCall } from "@/lib/types";
 import { lastRaiderTurn, TransportUnavailableError, type SiegeTransport } from "./types";
 
 /**
- * SDK guardians: an external harness guarded with @siege/guard. The stub plays the
- * examples/guard-refund-bot harness: a polite support bot that refuses every refund and NEVER calls
- * the castle's protected tool (whatever it is, e.g. "issue_refund"). The real harness (B9) calls the
- * model through /api/proxy/v1 with the vault key, which writes proxy records; this stub makes no model
- * call, so it reports "sdk-stub-…" request ids with no record (a stub reply can never be verified as a break).
+ * SDK guardians: an external harness guarded with @siege/guard (plan §2A). The harness long-polls
+ * GET /api/guard/next with its gk_ key and lease; while its lease is live (polled within 30 s) every
+ * siege turn goes through the guard_turns queue (lib/guard/turns) and the harness's model calls go
+ * through /api/proxy/v1 with the castle's vk_ key, which writes the proxy records the verifier reads.
  *
- * A dormant harness (three missed heartbeats) does not answer: respond throws
- * TransportUnavailableError and the siege engine gives the raider their turn back.
- * status() is the castle's vault state as stored (Lane B's heartbeat monitor moves it).
+ * With no live lease: in stub mode (CHAIN_MODE=stub) the refund-bot stand-in below answers (a polite
+ * support bot that never calls its protected tool, "sdk-stub-…" ids with no record, so it can never
+ * verify as a break; npm run demo and the dev walk rely on it); otherwise TransportUnavailableError.
+ * A dormant harness never answers (TransportUnavailableError: the raider's turn is given back).
+ * status() is the castle's vault state as stored (worker/guard.ts moves guarding ⇄ dormant).
  */
 
 /** The refund bot's own system prompt. Only its hash ever reaches our records. */
@@ -58,8 +62,14 @@ export const sdkTransport: SiegeTransport = {
     const row = castleRow(castleId);
     if (!row) throw new Error(`transport(sdk): castle ${castleId} not found`);
     if (row.vaultState === "dormant") throw new TransportUnavailableError("sdk", castleId, "harness dormant (missed heartbeats)");
-    const d = refundBotDecide(castleId, siegeMessages);
     const turn = ctx?.turn ?? lastRaiderTurn(siegeMessages);
+
+    // Part 2a: a harness holds a live lease → it answers through the guard_turns queue.
+    if (leaseLive(row)) return harnessRespond(row.id, row.protectedTool, siegeMessages, ctx?.siegeId ?? null, turn);
+
+    // No harness: in stub mode the refund-bot stand-in answers (npm run demo, the dev walk).
+    if (!isStub()) throw new TransportUnavailableError("sdk", castleId, "no harness connected");
+    const d = refundBotDecide(castleId, siegeMessages);
     const requestId = "sdk-stub-" + createHash("sha256").update(`${castleId}:${ctx?.siegeId ?? ""}:${turn}`).digest("hex").slice(0, 12);
     return { ...d, requestId, raw: { ...(d.raw as Record<string, unknown>), transport: "sdk" } };
   },
@@ -70,3 +80,55 @@ export const sdkTransport: SiegeTransport = {
     return row.vaultState;
   },
 };
+
+/** Siege messages as the harness sees them: raider → user, guardian → assistant. */
+export function harnessMessages(siegeMessages: SiegeMessage[]): HarnessMessage[] {
+  return siegeMessages.map((m) => ({ role: m.role === "raider" ? "user" : "assistant", content: m.text }));
+}
+
+/** Overridable for tests (ms). */
+export const sdkTiming = { timeoutMs: AWAIT_TIMEOUT_MS, pollMs: AWAIT_POLL_MS };
+
+/**
+ * One siege turn through the external harness: queue it, wait for the answer (60 s; the castle going
+ * dormant ends the wait early), then decide the move ourselves. The vault opens when the harness says
+ * it called the protected tool OR our proxy record for that turn saw the call; the request id is
+ * resolved from proxy_records, never taken from the harness. A timeout is a plain Error → the engine
+ * gives the turn back (502 guardian_unavailable).
+ */
+async function harnessRespond(castleId: string, protectedTool: string, siegeMessages: SiegeMessage[], siegeId: string | null, turn: number): Promise<GuardianDecision> {
+  const turnId = enqueueTurn({ castleId, kind: "siege", siegeId, turn, messages: harnessMessages(siegeMessages) });
+  let reply;
+  try {
+    reply = await awaitAnswer(turnId, {
+      ...sdkTiming,
+      stop: () => {
+        const s = castleRow(castleId)?.vaultState;
+        return s === "dormant" || s === "closed" || s === "broken" ? new TransportUnavailableError("sdk", castleId, `harness ${s}`) : null;
+      },
+    });
+  } catch (e) {
+    if (e instanceof TransportUnavailableError) throw e;
+    if (e instanceof GuardTimeoutError) throw new Error(`transport(sdk): harness for ${castleId} did not answer in time`);
+    throw e;
+  }
+  const hit = resolveRequestId(castleId, siegeId, turn);
+  const names = new Set<string>();
+  const toolCalls: ToolCall[] = [];
+  for (const c of reply.toolCalls.slice(0, 16)) {
+    if (!c || typeof c.name !== "string") continue;
+    names.add(c.name);
+    toolCalls.push({ name: c.name, args: c.args && typeof c.args === "object" ? c.args : {} });
+  }
+  // The proxy saw the protected tool even if the harness did not report it: the vault opens, and the
+  // stored call lets the verifier find it.
+  if (hit?.protectedToolCalled && !names.has(protectedTool)) toolCalls.push({ name: protectedTool, args: {} });
+  const open = toolCalls.some((c) => c.name === protectedTool);
+  return {
+    reply: reply.reply,
+    move: open ? "open" : "hold",
+    toolCalls,
+    requestId: hit?.requestId ?? `sdk-norecord-${turnId}`,
+    raw: { transport: "sdk", turnId, proxied: !!hit },
+  };
+}

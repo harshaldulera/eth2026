@@ -10,7 +10,7 @@ import { api, describeError, type AgentDetail } from "@/lib/api/client";
 import { useNow, usePolling } from "@/lib/hooks/usePolling";
 import { toUnits } from "@/lib/money/format";
 import { vaultStateOf } from "@/lib/money/vault";
-import { BUTTONS, EMPTY, statusLabel, tierLabel } from "@/lib/vocab";
+import { BUTTONS, EMPTY, UNITS, statusLabel, tierLabel } from "@/lib/vocab";
 import { Amount } from "@/components/money/amount";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { WaitingForOwner } from "@/components/money/waiting-for-owner";
@@ -24,11 +24,14 @@ import { ErrorState, Loading } from "@/components/ui/state";
 import { cn } from "@/lib/utils";
 import { AgentStatusPill, liveStatus, unitGauges } from "./agent-bits";
 import { MissionLog } from "./mission-log";
+import { UnitFunds } from "./unit-funds";
 import { useOwnerGate } from "./owner-gate";
 
 export type AgentPanelProps = {
   agentId: string;
   castles: Castle[];
+  /** Every vault (any state), for names in the log and op list: a vault that just broke leaves `castles`. */
+  vaultNames?: Castle[];
   underSiege?: Set<string>;
   /** Targeting controls above the select (the board's Arkiv filters and source bar). */
   targeting?: React.ReactNode;
@@ -109,7 +112,7 @@ function ResolutionLine({ r, running }: { r: Resolution; running: boolean }) {
             <HashscanLink tx={a.topUp} label={`+${ask.num} ${ask.unit} top-up`} />
           ) : (
             <span className="text-money">
-              +{ask.num} {ask.unit} top-up
+              +{ask.num} {ask.unit} {a.reason === "budget" ? "top-up" : UNITS.capRaised}
             </span>
           )}
           <span aria-hidden className="text-ink-dim">·</span>
@@ -172,12 +175,15 @@ const field =
 export function MissionPanel({
   detail,
   castles,
+  vaultNames,
   underSiege,
   targeting,
   onRadio,
   refresh,
 }: Omit<AgentPanelProps, "agentId"> & { detail: AgentDetail; refresh: () => void }) {
   const { agent: a, approvals, events, sieges } = detail;
+  // Only this unit's operator (its rk_ key) or the arena owner may drive it; the server says which.
+  const canDrive = Boolean(detail.access);
   const status = liveStatus(a, approvals);
   const pending = approvals.find((x) => x.status === "pending");
   // Only guarding vaults take ops.
@@ -187,13 +193,15 @@ export function MissionPanel({
   const [maxSieges, setMaxSieges] = useState("5");
   const [busy, setBusy] = useState<"run" | "stop" | null>(null);
   const castleId = (openCastles.some((c) => c.id === target) ? target : "") || openCastles[0]?.id || "";
-  const names = useMemo(() => new Map(castles.map((c) => [c.id, c.name])), [castles]);
+  const names = useMemo(() => new Map([...castles, ...(vaultNames ?? [])].map((c) => [c.id, c.name])), [castles, vaultNames]);
   const vaultName = (id: string | undefined) => (id ? names.get(id) : undefined) ?? "a vault";
   const resolution = useComms(approvals, onRadio);
   const g = unitGauges(a, sieges, approvals, castleId);
-  const left = toUnits(a.budget) - toUnits(a.spent);
+  // Clamped: a withdrawn stub unit's budget sits below spent (its payouts were withdrawn too).
+  const rawLeft = toUnits(a.budget) - toUnits(a.spent);
+  const left = rawLeft > BigInt(0) ? rawLeft : BigInt(0);
   const active = status === "running" || status === "waiting";
-  const owner = useOwnerGate();
+  const owner = useOwnerGate(UNITS.ownerGateReason);
   // A cap hit radios in: bring COMMS (amount asked + the live wait clock) on screen, it is the beat.
   const commsRef = useRef<HTMLDivElement>(null);
   const pendingId = pending?.id;
@@ -253,6 +261,8 @@ export function MissionPanel({
           </div>
         </div>
 
+        <UnitFunds detail={detail} idle={!active} refresh={refresh} />
+
         <div className="min-w-0 space-y-2 border-2 border-dashed border-line p-3 [&_[role=group]>div]:flex-wrap">
           <p className="font-ui text-[11px] tracking-[0.12em] text-ink-dim uppercase">Targeting</p>
           {targeting}
@@ -275,7 +285,11 @@ export function MissionPanel({
             <span className="mb-1 block font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Ops</span>
             <input value={maxSieges} onChange={(e) => setMaxSieges(e.target.value)} inputMode="numeric" disabled={active} className={cn(field, "tabular")} />
           </label>
-          {active ? (
+          {!canDrive ? (
+            <PixelButton variant="outline" size="lg" className="sm:min-w-36" disabled data-testid="not-your-unit">
+              {UNITS.notYourUnit}
+            </PixelButton>
+          ) : active ? (
             <PixelButton variant="threatOutline" size="lg" className="sm:min-w-36" onClick={() => void stop()} disabled={busy !== null}>
               {busy === "stop" ? <Loader2 className="animate-spin" /> : null}
               {BUTTONS.stop}
@@ -287,7 +301,23 @@ export function MissionPanel({
             </PixelButton>
           )}
         </div>
-        {openCastles.length === 0 ? (
+        {!canDrive ? (
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-dim">
+            <span className="min-w-0 flex-1">{UNITS.notYourUnitBody}</span>
+            <a
+              href="#new-unit"
+              className="font-ui text-xs tracking-[0.1em] text-accent uppercase underline-offset-4 hover:underline"
+              onClick={(e) => {
+                const el = document.getElementById("new-unit");
+                if (!el) return;
+                e.preventDefault();
+                el.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+            >
+              {UNITS.newUnitLink}
+            </a>
+          </p>
+        ) : openCastles.length === 0 ? (
           <p className="text-sm text-ink-dim">
             <span className="font-ui text-xs text-warn uppercase">{EMPTY.noVaultTaking.title}</span> · {EMPTY.noVaultTaking.body}
           </p>

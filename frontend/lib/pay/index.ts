@@ -10,9 +10,9 @@ import { checkCaps } from "./caps";
 export const pay: PayPort = { gate, claimFree, checkCaps };
 
 export { gate } from "./gate";
-export { claimFree, markFreeSiege, freeLeftToday } from "./free";
+export { claimFree, claimRecon, markFreeSiege, freeLeftToday, type ReconScope } from "./free";
 export { checkCaps, settleSpend, voidSpend, holdSpend, recordOutcome, spendSummary } from "./caps";
-export { requestApproval, decideApproval, listApprovals, getApproval, approvalsForAgent, cancelPendingApprovals } from "./approvals";
+export { requestApproval, decideApproval, listApprovals, getApproval, approvalsForAgent, cancelPendingApprovals, fundTopUpFromDeposit, type ApprovalScope } from "./approvals";
 export {
   persistReceipt,
   attachReceipt,

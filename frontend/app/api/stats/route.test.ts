@@ -53,14 +53,14 @@ describe("GET /api/stats", () => {
 
   it("a paid breach counts; a recon break does not; boards, exhibits and operators follow", async () => {
     // recon break first (free never pays out, never counts)
-    const recon = await runOp("castle_splinter_gate", WOODEN_BREAK, { free: true, raider: "0.0.stub-recon" });
+    const recon = await runOp("castle_splinter_gate", WOODEN_BREAK, { free: true, raider: "recon-stubrecon" });
     settle(recon);
     let s = await stats();
     expect(s.season.breaches).toBe(0);
     expect(s.breaches).toEqual([]);
     expect(s.season.recon).toBe(1);
     expect(s.boards.unbreached.map((v) => v.castleId)).toContain("castle_splinter_gate");
-    const reconOp = s.boards.operators.find((o) => o.account === "0.0.stub-recon")!;
+    const reconOp = s.boards.operators.find((o) => o.account === "recon-stubrecon")!;
     expect(reconOp).toMatchObject({ ops: 1, recon: 1, breaches: 0 });
     expect(recon).toBeTruthy();
 
