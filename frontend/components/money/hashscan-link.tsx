@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
 import type { TxRef } from "@/lib/types";
 import { accountUrl, contractUrl, isStubRef, topicUrl, txUrl } from "@/lib/chain/hashscan";
 import { shortAccount, shortTx } from "@/lib/money/format";
@@ -21,8 +20,8 @@ export type HashscanLinkProps = {
 const STUB_TIP = "stub mode — switch CHAIN_MODE=testnet for real HashScan links";
 
 /**
- * Link to HashScan (testnet). Stub references render as a muted dashed chip so nobody mistakes a
- * stub tx for a real one.
+ * Link to HashScan (testnet), as a mono id with a pixel `↗`. Stub references render as a dashed
+ * amber chip with a `STUB` tag so nobody mistakes a stub tx for a real one.
  *
  * @example <HashscanLink tx={siege.attempt} label="AttemptRecorded" />
  * @example <HashscanLink accountId="0.0.4512" />
@@ -62,17 +61,17 @@ export function HashscanLink({ txId, tx, accountId, topicId, contract, label, cl
         title={STUB_TIP}
         aria-label={`${kind === "tx" ? "stub tx" : `stub ${kind}`} ${id}. ${STUB_TIP}`}
         className={cn(
-          "group/stub relative inline-flex max-w-full items-center gap-1.5 rounded-md border border-dashed border-stone/45 px-1.5 py-0.5 font-mono text-[11px] leading-4 text-stone",
+          "group/stub relative inline-flex max-w-full items-center gap-1.5 border border-dashed border-money/50 bg-money/[0.06] py-0.5 pr-1.5 pl-0.5 align-middle font-mono text-[11px] leading-4 text-ink-dim",
           className,
         )}
       >
-        <span className="rounded-sm bg-stone/15 px-1 text-[9px] font-semibold tracking-wider uppercase">
+        <span className="bg-money/80 px-1 font-ui text-[9px] leading-[14px] tracking-[0.12em] text-bg uppercase">
           stub {kind === "tx" ? "tx" : kind}
         </span>
         <span className="truncate">{label ?? short}</span>
         <span
           role="tooltip"
-          className="pointer-events-none absolute bottom-full left-0 z-30 mb-1.5 hidden w-60 rounded-lg border border-arena-line bg-arena-raised px-2.5 py-1.5 font-sans text-[11px] leading-snug text-parchment shadow-xl group-hover/stub:block group-focus/stub:block"
+          className="pointer-events-none absolute bottom-full left-0 z-30 mb-1.5 hidden w-60 bg-raised px-2.5 py-1.5 font-sans text-[11px] leading-snug text-ink px-frame group-hover/stub:block group-focus/stub:block"
         >
           {STUB_TIP}
         </span>
@@ -87,12 +86,14 @@ export function HashscanLink({ txId, tx, accountId, topicId, contract, label, cl
       rel="noreferrer noopener"
       title={`Open ${id} on HashScan`}
       className={cn(
-        "inline-flex max-w-full items-center gap-1 font-mono text-[12px] text-parchment/85 underline decoration-arena-line underline-offset-4 transition-colors hover:text-gold hover:decoration-gold/60",
+        "inline-flex max-w-full items-center gap-1 align-middle font-mono text-[12px] text-ink underline decoration-line decoration-2 underline-offset-4 transition-colors hover:text-money hover:decoration-money/70 focus-visible:text-money",
         className,
       )}
     >
       <span className="truncate">{label ?? short}</span>
-      <ExternalLink className="size-3 shrink-0 opacity-70" aria-hidden />
+      <span aria-hidden className="shrink-0 font-ui text-[11px] text-money">
+        ↗
+      </span>
     </a>
   );
 }

@@ -1,101 +1,137 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Bot } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
 import { api } from "@/lib/api/client";
 import { ArkivBar } from "@/components/arena/arkiv-bar";
 import { BoardFilters, type BoardQuery } from "@/components/arena/board-filters";
 import { usePolling } from "@/lib/hooks/usePolling";
 import { useConfig } from "@/lib/hooks/useConfig";
-import { Amount } from "@/components/money/amount";
-import { AgentPanel } from "@/components/raider/agent-panel";
-import { AgentStatusPill, liveStatus } from "@/components/raider/agent-bits";
+import { EMPTY } from "@/lib/vocab";
+import { MissionPanel } from "@/components/raider/agent-panel";
 import { CreateAgentForm } from "@/components/raider/create-agent-form";
 import { PhoneApprovalsCard } from "@/components/raider/phone-card";
-import { EmptyState, ErrorState, Skeleton } from "@/components/ui/state";
-import { cn } from "@/lib/utils";
+import { UnitCard } from "@/components/raider/unit-card";
+import { PixelPanel } from "@/components/pixel/panel";
+import { Sprite } from "@/components/pixel/sprite";
+import { ErrorState, Loading, Skeleton } from "@/components/ui/state";
 
+/**
+ * Operator console: units on the left rail, the selected unit's mission in the centre, NEW UNIT and
+ * the owner pager link on the right. Phone: one column, units first.
+ */
 export default function RaiderPage() {
   const { config } = useConfig();
   const agents = usePolling(() => api.agents(), 2000);
   const [q, setQ] = useState<BoardQuery>({});
-  // The owner picks the target from the same Arkiv query the board runs (guarding castles only).
+  // The owner picks the target from the same Arkiv query the board runs (guarding vaults only).
   const castles = usePolling(() => api.castles({ tier: q.tier, sort: q.sort, minPot: q.minPot, vaultState: "guarding" }), 10000, { key: JSON.stringify(q) });
   const live = usePolling(() => api.liveSieges(), 5000);
   const underSiege = useMemo(() => new Set((live.data?.sieges ?? []).map((s) => s.castleId)), [live.data]);
   const approvals = usePolling(() => api.approvals("pending"), 2000);
   const [selected, setSelected] = useState<string | null>(null);
+  const [radio, setRadio] = useState(0);
+  const onRadio = useCallback(() => setRadio((n) => n + 1), []);
 
   const list = agents.data?.agents ?? [];
   const pending = approvals.data?.approvals ?? [];
   const current = list.find((a) => a.id === selected) ?? list[0];
+  const detail = usePolling(() => api.agent(current?.id ?? ""), 1500, { key: current?.id ?? "", enabled: Boolean(current) });
+
+  const targeting = (
+    <>
+      <p className="text-xs text-ink-dim">Vaults come from Arkiv: the same query any operator can run.</p>
+      <BoardFilters value={q} onChange={(next) => setQ({ ...next, all: false })} />
+      <ArkivBar meta={castles.data?.arkiv} />
+    </>
+  );
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
-      <header className="mb-6 max-w-2xl">
-        <h1 className="text-3xl font-semibold tracking-tight">Raider agents</h1>
-        <p className="mt-2 text-stone">
-          Autonomous attackers with their own Hedera account and hard caps. When one hits a cap it stops and asks you — and only you can let it keep spending.
-        </p>
+    <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 sm:py-8">
+      <header className="mb-6 flex items-end gap-4">
+        <span className="hidden shrink-0 bg-panel p-1.5 px-frame sm:block">
+          <Sprite name="operator.idle" animate scale={3} />
+        </span>
+        <div className="max-w-2xl">
+          <p className="font-ui text-[11px] tracking-[0.2em] text-accent uppercase">Agents</p>
+          <h1 className="text-2xl tracking-tight sm:text-3xl">Operator console</h1>
+          <p className="mt-1.5 text-sm text-ink-dim sm:text-base">
+            Units run ops on their own Hedera account with hard caps. A cap hit radios the owner — only the owner can let a unit keep spending.
+          </p>
+        </div>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-        <section className="min-w-0 space-y-4" aria-label="Agents">
+      <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[290px_minmax(0,1fr)_340px]">
+        <section aria-label="Units" className="min-w-0">
+          <h2 className="mb-2 flex items-center justify-between font-ui text-[11px] tracking-[0.16em] text-ink-dim uppercase">
+            <span>Units</span>
+            {list.length ? <span className="tabular">{String(list.length).padStart(2, "0")}</span> : null}
+          </h2>
           {agents.error && !agents.data ? (
-            <ErrorState error={agents.error} onRetry={() => void agents.refresh()} title="Couldn't load agents" />
+            <ErrorState error={agents.error} onRetry={() => void agents.refresh()} title="Couldn't load units" />
           ) : !agents.data ? (
-            <Skeleton className="h-24" />
+            <Skeleton className="h-56" />
           ) : list.length === 0 ? (
-            <EmptyState icon={<Bot />} title="No raider agents yet" hint="Create one with the form — it gets its own funded account and caps." />
+            <PixelPanel tone="inset" className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+              <Sprite name="operator.idle" scale={3} />
+              <p className="font-ui text-sm text-ink uppercase">{EMPTY.noUnits.title}</p>
+              <p className="text-sm text-ink-dim">{EMPTY.noUnits.body}</p>
+            </PixelPanel>
           ) : (
-            <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Your agents">
-              {list.map((a) => {
-                const active = current?.id === a.id;
-                return (
-                  <button
-                    key={a.id}
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => setSelected(a.id)}
-                    className={cn(
-                      "flex min-w-[200px] flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-colors",
-                      active ? "border-ember/50 bg-ember/[0.05]" : "border-arena-line bg-arena-panel/70 hover:border-stone/40",
-                    )}
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="truncate font-medium text-parchment">{a.name}</span>
-                      <AgentStatusPill status={liveStatus(a, pending)} />
-                    </span>
-                    <span className="text-xs text-stone">
-                      <Amount amount={a.spent} size="xs" /> spent of <Amount amount={a.budget} size="xs" tone="text-parchment/80" />
-                    </span>
-                  </button>
-                );
-              })}
+            <div
+              className="-mx-4 flex snap-x scroll-px-4 gap-3 overflow-x-auto px-4 pt-1.5 pb-2 lg:mx-0 lg:flex-col lg:gap-4 lg:overflow-visible lg:px-1.5"
+              role="tablist"
+              aria-label="Your units"
+              aria-orientation="vertical"
+            >
+              {list.map((a) => (
+                <UnitCard
+                  key={a.id}
+                  agent={a}
+                  pending={pending}
+                  detail={current?.id === a.id ? detail.data : undefined}
+                  selected={current?.id === a.id}
+                  onSelect={() => setSelected(a.id)}
+                  className="w-[272px] shrink-0 snap-start lg:w-full"
+                />
+              ))}
             </div>
           )}
+        </section>
 
+        <section aria-label="Mission" className="min-w-0">
           {current ? (
-            <>
-              <div className="rounded-xl border border-arena-line bg-arena-panel/60 px-3 py-2.5">
-                <p className="mb-2 text-xs text-stone">Pick a target. These castles come from Arkiv: the same query any raider can run.</p>
-                <BoardFilters value={q} onChange={(next) => setQ({ ...next, all: false })} />
-                <ArkivBar meta={castles.data?.arkiv} className="mt-2" />
-              </div>
-              <AgentPanel key={current.id} agentId={current.id} castles={castles.data?.castles ?? []} underSiege={underSiege} />
-            </>
+            detail.error && !detail.data ? (
+              <ErrorState error={detail.error} onRetry={() => void detail.refresh()} title="Couldn't load this unit" />
+            ) : detail.data ? (
+              <MissionPanel
+                key={current.id}
+                detail={detail.data}
+                castles={castles.data?.castles ?? []}
+                underSiege={underSiege}
+                targeting={targeting}
+                onRadio={onRadio}
+                refresh={() => void detail.refresh()}
+              />
+            ) : (
+              <Loading label="Opening mission…" />
+            )
+          ) : agents.data ? (
+            <PixelPanel tone="inset" className="p-6 text-sm text-ink-dim">
+              Create a unit to plan a mission. It gets its own funded account and caps.
+            </PixelPanel>
           ) : null}
         </section>
 
-        <aside className="space-y-6">
+        <aside className="min-w-0 space-y-6 lg:col-span-2 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0 xl:col-span-1 xl:block xl:space-y-6">
           <CreateAgentForm
+            taken={list.map((x) => x.name)}
             onCreated={(a) => {
               setSelected(a.id);
               agents.mutate((d) => (d ? { agents: [a, ...d.agents.filter((x) => x.id !== a.id)] } : { agents: [a] }));
               void agents.refresh();
             }}
           />
-          <PhoneApprovalsCard ownerKeyHint={config?.ownerKeyHint} pending={pending.length} />
+          <PhoneApprovalsCard ownerKeyHint={config?.ownerKeyHint} pending={pending.length} pulse={radio} />
         </aside>
       </div>
     </div>

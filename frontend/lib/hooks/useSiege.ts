@@ -54,6 +54,20 @@ export function inFlight(events: StoredSiegeEvent[], siege: Siege | undefined): 
 }
 
 /**
+ * True once a final siege's feed holds everything it will ever get: the end, and the chain event
+ * the record already carries (fee split or payout). Nothing more arrives for it, so the room can
+ * close its stream (the tape is frozen). A refund lands with no event and is polled separately.
+ */
+export function feedComplete(siege: Siege | undefined, events: readonly StoredSiegeEvent[]): boolean {
+  if (!siege || !ENDED.has(siege.status) || isAwaitingChain(siege)) return false;
+  const has = (t: StoredSiegeEvent["type"]) => events.some((e) => e.type === t);
+  if (!has("end")) return false;
+  if (siege.attempt && !has("attempt")) return false;
+  if (siege.release && !has("release")) return false;
+  return true;
+}
+
+/**
  * One siege, live: the record from GET /api/siege/[id], refetched whenever an event says it changed,
  * plus the event stream. Falls back to slow polling for changes that emit no event (a settlement
  * that failed or was voided). Pass `demo` to replay a recorded siege with no network at all.
@@ -91,7 +105,11 @@ function useLiveSiege(siegeId: string, enabled: boolean): SiegeView {
   }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  const feed = useLiveEvents({ siegeId, enabled, onEvent });
+  // Close the stream once the op is final and its feed complete (latched per siege, so the events
+  // already held stay on screen: useLiveEvents keeps them while disabled).
+  const [doneFor, setDoneFor] = useState<string | null>(null);
+  const feed = useLiveEvents({ siegeId, enabled: enabled && doneFor !== siegeId, onEvent });
+  if (enabled && doneFor !== siegeId && feed.ready && feedComplete(siege, feed.events)) setDoneFor(siegeId);
   const decisionInFlight = useMemo(() => inFlight(feed.events, siege), [feed.events, siege]);
   const setSiege = useCallback((s: Siege) => detail.mutate((d) => (d ? { ...d, siege: s } : d)), [detail]);
 

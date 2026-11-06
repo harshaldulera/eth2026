@@ -2,8 +2,11 @@
 
 import { useSyncExternalStore } from "react";
 import Link from "next/link";
-import { KeyRound, Smartphone, TriangleAlert } from "lucide-react";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { motion } from "motion/react";
+import { useCalmMotion } from "@/lib/hooks/usePrefs";
+import { PixelPanel } from "@/components/pixel/panel";
+import { Sprite } from "@/components/pixel/sprite";
+import { cn } from "@/lib/utils";
 import { QrCode } from "./qr-code";
 
 const BASE_KEY = "siege.phoneBase";
@@ -37,58 +40,62 @@ function writeBase(v: string) {
 const noopSubscribe = () => () => {};
 
 /**
- * "Approve from your phone": QR to /raider/approvals. The base URL defaults to this page's origin
- * and can be overridden (a phone cannot open "localhost" — use the laptop's LAN address).
+ * The owner's pager link: QR to /raider/approvals. The base URL defaults to this page's origin and
+ * can be overridden (a phone cannot open "localhost" — use the laptop's LAN address). `pulse`
+ * (any changing value, e.g. a counter bumped on each cap hit) flashes the QR frame once.
  *
- * @example <PhoneApprovalsCard ownerKeyHint={config.ownerKeyHint} pending={2} />
+ * @example <PhoneApprovalsCard ownerKeyHint={config.ownerKeyHint} pending={2} pulse={radioCount} />
  */
-export function PhoneApprovalsCard({ ownerKeyHint, pending = 0 }: { ownerKeyHint?: boolean; pending?: number }) {
+export function PhoneApprovalsCard({ ownerKeyHint, pending = 0, pulse }: { ownerKeyHint?: boolean; pending?: number; pulse?: number }) {
   const origin = useSyncExternalStore(noopSubscribe, () => window.location.origin, () => "");
   const override = useSyncExternalStore(subscribe, readBase, () => "");
+  const calm = useCalmMotion();
   const base = (override || origin).replace(/\/+$/, "");
   const url = `${base}/raider/approvals`;
   const local = /\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(base);
 
   return (
-    <Card>
-      <CardHeader
-        title="Approve from your phone"
-        icon={<Smartphone />}
-        action={pending ? <span className="tabular rounded-full bg-gold px-2 py-0.5 text-[11px] font-semibold text-arena-bg">{pending} waiting</span> : null}
-      />
-      <CardBody className="flex flex-col items-center gap-4">
-        {base ? <QrCode value={url} size={184} /> : <div className="size-[184px] rounded-xl bg-arena-line/40" aria-hidden />}
-        <p className="text-center text-sm text-stone">
-          Scan to open the owner screen. When an agent hits a cap it pauses here until you approve or deny.
+    <PixelPanel
+      title="Owner pager"
+      icon={<Sprite name="pager" scale={1} animate={pending > 0} />}
+      tone={pending ? "warn" : "default"}
+      action={pending ? <span className="animate-blink bg-warn px-1.5 py-0.5 font-ui text-[10px] text-bg">{pending} WAITING</span> : null}
+      bodyClassName="flex flex-col items-center gap-4 p-4"
+    >
+      <motion.div
+        key={pulse ?? 0}
+        initial={pulse && !calm ? { scale: 1.06 } : false}
+        animate={{ scale: 1 }}
+        transition={{ type: "spring", stiffness: 500, damping: 14 }}
+        className={cn("p-2 bg-raised px-frame", pending ? "[--frame:var(--color-warn)]" : "")}
+      >
+        {base ? <QrCode value={url} size={176} /> : <div className="size-[176px] shimmer" aria-hidden />}
+      </motion.div>
+      <p className="text-center text-sm text-ink-dim">Scan with the owner&apos;s phone. A cap hit lands there; the unit waits until you DENY or APPROVE.</p>
+      <Link href="/raider/approvals" className="max-w-full truncate font-mono text-xs text-ink underline decoration-line decoration-2 underline-offset-4 hover:text-accent">
+        {url || "/raider/approvals"}
+      </Link>
+      {local ? (
+        <div className="w-full border-2 border-dashed border-warn/60 p-2.5 text-xs text-ink">
+          <p className="font-ui text-[11px] tracking-[0.1em] text-warn uppercase">⚠ Phones can&apos;t open localhost</p>
+          <p className="mt-1 text-ink-dim">Enter this laptop&apos;s LAN address (the dev server listens on 0.0.0.0):</p>
+        </div>
+      ) : null}
+      <label className="w-full">
+        <span className="mb-1 block font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Phone URL base</span>
+        <input
+          value={override}
+          onChange={(e) => writeBase(e.target.value.trim())}
+          placeholder={origin || "http://192.168.1.20:3000"}
+          inputMode="url"
+          className="min-h-10 w-full border-2 border-line bg-bg px-2.5 font-mono text-xs text-ink placeholder:text-ink-dim/70 focus:border-accent focus:outline-none"
+        />
+      </label>
+      {ownerKeyHint ? (
+        <p className="w-full text-xs text-ink-dim">
+          Dev owner key <code className="font-mono text-ink">siege-demo-owner</code> (prefilled on the phone)
         </p>
-        <Link href="/raider/approvals" className="max-w-full truncate font-mono text-xs text-parchment/80 underline decoration-arena-line underline-offset-4 hover:text-gold">
-          {url || "/raider/approvals"}
-        </Link>
-        {local ? (
-          <div className="w-full rounded-lg border border-gold/30 bg-gold/[0.05] p-2.5 text-xs text-parchment/85">
-            <p className="flex items-center gap-1.5 font-medium text-gold">
-              <TriangleAlert className="size-3.5" /> Phones can&apos;t open localhost
-            </p>
-            <p className="mt-1 text-stone">Enter this laptop&apos;s LAN address (dev server listens on 0.0.0.0):</p>
-          </div>
-        ) : null}
-        <label className="w-full text-xs text-stone">
-          Phone URL base
-          <input
-            value={override}
-            onChange={(e) => writeBase(e.target.value.trim())}
-            placeholder={origin || "http://192.168.1.20:3000"}
-            inputMode="url"
-            className="mt-1 h-9 w-full rounded-lg border border-arena-line bg-arena-bg/60 px-2.5 font-mono text-xs text-parchment placeholder:text-stone/60 focus:border-gold/50 focus:outline-none"
-          />
-        </label>
-        {ownerKeyHint ? (
-          <p className="flex w-full items-center gap-1.5 text-xs text-stone">
-            <KeyRound className="size-3.5 shrink-0 text-gold" aria-hidden />
-            Dev owner key: <code className="font-mono text-parchment">siege-demo-owner</code> (prefilled on the phone)
-          </p>
-        ) : null}
-      </CardBody>
-    </Card>
+      ) : null}
+    </PixelPanel>
   );
 }

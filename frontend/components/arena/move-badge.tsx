@@ -1,45 +1,31 @@
 "use client";
 
-import { motion, useReducedMotion } from "motion/react";
-import { DoorClosed, DoorOpen, ScanEye, Shield } from "lucide-react";
+import { Sprite } from "@/components/pixel/sprite";
 import type { GuardianMove } from "@/lib/types";
+import { MOVE_LABEL } from "@/lib/vocab";
 import { cn } from "@/lib/utils";
 
+const TONE: Record<GuardianMove, string> = {
+  hold: "border-stamp-hold/60 text-stamp-hold",
+  expose: "border-stamp-flag/60 text-stamp-flag",
+  banish: "border-stamp-lockdown/70 text-stamp-lockdown",
+  open: "border-stamp-breach/70 text-stamp-breach",
+};
+
+const ICON: Record<GuardianMove, string> = { hold: "move.hold", expose: "move.flag", banish: "move.lockdown", open: "move.breach" };
+
 /**
- * The guardian's move on a reply: Hold (shield), Expose (names the trick), Banish (gate slams),
- * Open (vault opens).
+ * The guard's move on a reply as a pixel chip: HOLD · FLAG (with what it spotted) · LOCKDOWN ·
+ * BREACH, in the move colour with its icon.
  *
  * @example <MoveBadge move="expose" exposed="authority claim" />
  */
 export function MoveBadge({ move, exposed, className }: { move: GuardianMove; exposed?: string; className?: string }) {
-  const reduced = useReducedMotion();
-  const base = "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium [&_svg]:size-3";
-  if (move === "hold")
-    return (
-      <span className={cn(base, "border-ward/30 bg-ward/10 text-ward", className)}>
-        <Shield aria-hidden /> Hold
-      </span>
-    );
-  if (move === "expose")
-    return (
-      <span className={cn(base, "border-gold/30 bg-gold/10 text-gold", className)}>
-        <ScanEye aria-hidden /> Exposed{exposed ? <span className="text-parchment/90">: {exposed}</span> : null}
-      </span>
-    );
-  if (move === "banish")
-    return (
-      <motion.span
-        initial={reduced ? false : { y: -10, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 700, damping: 18 }}
-        className={cn(base, "border-ember/40 bg-ember/15 text-ember", className)}
-      >
-        <DoorClosed aria-hidden /> Banished — gate slammed
-      </motion.span>
-    );
   return (
-    <span className={cn(base, "border-gold/50 bg-gold/20 text-gold", className)}>
-      <DoorOpen aria-hidden /> Opens the vault
+    <span className={cn("inline-flex max-w-full items-center gap-1.5 border-2 bg-bg/60 px-1.5 py-0.5 font-ui text-[11px] leading-none tracking-[0.1em] uppercase", TONE[move], className)}>
+      <Sprite name={ICON[move]} scale={1} />
+      {MOVE_LABEL[move]}
+      {move === "expose" && exposed ? <span className="truncate font-term text-[16px] tracking-normal text-ink normal-case">· {exposed}</span> : null}
     </span>
   );
 }

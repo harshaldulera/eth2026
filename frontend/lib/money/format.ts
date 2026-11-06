@@ -8,8 +8,10 @@ import type { Amount, Asset } from "@/lib/types";
 export const HBAR: Asset = { id: "0.0.0", decimals: 8, symbol: "HBAR" };
 
 export type FormatOpts = {
-  /** Max fraction digits shown (default 4; trailing zeros always trimmed). */
+  /** Max fraction digits shown (default 4; trailing zeros trimmed down to `minDecimals`). */
   maxDecimals?: number;
+  /** Keep at least this many fraction digits (default 0): `{minDecimals: 2, maxDecimals: 2}` → "25.00". */
+  minDecimals?: number;
   /** Append the symbol (default true). */
   symbol?: boolean;
   /** Prefix "+" for positive amounts (for deltas like "+0.15 ℏ"). */
@@ -44,7 +46,7 @@ export function toNumber(amount: Amount | bigint | number, asset: Asset = HBAR):
  * USDC (6 decimals): 1_500_000 -> "1.5 USDC". Rounds half-up to `maxDecimals`.
  */
 export function formatAmount(amount: Amount | bigint | number, asset: Asset = HBAR, opts: FormatOpts = {}): string {
-  const { maxDecimals = 4, symbol = true, sign = false } = opts;
+  const { maxDecimals = 4, minDecimals = 0, symbol = true, sign = false } = opts;
   const units = toUnits(amount);
   const neg = units < BigInt(0);
   let abs = neg ? -units : units;
@@ -55,7 +57,10 @@ export function formatAmount(amount: Amount | bigint | number, asset: Asset = HB
   if (drop > BigInt(1)) abs = ((abs + drop / BigInt(2)) / drop) * drop;
   const base = BigInt(10) ** BigInt(decimals);
   const whole = abs / base;
-  const frac = decimals > 0 ? (abs % base).toString().padStart(decimals, "0").slice(0, shown).replace(/0+$/, "") : "";
+  const keep = Math.min(Math.max(0, minDecimals), shown);
+  const fracRaw = decimals > 0 ? (abs % base).toString().padStart(decimals, "0").slice(0, shown) : "";
+  const trimmed = fracRaw.replace(/0+$/, "");
+  const frac = trimmed.length >= keep ? trimmed : fracRaw.slice(0, keep);
   const wholeStr = whole.toLocaleString("en-US");
   const num = `${neg ? "-" : sign && units > BigInt(0) ? "+" : ""}${wholeStr}${frac ? `.${frac}` : ""}`;
   return symbol ? `${num} ${assetSymbol(asset)}` : num;

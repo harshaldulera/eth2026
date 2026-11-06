@@ -3,7 +3,7 @@ process.env.SIEGE_FAST = "1";
 import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { emit } from "@/lib/events/bus";
 import { GET } from "@/app/api/events/stream/route";
-import { inFlight, isAwaitingChain } from "@/lib/hooks/useSiege";
+import { feedComplete, inFlight, isAwaitingChain } from "@/lib/hooks/useSiege";
 import type { Siege, StoredSiegeEvent } from "@/lib/types";
 import demo from "@/lib/fixtures/demo-siege.json";
 
@@ -117,6 +117,17 @@ describe("useSiege helpers", () => {
     expect(isAwaitingChain({ ...siege(), status: "held", free: true })).toBe(false);
     expect(isAwaitingChain({ ...siege(), status: "held", settlement: { state: "void" } })).toBe(false);
     expect(isAwaitingChain(siege())).toBe(false);
+  });
+
+  it("a final siege's feed is complete once its end and chain events are in", () => {
+    const tx = { txId: "x", hashscanUrl: "", amount: "1" };
+    const broken = { ...siege(), status: "broken" as const, release: tx };
+    expect(feedComplete(siege(), [e("end", 1)])).toBe(false); // still running
+    expect(feedComplete({ ...siege(), status: "broken" }, [e("end", 1)])).toBe(false); // payout on its way
+    expect(feedComplete(broken, [e("decision", 1), e("end", 1, 2)])).toBe(false); // release event not in yet
+    expect(feedComplete(broken, [e("decision", 1), e("end", 1, 2), e("release", 1, 3)])).toBe(true);
+    expect(feedComplete({ ...siege(), status: "held", free: true }, [e("end", 5)])).toBe(true);
+    expect(feedComplete({ ...siege(), status: "held", free: true }, [])).toBe(false);
   });
 
   it("the recorded demo is a paid wooden break that pays out", () => {

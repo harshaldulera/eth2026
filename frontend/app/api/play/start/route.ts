@@ -11,7 +11,19 @@ import { err, errorMessage, internalFetch, json, readBody } from "../../_lib/htt
  * browser never holds a key. Stub mode pays as "0.0.stub-raider".
  */
 
-const Body = z.object({ castleId: z.string().min(1).max(120), free: z.boolean().optional() });
+const Body = z.object({
+  castleId: z.string().min(1).max(120),
+  free: z.boolean().optional(),
+  /**
+   * Additive (Part 2): a per-browser id for free recon. The once-a-day free claim is keyed by it
+   * (as `recon-<visitor>`) instead of the single arena wallet, so one visitor's recon doesn't use up
+   * everyone's. Ignored for paid ops.
+   */
+  visitor: z
+    .string()
+    .regex(/^[a-z0-9]{6,32}$/)
+    .optional(),
+});
 
 const STUB_DEMO_RAIDER = "0.0.stub-raider";
 
@@ -25,7 +37,7 @@ function demoRaider(): { accountId: string; privateKey?: string } | null {
 export async function POST(req: Request) {
   const body = await readBody(req, Body);
   if (!body.ok) return body.res;
-  const { castleId, free } = body.data;
+  const { castleId, free, visitor } = body.data;
 
   const castle = getCastle(castleId);
   if (!castle) return err(404, "castle_not_found");
@@ -41,7 +53,7 @@ export async function POST(req: Request) {
     res = await payerFetch(new URL("/api/siege/start", req.url), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify(free ? { castleId, free: true, wallet: raider.accountId } : { castleId }),
+      body: JSON.stringify(free ? { castleId, free: true, wallet: visitor ? `recon-${visitor}` : raider.accountId } : { castleId }),
     });
   } catch (e) {
     // Stub: SpendControlError. Testnet: the x402 client's "…rejected by spendControls.allowedAssets maxAmountPerPayment…".

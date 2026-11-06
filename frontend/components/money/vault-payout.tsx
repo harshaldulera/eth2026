@@ -1,111 +1,88 @@
 "use client";
 
-import { motion, useReducedMotion } from "motion/react";
-import { DoorOpen } from "lucide-react";
+import type { ReactNode } from "react";
+import { motion } from "motion/react";
 import type { Amount as AmountT, Asset, TxRef } from "@/lib/types";
 import { HBAR } from "@/lib/money/format";
+import { useCalmMotion } from "@/lib/hooks/usePrefs";
 import { cn } from "@/lib/utils";
-import { Amount } from "./amount";
+import { Digits } from "@/components/pixel/digits";
+import { Sprite } from "@/components/pixel/sprite";
+import { CoinFountain, money } from "@/components/scene/coin-fountain";
 import { HashscanLink } from "./hashscan-link";
 
-const COINS = 24;
-// Deterministic burst (golden-angle spread), so render stays pure and every replay looks the same.
-const BURST = Array.from({ length: COINS }, (_, i) => {
-  const angle = i * 2.399963 + 0.3;
-  const dist = 90 + ((i * 37) % 70);
-  return {
-    x: Math.cos(angle) * dist,
-    y: Math.sin(angle) * dist * 0.75 - 30,
-    fall: 40 + ((i * 53) % 60),
-    rot: ((i * 97) % 360) - 180,
-    delay: 0.05 + (i % 6) * 0.03,
-    size: 8 + (i % 3) * 3,
-  };
-});
-
 export type VaultPayoutProps = {
-  /** Amount paid to the raider (pot + this siege's fee). */
+  /** Amount paid to the operator (pot + this op's fee). */
   amount: AmountT;
-  /** Raider account the vault paid. */
+  /** Operator account the vault paid. */
   raider: string;
   /** The release tx; omit while it is settling. */
   tx?: TxRef;
-  /** The release has not landed yet: say "Paying out…" instead of "Paid to". */
+  /** The release has not landed yet: `PAYING OUT…` instead of `PAID … TO …`. */
   pending?: boolean;
   asset?: Asset;
+  /** Extra lines under the receipt (e.g. `BREACH LANDED IN THE HALL`). */
+  children?: ReactNode;
   className?: string;
 };
 
 /**
- * The doors-open moment: the vault paid out. Gold amount scales in under a burst of coins
- * (none with prefers-reduced-motion).
+ * The breach payout: the vault door open, a coin burst and the hero amount. Reads `PAYING OUT…`
+ * until the release lands, then `PAID 5.50 ℏ TO 0.0.1132… ↗`. Reduced motion: no burst, the amount
+ * fades in.
  *
  * @example <VaultPayout amount={siege.release.amount} raider={siege.raider} tx={siege.release} />
  */
-export function VaultPayout({ amount, raider, tx, pending = false, asset = HBAR, className }: VaultPayoutProps) {
-  const reduced = useReducedMotion();
+export function VaultPayout({ amount, raider, tx, pending = false, asset = HBAR, children, className }: VaultPayoutProps) {
+  const calm = useCalmMotion();
+  const shown = money(amount, asset);
+  const [num, unit] = [shown.slice(0, shown.lastIndexOf(" ")), shown.slice(shown.lastIndexOf(" ") + 1)];
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-gold/40 bg-[radial-gradient(ellipse_at_50%_35%,rgb(245_196_81/0.22),transparent_65%)] px-5 pt-8 pb-5 text-center",
+        "relative overflow-hidden bg-panel px-4 pt-3 pb-3 text-center px-frame [--frame:color-mix(in_oklab,var(--color-money)_60%,var(--color-line))]",
         className,
       )}
       role="status"
       aria-live="polite"
     >
-      {!reduced ? (
-        <div aria-hidden className="pointer-events-none absolute top-[38%] left-1/2">
-          {BURST.map((c, i) => (
-            <motion.span
-              key={i}
-              className="absolute block rounded-full border border-[#ffe08a] bg-gold shadow-[0_0_8px_rgb(245_196_81/0.7)]"
-              style={{ width: c.size, height: c.size, marginLeft: -c.size / 2, marginTop: -c.size / 2 }}
-              initial={{ x: 0, y: 0, opacity: 0, scale: 0.3, rotate: 0 }}
-              animate={{
-                x: [0, c.x, c.x * 1.1],
-                y: [0, c.y, c.y + c.fall],
-                opacity: [0, 1, 0],
-                scale: [0.3, 1, 0.8],
-                rotate: c.rot,
-              }}
-              transition={{ duration: 1.5, delay: c.delay, ease: [0.2, 0.8, 0.4, 1], times: [0, 0.45, 1] }}
-            />
-          ))}
-        </div>
-      ) : null}
-
+      {/* light pouring out of the vault */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_60%_70%_at_50%_30%,color-mix(in_oklab,var(--color-money)_22%,transparent),transparent_70%)]"
+      />
+      <div className="relative mx-auto mb-2 w-fit">
+        <Sprite name="door.open" scale={3} animate={{ loop: false }} label="Vault open" />
+        <CoinFountain count={20} scale={3} className="top-[45%]" />
+      </div>
+      <p className="relative font-ui text-[11px] tracking-[0.18em] text-money/80 uppercase">The vault is open</p>
       <motion.div
-        initial={reduced ? false : { scale: 0.6, opacity: 0 }}
+        initial={calm ? { opacity: 0 } : { scale: 0.6, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 260, damping: 18 }}
-        className="relative"
+        transition={calm ? { duration: 0.3 } : { type: "spring", stiffness: 420, damping: 18 }}
+        className="relative mt-2"
       >
-        <span className="mx-auto mb-3 grid size-12 place-items-center rounded-2xl bg-gold/15 text-gold">
-          <DoorOpen className="size-6" aria-hidden />
-        </span>
-        <p className="text-xs font-semibold tracking-[0.18em] text-gold/80 uppercase">The vault is open</p>
-        <div className="mt-2">
-          <Amount amount={amount} asset={asset} size="hero" animate={false} />
-        </div>
+        <Digits value={num} unit={unit} size="xl" tone="money" />
       </motion.div>
-
-      <motion.div
-        initial={reduced ? false : { opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: reduced ? 0 : 0.5 }}
-        className="relative mt-4 flex flex-col items-center gap-1.5 text-sm"
-      >
-        <p className="text-parchment/90">
-          {pending ? "Paying out to" : "Paid to"} <HashscanLink accountId={raider} className="text-sm" />
-        </p>
+      <div className="relative mt-3 flex flex-col items-center gap-1.5">
+        {pending ? (
+          <p className="font-ui text-xs tracking-[0.12em] text-money uppercase">
+            <span className="animate-blink">▮</span> Paying out to <HashscanLink accountId={raider} className="text-xs" />
+          </p>
+        ) : (
+          <p className="font-ui text-xs tracking-[0.12em] text-money uppercase">
+            Paid {shown} to <HashscanLink accountId={raider} className="text-xs" />
+          </p>
+        )}
         {tx ? (
-          <p className="flex items-center gap-2 text-xs text-stone">
+          <p className="flex items-center gap-2 font-term text-lg leading-none text-ink-dim">
             release tx <HashscanLink tx={tx} />
           </p>
         ) : (
-          <p className="text-xs text-stone">Verifier signed · settling on Hedera…</p>
+          <p className="font-term text-lg leading-none text-ink-dim">verifier signed · settling on Hedera…</p>
         )}
-      </motion.div>
+        {children}
+      </div>
     </div>
   );
 }

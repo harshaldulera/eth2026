@@ -1,35 +1,45 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Bot, DoorClosed, DoorOpen, Fingerprint, Gift, Loader2, RotateCcw, SendHorizontal, Shield, Wand2 } from "lucide-react";
-import { motion } from "motion/react";
 import type { Castle, FeeSplit as FeeSplitT, Siege, StoredSiegeEvent } from "@/lib/types";
 import { MAX_TURNS } from "@/lib/types";
-import { ApiError, api, describeError, type FeeSplitBps } from "@/lib/api/client";
+import { ApiError, api, describeError, type FeeSplitBps, type MessageResponse } from "@/lib/api/client";
 import { useConfig } from "@/lib/hooks/useConfig";
+import { usePolling } from "@/lib/hooks/usePolling";
 import { useSiege, type DemoSiege, type SiegeView } from "@/lib/hooks/useSiege";
 import demoSiege from "@/lib/fixtures/demo-siege.json";
+import { useCalmMotion } from "@/lib/hooks/usePrefs";
+import { useFork } from "@/lib/hooks/useFork";
 import { lastOf, parseAttempt } from "@/lib/money/events";
 import { formatAmount, toUnits } from "@/lib/money/format";
 import { voidCause } from "@/lib/money/vault";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
+import { toBeats } from "@/lib/scene/beats";
+import { opMoney } from "@/lib/scene/money";
+import { playCue } from "@/components/pixel/sfx-link";
+import { usePlayer } from "@/lib/scene/usePlayer";
+import type { SceneFrame } from "@/lib/scene/player";
+import { BUTTONS, EMPTY, LED as LED_TEXT, MONEY, OPERATOR_RANKS, TOASTS } from "@/lib/vocab";
 import { FeeSplit } from "@/components/money/fee-split";
 import { VaultPayout } from "@/components/money/vault-payout";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { PaymentReceiptCard } from "@/components/money/payment-receipt-card";
-import { PressureMeter } from "@/components/money/pressure-meter";
-import { SiegeCounter } from "@/components/money/siege-counter";
-import { GuardianCard } from "@/components/arena/guardian-card";
-import { SiegeStatusBadge } from "@/components/arena/tier";
-import { GuardianBubble, RaiderBubble, ThinkingBubble } from "@/components/arena/chat-bubble";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { PixelButton, pixelButtonVariants } from "@/components/pixel/button";
+import { LED } from "@/components/pixel/led";
+import { PixelPanel } from "@/components/pixel/panel";
+import { FrozenBar, OpScene, OutcomeHeadline, SoundStrip, money, useBeatCues, useTickSounds } from "@/components/scene";
 import { EmptyState, ErrorState, Loading } from "@/components/ui/state";
+import { cn } from "@/lib/utils";
 
 const ENDED = new Set(["held", "broken", "banished"]);
+/** localStorage: set once this browser has landed a paid breach (the RANK UP moment fires once). */
+const FIRST_BREACH_KEY = "siege.firstBreach";
+
+/** The send response; `referee` is the additive Part 2 field (threat + tactic of this turn). */
+type SendResponse = MessageResponse & { referee?: { pressure: number; tactic: string } };
 
 /**
  * Split for display when the attempt event carried none: the configured bps (/api/config), same
@@ -42,74 +52,132 @@ function splitFor(fee: string, bps: FeeSplitBps = { castellan: 8000, pot: 1500, 
   return { castellan: castellan.toString(), pot: (f - castellan - arena).toString(), arena: arena.toString() };
 }
 
+/** A paid op voided under the operator whose refund has not landed (or failed) yet: keep polling. */
+const refundPending = (s: Siege) =>
+  s.settlement?.state === "void" && !s.free && s.settlement.refund !== undefined && s.settlement.refund.state === "due";
 
 const REASON_TEXT: Record<string, string> = {
-  castle_already_broken: "another raider broke this castle moments before you did",
-  castle_broken: "another raider broke this castle before your siege finished",
-  castle_closed: "the castle's vault closed before your siege finished",
-  vault_expired: "the castle's vault expired before your siege finished",
+  castle_already_broken: "another operator breached this vault moments before you did",
+  castle_broken: "another operator breached this vault before your op finished",
+  castle_closed: "the vault closed before your op finished",
+  vault_expired: "the vault expired before your op finished",
   vault_not_open: "the vault had already been emptied",
   expired: "the vault had expired",
-  dormant: "the guardian went offline",
-  guardian_dormant: "the guardian went offline",
-  castle_dormant: "the guardian went offline",
-  orders_changed: "the guardian's orders changed and the vault closed",
-  owner_closed: "the Castellan closed the vault",
+  dormant: "the guard went offline",
+  guardian_dormant: "the guard went offline",
+  castle_dormant: "the guard went offline",
+  orders_changed: "the guard's orders changed and the vault closed",
+  owner_closed: "the owner closed the vault",
 };
 const reasonText = (r?: string) => (r ? (REASON_TEXT[r] ?? r.replace(/_/g, " ")) : "unknown error");
+
+/** How long the room waits for the event backlog before mounting the scene anyway. */
+const BACKLOG_WAIT_MS = 2500;
+
+/**
+ * True once the feed holds what the siege record says happened: a decision for every guard reply,
+ * the end, and the chain events already on the record. The scene then mounts on the newest beat
+ * instead of animating the backlog as it streams in.
+ */
+function backlogIn(siege: Siege, events: StoredSiegeEvent[]): boolean {
+  if (!events.length) return false;
+  const replies = siege.messages.filter((m) => m.role === "guardian").length;
+  const decisions = new Set(events.filter((e) => e.type === "decision" && e.turn).map((e) => e.turn)).size;
+  if (decisions < replies) return false;
+  if (ENDED.has(siege.status) && !events.some((e) => e.type === "end")) return false;
+  if (siege.attempt && !events.some((e) => e.type === "attempt")) return false;
+  if (siege.release && !events.some((e) => e.type === "release")) return false;
+  return true;
+}
 
 export function SiegeRoom() {
   const { id } = useParams<{ id: string }>();
   // ?demo=1 replays a recorded break with no network (UI polish, rehearsals, flaky venue Wi-Fi).
   const demo = useSearchParams().get("demo") === "1" ? (demoSiege as unknown as DemoSiege) : undefined;
+  // The record refetches on every event (SSE, polling fallback), and polls slowly for what emits nothing.
   const view = useSiege(id, { demo });
+  const siege = view.siege;
+  // The demo castle was recorded after the break (pot 0): open on the pot the recorded op found, read
+  // off its own payout, so the header holds the real pot until the coins come out.
+  const demoPot = useMemo(() => {
+    if (!demo) return undefined;
+    const last = demo.frames[demo.frames.length - 1];
+    return last ? opMoney(last.siege, demo.frames.map((f) => f.event), demo.castle.fee).potBefore : undefined;
+  }, [demo]);
 
-  if (view.error && !view.siege) {
+  // A paid op voided under the operator: the refund lands with no event on this siege, so poll
+  // the record until it is refunded or failed.
+  const refundDue = Boolean(siege && view.mode !== "demo" && refundPending(siege));
+  const refreshRef = useRef(view.refresh);
+  useEffect(() => {
+    refreshRef.current = view.refresh;
+  });
+  useEffect(() => {
+    if (!refundDue) return;
+    const t = setInterval(() => void refreshRef.current(), 1500);
+    return () => clearInterval(t);
+  }, [refundDue]);
+
+  // Mount the scene once the feed's backlog is in (or after a short wait): the player then starts
+  // on the newest beat instead of replaying the end sequence as the events stream in. The demo
+  // mounts at once and plays from the first frame.
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setWaited(true), BACKLOG_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [id]);
+  const [mounted, setMounted] = useState(false);
+  if (!mounted && siege && view.castle && (view.mode === "demo" || waited || backlogIn(siege, view.events))) setMounted(true);
+
+  if (view.error && !siege) {
     const notFound = view.error instanceof ApiError && view.error.status === 404;
     return (
       <div className="mx-auto w-full max-w-4xl px-4 py-10">
         {notFound ? (
-          <EmptyState title="No such siege" hint="The link may be from an older database.">
-            <Link href="/" className="text-sm text-gold underline underline-offset-4">
-              Back to the arena
+          <EmptyState title={EMPTY.noSuchOp.title} hint={EMPTY.noSuchOp.body}>
+            <Link href="/" className={pixelButtonVariants({ variant: "outline", size: "md" })}>
+              Back to the Grid
             </Link>
           </EmptyState>
         ) : (
-          <ErrorState error={view.error} onRetry={() => void view.refresh()} title="Couldn't load the siege" />
+          <ErrorState error={view.error} onRetry={() => void view.refresh()} title="Couldn't load the op" />
         )}
       </div>
     );
   }
-  if (!view.siege || !view.castle) return <Loading label="Entering the siege room…" />;
+  if (!siege || !view.castle || !mounted) return <Loading label="Tuning the vault cam…" />;
 
   return (
     <Room
-      siege={view.siege}
+      siege={siege}
       castle={view.castle}
       events={view.events}
-      guardianThinking={view.decisionInFlight}
       mode={view.mode}
+      openingPot={demoPot}
       onSiege={view.setSiege}
       refresh={() => void view.refresh()}
     />
   );
 }
 
+type LocalTurn = { referee?: SendResponse["referee"]; decision: MessageResponse["decision"]; text: string };
+
 function Room({
   siege,
   castle,
   events,
-  guardianThinking,
   mode,
+  openingPot,
   onSiege,
   refresh,
 }: {
   siege: Siege;
   castle: Castle;
   events: StoredSiegeEvent[];
-  /** From the event stream: a raider message landed and the guardian has not answered yet. */
-  guardianThinking: boolean;
+  /** Streaming (SSE), polling (the stream failed), or replaying the recorded demo (?demo=1). */
   mode: SiegeView["mode"];
+  /** The pot the op found, when the castle record is newer than the op (the recorded demo). */
+  openingPot?: string;
   onSiege: (s: Siege) => void;
   refresh: () => void;
 }) {
@@ -117,53 +185,77 @@ function Room({
   const [sending, setSending] = useState<{ text: string; turn: number } | null>(null);
   const [localExposed, setLocalExposed] = useState<Record<number, string>>({});
   const [freshId, setFreshId] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [localTurns, setLocalTurns] = useState<Record<number, LocalTurn>>({});
+  const [failed, setFailed] = useState<{ text: string } | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const calm = useCalmMotion();
+  const fork = useFork(castle.id);
+  const demo = mode === "demo";
 
   const ended = ENDED.has(siege.status) || siege.settlement?.state === "void";
+  const voided = siege.settlement?.state === "void";
   const agentDriven = Boolean(siege.agentId);
+  // The pot as the op found it: from the op's own settle event when there is one, else the vault as
+  // it was when this room opened. The header never jumps ahead of the fee rail / payout.
+  const [potAtOpen] = useState(openingPot ?? castle.pot);
+  const opCash = useMemo(() => opMoney(siege, events, castle.fee), [siege, events, castle.fee]);
+  const potBefore = opCash.potBefore ?? potAtOpen;
+  // Was the op still running when this room opened? (one-shot moments only fire then)
+  const [openedLive] = useState(!ended);
 
-  // Per-turn referee pressure / tactic and guardian "exposed" labels from the event stream.
-  const { pressureByTurn, exposedByTurn } = useMemo(() => {
-    const pressureByTurn: Record<number, { pressure: number; tactic?: string }> = {};
-    const exposedByTurn: Record<number, string> = {};
-    for (const e of events) {
-      const p = e.payload ?? {};
-      if (e.type === "message" && typeof p.pressure === "number" && e.turn) {
-        pressureByTurn[e.turn] = { pressure: p.pressure, tactic: typeof p.tactic === "string" ? p.tactic : undefined };
-      }
-      if (e.type === "decision" && typeof p.exposed === "string" && p.exposed && e.turn) exposedByTurn[e.turn] = p.exposed;
-    }
-    return { pressureByTurn, exposedByTurn };
-  }, [events]);
-
-  const turns = Object.keys(pressureByTurn).map(Number);
-  const latestTurn = turns.length ? Math.max(...turns) : 0;
-  const latest = pressureByTurn[latestTurn];
-  const peak = Object.values(pressureByTurn).reduce((m, v) => Math.max(m, v.pressure), 0);
-
+  // ── scene input: the siege plus the turn in flight, and the send response's referee/decision
+  //    as synthetic events until the feed delivers the real ones (real events come later in the
+  //    array, so they win in toBeats).
   const showPending = sending && !siege.messages.some((m) => m.role === "raider" && m.turn === sending.turn);
-  const lastMsg = siege.messages[siege.messages.length - 1];
-  // Every viewer sees the guardian think: the stream says a message landed with no decision yet.
-  // The record-based check covers a stream that is still catching up.
-  const thinking = Boolean(sending) || guardianThinking || (!ended && lastMsg?.role === "raider");
+  const sceneSiege = useMemo<Siege>(
+    () =>
+      showPending && sending
+        ? { ...siege, messages: [...siege.messages, { role: "raider", text: sending.text, turn: sending.turn, at: new Date(0).toISOString() }] }
+        : siege,
+    [siege, showPending, sending],
+  );
+  const sceneEvents = useMemo<StoredSiegeEvent[]>(() => {
+    const synthetic: StoredSiegeEvent[] = [];
+    for (const [k, lt] of Object.entries(localTurns)) {
+      const turn = Number(k);
+      const base = { siegeId: siege.id, castleId: castle.id, turn, at: new Date(0).toISOString(), requestId: lt.decision.requestId };
+      if (lt.referee && !events.some((e) => e.type === "message" && e.turn === turn)) {
+        synthetic.push({ ...base, id: -turn * 2 - 1, type: "message", payload: { role: "raider", text: lt.text, pressure: lt.referee.pressure, tactic: lt.referee.tactic } });
+      }
+      if (!events.some((e) => e.type === "decision" && e.turn === turn)) {
+        const d = lt.decision;
+        synthetic.push({
+          ...base,
+          id: -turn * 2,
+          type: "decision",
+          payload: { move: d.move, reply: d.reply, requestId: d.requestId, exposed: d.exposed ?? localExposed[turn] ?? null, toolCalls: d.toolCalls ?? [] },
+        });
+      }
+    }
+    return synthetic.length ? [...synthetic, ...events] : events;
+  }, [localTurns, events, siege.id, castle.id, localExposed]);
 
-  const msgCount = siege.messages.length + (showPending ? 1 : 0);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [msgCount, thinking, ended]);
+  const beats = useMemo(() => toBeats(sceneSiege, sceneEvents, castle, { mode: "live", reducedMotion: calm }), [sceneSiege, sceneEvents, castle, calm]);
+  const onBeatStart = useBeatCues(beats);
+  const { frame, waiting } = usePlayer(beats, "live", { onBeatStart });
+  useTickSounds(frame);
 
-  const canSend = mode !== "demo" && !ended && !agentDriven && !sending && siege.turn < MAX_TURNS && siege.status === "in_progress";
+  // The composer keeps focus through a turn (read-only, never disabled) and sends again once the
+  // scene has caught up with the stamp.
+  const canSend = !demo && !ended && !agentDriven && !sending && siege.turn < MAX_TURNS && siege.status === "in_progress" && waiting;
 
   async function send(text: string) {
     const t = text.trim();
     if (!t || !canSend) return;
+    playCue("send_ping");
+    setFailed(null);
     setSending({ text: t, turn: siege.turn + 1 });
     setDraft("");
     try {
-      const res = await api.sendMessage(siege.id, t);
+      const res = (await api.sendMessage(siege.id, t)) as SendResponse;
       const d = res.decision;
       if (d.exposed) setLocalExposed((x) => ({ ...x, [res.siege.turn]: d.exposed! }));
+      setLocalTurns((x) => ({ ...x, [res.siege.turn]: { referee: res.referee, decision: d, text: t } }));
       setFreshId(d.requestId);
       onSiege(res.siege);
     } catch (e) {
@@ -171,225 +263,341 @@ function Room({
       if (e instanceof ApiError && e.status === 409) {
         toast.error(
           e.code === "no_turns_left"
-            ? "No messages left"
+            ? TOASTS.noMessagesLeft.title
             : e.code === "castle_closed"
-              ? "The castle fell before your siege finished — your fee will be refunded"
+              ? TOASTS.opVoid.title
               : e.code === "not_guarding"
                 ? `${describeError(e)}${siege.free ? "" : " Your fee will be refunded."}`
-                : "This siege has ended",
+                : "OP OVER",
+          e.code === "castle_closed" ? { description: TOASTS.opVoid.body } : undefined,
         );
         refresh();
       } else {
-        toast.error("The message didn't reach the guardian", { description: `${describeError(e)} — your turn was not used.` });
+        setFailed({ text: t });
+        toast.error(TOASTS.notDelivered.title, { description: `${describeError(e)} — your turn was not used.` });
       }
     } finally {
       setSending(null);
     }
   }
 
-  const script = castle.tier === "wooden" ? [...WOODEN_BREAK, ...MUST_NOT_BREAK.slice(3)] : [...MUST_NOT_BREAK];
+  // a fresh reply landed and the scene is ready: hand the composer back (desktop keeps focus anyway)
+  useEffect(() => {
+    if (!canSend || !freshId) return;
+    const el = inputRef.current;
+    if (el && document.activeElement === document.body && window.matchMedia("(min-width: 640px)").matches) el.focus();
+  }, [canSend, freshId]);
+
+  // TYPE beat on arrival (design §2, §3.3): the composer is focused when the room opens. Phones only
+  // when arriving from RUN OP / recon (?go=1), so a plain revisit doesn't pop the keyboard up.
+  const arrivalFocused = useRef(false);
+  useEffect(() => {
+    if (arrivalFocused.current || !canSend) return;
+    arrivalFocused.current = true;
+    const el = inputRef.current;
+    if (!el) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== el) return;
+    const wide = window.matchMedia("(min-width: 640px)").matches;
+    const go = new URLSearchParams(window.location.search).get("go") === "1";
+    if (wide || go) el.focus({ preventScroll: !wide });
+  }, [canSend]);
+
+  // RANK UP on a first breach (design §8 beat 4): the first paid breach this browser has landed.
+  const rankedUp = useRef(false);
+  const payoutLanded = frame.coins.kind === "payout" && !frame.coins.pending && frame.status === "broken" && !siege.free;
+  useEffect(() => {
+    if (!payoutLanded || !openedLive || demo || rankedUp.current) return;
+    rankedUp.current = true;
+    let first = true;
+    try {
+      first = localStorage.getItem(FIRST_BREACH_KEY) === null;
+      if (first) localStorage.setItem(FIRST_BREACH_KEY, siege.id);
+    } catch {
+      /* storage blocked: treat as the first */
+    }
+    if (!first) return;
+    const t = setTimeout(() => {
+      playCue("rank_up");
+      const copy = TOASTS.rankUp(OPERATOR_RANKS[2]);
+      toast(copy.title, { description: copy.body });
+    }, 1800);
+    return () => clearTimeout(t);
+  }, [payoutLanded, openedLive, demo, siege.id]);
+
+  // a replay forked into this vault (FORK INTO A NEW OP) supplies the script; otherwise the scripted demo lines
+  // Iron: the demo order (small talk → authority → override), so the presenter gets HOLD → FLAG →
+  // LOCKDOWN · 2 MESSAGES LOST instead of a lockdown on message 1.
+  const script = fork
+    ? fork.lines
+    : castle.tier === "wooden"
+      ? [...WOODEN_BREAK, ...MUST_NOT_BREAK.slice(3)]
+      : castle.tier === "iron"
+        ? [WOODEN_BREAK[0], MUST_NOT_BREAK[1], MUST_NOT_BREAK[0], MUST_NOT_BREAK[3], MUST_NOT_BREAK[4]]
+        : [...MUST_NOT_BREAK];
   const demoLine = script[siege.turn] ?? script[script.length - 1];
+  const sendingTurn = showPending && sending ? sending.turn : null;
+
+  const showOutcome = voided || Boolean(frame.status);
+  let dock: ReactNode;
+  if (showOutcome) {
+    dock = (
+      <div className="space-y-3">
+        <Outcome siege={siege} castle={castle} events={events} frame={frame} />
+        {frame.ended || voided ? (
+          <FrozenBar frame={frame} opId={siege.id} noReplay={demo || (voided && !frame.ended)}>
+            <Link href={`/castle/${castle.id}`} className={pixelButtonVariants({ variant: "outline", size: "lg" })}>
+              Run another op
+            </Link>
+          </FrozenBar>
+        ) : null}
+      </div>
+    );
+  } else if (frame.pipsLost > 0) {
+    dock = (
+      <div className="hazard bg-panel px-4 py-3 px-frame [--frame:var(--color-threat)]" role="status">
+        <p className="font-pixel text-[14px] leading-snug text-threat">LOCKDOWN — op over.</p>
+        <p className="mt-1 text-sm text-ink">Your fee still splits.</p>
+      </div>
+    );
+  } else if (demo) {
+    dock = (
+      <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-dashed border-money/60 bg-panel px-4 py-3" role="status">
+        <p className="min-w-0 font-ui text-xs tracking-[0.08em] text-ink uppercase">Demo replay · a recorded op, nothing here touches the network</p>
+      </div>
+    );
+  } else if (agentDriven) {
+    dock = <AgentStrip agentId={siege.agentId!} asset={castle.asset} />;
+  } else {
+    dock = (
+      <Composer
+        inputRef={inputRef}
+        draft={draft}
+        setDraft={setDraft}
+        canSend={canSend}
+        busy={Boolean(sending) || !waiting || ended}
+        turn={siege.turn}
+        onSend={() => void send(draft)}
+        onDemo={() => {
+          setDraft(demoLine);
+          inputRef.current?.focus();
+        }}
+      />
+    );
+  }
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <Link href={`/castle/${castle.id}`} className="inline-flex items-center gap-1.5 text-sm text-stone hover:text-parchment">
-            <ArrowLeft className="size-4" /> {castle.name}
-          </Link>
-          <SiegeStatusBadge status={siege.status} />
-          <LiveDot mode={mode} />
+    <OpScene
+      frame={frame}
+      castle={castle}
+      opId={siege.id}
+      transport={siege.transport}
+      operator={siege.raider}
+      live
+      potBefore={potBefore}
+      reduced={calm}
+      backHref={`/castle/${castle.id}`}
+      sendingTurn={sendingTurn}
+      agent={agentDriven}
+      dock={dock}
+      dockFixed={!showOutcome && !agentDriven && frame.pipsLost === 0}
+      settled={showOutcome}
+      headerExtra={
+        <div className="flex flex-wrap items-center gap-2">
+          {/* how events arrive matters only while the op runs: a frozen tape has no transport light */}
+          {demo || (!frame.ended && !voided) ? <LiveMode mode={mode} /> : null}
+          {!ended ? <SoundStrip /> : null}
+          {siege.receipt ? <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} asset={castle.asset} compact /> : null}
         </div>
-        {siege.receipt ? <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} asset={castle.asset} compact /> : null}
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-[300px_1fr]">
-        <aside className="flex flex-col gap-4">
-          <GuardianCard castle={castle} transport={siege.transport} />
+      }
+      aside={
+        <div className="space-y-3">
           {siege.free ? (
-            <p className="flex items-start gap-2 rounded-xl border border-dashed border-parchment/15 px-3 py-2.5 text-xs text-stone">
-              <Gift className="mt-0.5 size-3.5 shrink-0" aria-hidden /> Free daily siege — practice only, this one can&apos;t win the pot.
+            <p className="border-2 border-dashed border-line px-3 py-2 font-ui text-[11px] tracking-[0.08em] text-ink-dim uppercase">
+              RECON · free, once a day, {MONEY.reconNoPayout}
             </p>
           ) : null}
-        </aside>
-
-        <Card className="flex min-h-[560px] flex-col overflow-hidden">
-          <div className="flex flex-col gap-3 border-b border-arena-line px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <SiegeCounter used={siege.turn} status={siege.status} />
-            <PressureMeter
-              value={latest?.pressure ?? 0}
-              tactic={latest?.tactic?.replace(/_/g, " ")}
-              className="sm:max-w-[280px]"
-              label={ended ? `Peak pressure ${peak}` : "Pressure"}
-            />
+        </div>
+      }
+      empty={agentDriven ? "The agent is approaching…" : `${castle.guardianName} watches the road. ${MAX_TURNS} messages.`}
+      consoleTail={
+        failed ? (
+          <div className="space-y-1" role="alert">
+            <p className="font-term text-[19px] leading-none text-threat">&gt; NOT DELIVERED · turn not used</p>
+            <p className="border-l-2 border-threat/60 pl-3 text-[15px] text-ink-dim line-through decoration-threat/60">{failed.text}</p>
+            <button type="button" onClick={() => void send(failed.text)} disabled={!canSend} className="pl-3 font-ui text-xs tracking-[0.1em] text-threat underline underline-offset-4 disabled:opacity-40">
+              {BUTTONS.retry}
+            </button>
           </div>
+        ) : null
+      }
+    />
+  );
+}
 
-          <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-5" style={{ maxHeight: "62vh" }}>
-            {siege.messages.length === 0 && !showPending ? (
-              <div className="py-10 text-center text-sm text-stone">
-                <Shield className="mx-auto mb-2 size-6 text-stone/70" aria-hidden />
-                {agentDriven ? "The agent is approaching the gate…" : `${castle.guardianName} watches the road. You have ${MAX_TURNS} messages.`}
-              </div>
-            ) : null}
-            {siege.messages.map((m) =>
-              m.role === "raider" ? (
-                <RaiderBubble key={`r${m.turn}`} text={m.text} turn={m.turn} tactic={pressureByTurn[m.turn]?.tactic?.replace(/_/g, " ")} />
-              ) : (
-                <GuardianBubble
-                  key={`g${m.turn}`}
-                  message={m}
-                  guardianName={castle.guardianName}
-                  exposed={exposedByTurn[m.turn] ?? localExposed[m.turn]}
-                  fresh={m.requestId === freshId}
-                />
-              ),
-            )}
-            {showPending && sending ? <RaiderBubble text={sending.text} turn={sending.turn} pending /> : null}
-            {thinking && !ended ? <ThinkingBubble guardianName={castle.guardianName} /> : null}
-          </div>
+/** Whether this room is streaming (SSE), polling (the stream failed), or replaying the recorded demo. */
+function LiveMode({ mode }: { mode: SiegeView["mode"] }) {
+  if (mode === "demo") return <LED kind="stub" boxed label="DEMO REPLAY" title="Replaying a recorded op. Nothing here touches the network." />;
+  // the scene header already says LIVE: this light says how the events arrive
+  if (mode === "live") return <LED kind="safe" label="STREAMING" title="Streaming events as they happen (SSE)" />;
+  if (mode === "polling") return <LED kind="warn" label="POLLING" blink={false} title="Stream unavailable, checking every few seconds" />;
+  return <LED kind="idle" label="CONNECTING" title="Connecting to the event stream" />;
+}
 
-          {ended ? null : agentDriven ? (
-            <div className="flex items-center gap-2 border-t border-arena-line px-4 py-3 text-sm text-stone">
-              <Bot className="size-4 text-ember" aria-hidden /> A raider agent is laying this siege — watching live.
-            </div>
-          ) : (
-            <form
-              className="flex items-end gap-2 border-t border-arena-line p-3"
-              onSubmit={(e) => {
+function Composer({
+  inputRef,
+  draft,
+  setDraft,
+  canSend,
+  busy,
+  turn,
+  onSend,
+  onDemo,
+}: {
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  draft: string;
+  setDraft: (s: string) => void;
+  canSend: boolean;
+  busy: boolean;
+  turn: number;
+  onSend: () => void;
+  onDemo: () => void;
+}) {
+  const left = MAX_TURNS - turn;
+  return (
+    <form
+      className="bg-panel p-2 px-frame sm:p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSend();
+      }}
+    >
+      <div className="flex items-stretch gap-2">
+        <label className="relative flex min-w-0 flex-1 bg-bg shadow-[inset_0_0_0_2px_var(--color-line)] focus-within:shadow-[inset_0_0_0_2px_var(--color-accent)]">
+          <span className="pt-2 pl-2.5 font-term text-[22px] leading-none text-accent select-none" aria-hidden>
+            &gt;
+          </span>
+          <textarea
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                void send(draft);
-              }}
-            >
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void send(draft);
-                  }
-                }}
-                disabled={!canSend}
-                rows={2}
-                maxLength={1000}
-                placeholder={sending ? "Waiting for the guardian…" : `Message ${siege.turn + 1} of ${MAX_TURNS} — talk your way in`}
-                aria-label="Your message to the guardian"
-                className="min-h-12 flex-1 resize-none rounded-xl border border-arena-line bg-arena-bg/60 px-3.5 py-2.5 text-[15px] text-parchment placeholder:text-stone/70 focus:border-ember/50 focus:outline-none disabled:opacity-50"
-              />
-              <div className="flex flex-col gap-1.5">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!canSend}
-                  onClick={() => setDraft(demoLine)}
-                  title="Fill the next line of the scripted demo raid"
-                  className="px-2 text-xs"
-                >
-                  <Wand2 /> Demo line
-                </Button>
-                <Button type="submit" variant="emberSolid" size="md" disabled={!canSend || !draft.trim()} aria-label="Send">
-                  {sending ? <Loader2 className="animate-spin" /> : <SendHorizontal />}
-                  Send
-                </Button>
-              </div>
-            </form>
-          )}
-        </Card>
+                onSend();
+              }
+            }}
+            readOnly={busy}
+            rows={2}
+            maxLength={1000}
+            placeholder={busy ? "Guard is answering…" : `Message ${turn + 1} of ${MAX_TURNS} — talk your way in`}
+            aria-label="Your message to the guard"
+            className={cn("min-h-[52px] flex-1 resize-none bg-transparent px-2 py-1.5 font-term text-[22px] leading-tight text-ink placeholder:text-ink-dim/70 focus:outline-none", busy && "text-ink-dim")}
+          />
+        </label>
+        <PixelButton type="submit" variant="threat" size="xl" cue={null} disabled={!canSend || !draft.trim()} aria-label="Send" className="min-w-24 px-4">
+          {busy ? <span className="animate-blink">▮▮▮</span> : BUTTONS.send}
+        </PixelButton>
       </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <PixelButton
+          variant="ghost"
+          size="sm"
+          disabled={busy || left <= 0}
+          onClick={onDemo}
+          title="Fill the next line of the scripted demo op"
+          className="max-sm:min-h-11 max-sm:px-3 max-sm:text-[13px]"
+        >
+          {BUTTONS.demoLine}
+        </PixelButton>
+        <span className="shrink-0 font-ui text-[11px] tracking-[0.1em] text-ink-dim">
+          {left === 1 ? "1 MESSAGE LEFT" : `${left} MESSAGES LEFT`}
+          <span className="hidden sm:inline"> · ENTER SENDS</span>
+        </span>
+      </div>
+    </form>
+  );
+}
 
-      {ended ? <Outcome siege={siege} castle={castle} events={events} demo={mode === "demo"} /> : null}
+function AgentStrip({ agentId, asset }: { agentId: string; asset: Castle["asset"] }) {
+  const a = usePolling(() => api.agent(agentId), 5000, { key: agentId });
+  const agent = a.data?.agent;
+  const left = agent ? toUnits(agent.budget) - toUnits(agent.spent) : undefined;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 bg-panel px-4 py-3 px-frame" role="status">
+      <p className="min-w-0 font-ui text-xs tracking-[0.08em] text-ink uppercase">
+        OPERATOR · <span className="text-threat">{agent?.name ?? "AGENT"}</span> [AGENT]
+        {agent?.strategy ? <> · strategy {agent.strategy}</> : null}
+        {left !== undefined ? <span className="text-money"> · {money(left > BigInt(0) ? left : BigInt(0), asset)} left</span> : null}
+      </p>
+      <LED kind="live" label={LED_TEXT.watching} />
     </div>
   );
 }
 
-/** Whether this page is streaming, polling, or replaying the recorded demo. */
-function LiveDot({ mode }: { mode: SiegeView["mode"] }) {
-  if (mode === "demo")
-    return (
-      <span className="rounded-full border border-dashed border-gold/50 px-2 py-0.5 text-[11px] text-gold" title="Replaying a recorded siege. Nothing here touches the network.">
-        Demo replay
-      </span>
-    );
-  const live = mode === "live";
-  return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] text-stone" title={live ? "Streaming events as they happen" : mode === "polling" ? "Stream unavailable, checking every few seconds" : "Connecting…"}>
-      <span className={live ? "size-1.5 animate-pulse rounded-full bg-ember" : "size-1.5 rounded-full bg-stone/60"} aria-hidden />
-      {live ? "Live" : mode === "polling" ? "Polling" : "Connecting"}
-    </span>
-  );
-}
-
-function Outcome({ siege, castle, events, demo = false }: { siege: Siege; castle: Castle; events: StoredSiegeEvent[]; demo?: boolean }) {
+function Outcome({ siege, castle, events, frame }: { siege: Siege; castle: Castle; events: StoredSiegeEvent[]; frame: SceneFrame }) {
   const { config } = useConfig();
   const fee = siege.receipt && !siege.receipt.free ? siege.receipt.amount : castle.fee;
   const settlement = siege.settlement;
-  const replay = (
-    <span className="inline-flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
-      {demo ? null : (
-        <Link href={`/replay/${siege.id}`} className="inline-flex items-center gap-1.5 text-sm text-gold underline decoration-gold/30 underline-offset-4 hover:text-gold">
-          <Fingerprint className="size-3.5" /> Replay and proof
-        </Link>
-      )}
-      <Link href={`/castle/${castle.id}`} className="inline-flex items-center gap-1.5 text-sm text-stone underline decoration-arena-line underline-offset-4 hover:text-parchment">
-        <RotateCcw className="size-3.5" /> Lay another siege on {castle.name}
-      </Link>
-    </span>
-  );
 
   if (settlement?.state === "void") {
     const refund = settlement.refund;
     const cause = voidCause(settlement.reason, castle.vaultState);
-    const what = cause === "offline" ? "the guardian went offline" : "the vault closed";
-    const lead = siege.free ? "Siege ended" : refund?.state === "refunded" ? "Refunded" : refund?.state === "failed" ? "Refund owed" : "Refunding";
+    const what = cause === "offline" ? "the guard went offline" : "the vault closed";
+    const lead = siege.free ? "Op ended" : refund?.state === "refunded" ? "Refunded" : refund?.state === "failed" ? "Refund owed" : "Refunding";
     return (
-      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mx-auto mt-6 max-w-xl space-y-4">
-        <div className="rounded-2xl border border-arena-line bg-arena-panel px-5 py-6 text-center">
-          <DoorClosed className="mx-auto size-7 text-stone" aria-hidden />
-          <p className="mt-2 text-lg font-semibold text-parchment">
-            {cause === "other" ? <>This siege can&apos;t pay out — {reasonText(settlement.reason)}.</> : <>{lead} — {what}</>}
-          </p>
-          <p className="mt-1 text-sm text-stone">
-            {siege.free
-              ? "It was a free practice siege, so nothing was charged."
-              : refund?.state === "refunded"
-                ? <>Your fee of {formatAmount(refund.amount, castle.asset)} was refunded{refund.tx && !refund.tx.stub ? <> · <HashscanLink tx={refund.tx} /></> : null}.</>
-                : refund?.state === "failed"
-                  ? "Your fee is owed back; the automatic refund failed and the arena will send it by hand."
-                  : `Your fee${refund ? ` of ${formatAmount(refund.amount, castle.asset)}` : ""} is being refunded.`}
-          </p>
-        </div>
-        <div className="text-center">{replay}</div>
-      </motion.section>
+      <PixelPanel tone="warn" className="px-4 py-4" role="status">
+        <p className="font-pixel text-[14px] text-warn">OP VOID</p>
+        <p className="mt-2 text-base text-ink">{cause === "other" ? <>This op can&apos;t pay out — {reasonText(settlement.reason)}.</> : <>{lead} — {what}</>}</p>
+        <p className="mt-1 text-sm text-ink-dim">
+          {siege.free ? (
+            "It was a free recon, so nothing was charged."
+          ) : refund?.state === "refunded" ? (
+            <>
+              {formatAmount(refund.amount, castle.asset)} refunded{refund.tx && !refund.tx.stub ? <> · <HashscanLink tx={refund.tx} label="↗" /></> : null}.
+            </>
+          ) : refund?.state === "failed" ? (
+            "Your fee is owed back; the automatic refund failed and the arena will send it by hand."
+          ) : (
+            `Your fee${refund ? ` of ${formatAmount(refund.amount, castle.asset)}` : ""} is being refunded.`
+          )}
+        </p>
+      </PixelPanel>
     );
   }
 
   if (siege.status === "broken") {
     const failed = settlement?.state === "failed";
+    if (failed && !siege.free) {
+      return (
+        <PixelPanel tone="threat" className="px-4 py-4" role="alert">
+          <p className="font-pixel text-[14px] text-threat">BREACH · PAYOUT FAILED</p>
+          <p className="mt-2 text-base text-ink">{castle.guardianName} opened the vault — but the payout failed.</p>
+          <p className="mt-1 text-sm text-ink-dim">Nothing was paid on Hedera: {reasonText(settlement?.reason)}. The arena has the transcript and will sort it out.</p>
+        </PixelPanel>
+      );
+    }
+    if (siege.free) {
+      return (
+        <PixelPanel tone="money" className="px-4 py-4" role="status">
+          <p className="font-pixel text-[14px] leading-snug text-money">RECON BREACH · NO PAYOUT</p>
+          <p className="mt-2 text-base text-ink">You found the sentence — pay {formatAmount(castle.fee, castle.asset)} and do it for real.</p>
+          <Link href={`/castle/${castle.id}`} className={cn(pixelButtonVariants({ variant: "money", size: "lg" }), "mt-3")}>
+            {BUTTONS.runOp(formatAmount(castle.fee, castle.asset))}
+          </Link>
+        </PixelPanel>
+      );
+    }
     return (
-      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mx-auto mt-6 max-w-xl space-y-4">
-        {failed && !siege.free ? (
-          <div role="alert" className="rounded-2xl border border-ember/40 bg-ember/[0.06] px-5 py-6 text-center">
-            <DoorOpen className="mx-auto size-7 text-ember" aria-hidden />
-            <p className="mt-2 text-lg font-semibold text-parchment">{castle.guardianName} opened the gate — but the payout failed.</p>
-            <p className="mt-1 text-sm text-stone">Nothing was paid on Hedera: {reasonText(settlement?.reason)}. The arena has the transcript and will sort it out.</p>
-          </div>
-        ) : siege.free ? (
-          <div className="rounded-2xl border border-dashed border-gold/40 px-5 py-6 text-center">
-            <DoorOpen className="mx-auto size-7 text-gold" aria-hidden />
-            <p className="mt-2 text-lg font-semibold text-parchment">{castle.guardianName} opened the gate.</p>
-            <p className="mt-1 text-sm text-stone">A free practice siege can&apos;t win the pot — but now you know it can be done. Pay the fee and do it for real.</p>
-          </div>
-        ) : (
-          <VaultPayout
-            amount={siege.release?.amount ?? (toUnits(castle.pot) + toUnits(fee)).toString()}
-            raider={siege.raider}
-            tx={siege.release}
-            pending={!siege.release}
-            asset={castle.asset}
-          />
-        )}
-        <div className="text-center">{replay}</div>
-      </motion.section>
+      <VaultPayout
+        amount={siege.release?.amount ?? (toUnits(castle.pot) + toUnits(fee)).toString()}
+        raider={siege.raider}
+        tx={siege.release}
+        pending={!siege.release}
+        asset={castle.asset}
+      >
+        {siege.release ? <p className="font-ui text-[11px] tracking-[0.14em] text-accent uppercase">Breach landed in the Hall</p> : null}
+      </VaultPayout>
     );
   }
 
@@ -398,33 +606,29 @@ function Outcome({ siege, castle, events, demo = false }: { siege: Siege; castle
   const split = attempt.split ?? (siege.attempt ? splitFor(fee, config?.feeSplitBps) : undefined);
   const newPot = attempt.newPot ?? (siege.attempt ? castle.pot : undefined);
   const splitFailed = settlement?.state === "failed" && !siege.attempt;
+  const coins = frame.coins;
+  const progress = coins.kind === "split" ? (coins.pending ? 0 : coins.progress) : 1;
+  const streak = attempt.streak ?? castle.streak;
 
   return (
-    <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mx-auto mt-6 grid max-w-4xl gap-4 md:grid-cols-[1fr_1.2fr] md:items-start">
-      <div className="rounded-2xl border border-arena-line bg-arena-panel p-5">
-        <span className={held ? "text-ward" : "text-ember"}>{held ? <Shield className="size-7" /> : <DoorClosed className="size-7" />}</span>
-        <p className="mt-2 text-xl font-semibold text-parchment">{held ? `${castle.guardianName} held.` : "Banished. The gate slams shut."}</p>
-        <p className="mt-1 text-sm text-stone">
-          {siege.free
-            ? "Free practice siege — no fee to split, the pot is untouched."
-            : held
-              ? "Five messages, no vault. Your fee now pays the defender and grows the pot."
-              : "The guardian ended the siege early. Your fee is split all the same."}
-        </p>
-        <div className="mt-4">{replay}</div>
-      </div>
+    <div className="space-y-3">
+      <OutcomeHeadline status={held ? "held" : "banished"} lost={held ? 0 : MAX_TURNS - siege.turn} streak={siege.free ? undefined : streak} free={siege.free}>
+        {siege.free
+          ? "Recon — no fee to split, the pot is untouched."
+          : held
+            ? "Five messages, no vault. Your fee now pays the owner and grows the pot."
+            : "The guard ended the op early. Your fee splits all the same."}
+      </OutcomeHeadline>
       {siege.free ? (
-        <div className="flex items-center gap-2 rounded-2xl border border-dashed border-arena-line p-5 text-sm text-stone">
-          <Gift className="size-4" aria-hidden /> Free sieges never touch the chain.
-        </div>
+        <p className="border-2 border-dashed border-line px-3 py-2 font-ui text-[11px] tracking-[0.08em] text-ink-dim uppercase">Recon never touches the chain.</p>
       ) : splitFailed ? (
-        <div role="alert" className="rounded-2xl border border-ember/40 bg-ember/[0.06] p-5 text-sm text-stone">
-          <p className="font-medium text-parchment">Fee not split on chain</p>
-          <p className="mt-1">The worker gave up recording this siege: {reasonText(settlement?.reason)}.</p>
-        </div>
+        <PixelPanel tone="threat" className="px-4 py-3 text-sm" role="alert">
+          <p className="font-ui text-xs tracking-[0.1em] text-threat uppercase">Fee not split on chain</p>
+          <p className="mt-1 text-ink-dim">The worker gave up recording this op: {reasonText(settlement?.reason)}.</p>
+        </PixelPanel>
       ) : (
-        <FeeSplit fee={fee} split={split} newPot={newPot} tx={siege.attempt} asset={castle.asset} />
+        <FeeSplit fee={fee} split={split} newPot={newPot} tx={siege.attempt} asset={castle.asset} progress={progress} />
       )}
-    </motion.section>
+    </div>
   );
 }

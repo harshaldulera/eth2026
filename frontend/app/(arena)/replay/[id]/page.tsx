@@ -4,7 +4,7 @@ import { ReplayView } from "./replay-view";
 
 export default function ReplayPage() {
   return (
-    <Suspense fallback={<Loading label="Unrolling the transcript…" />}>
+    <Suspense fallback={<Loading label="Rewinding the tape…" />}>
       <ReplayView />
     </Suspense>
   );

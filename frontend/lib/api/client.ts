@@ -224,8 +224,6 @@ export const api = {
     request<PlayStartResponse>("/api/play/start", { method: "POST", json: body }),
 
   siege: (id: string) => request<SiegeDetail>(`/api/siege/${enc(id)}`),
-  /** A siege turn by turn, with the transcript, hash, HCS and inference checks recomputed. */
-  replay: (id: string) => request<ReplayData>(`/api/replay/${enc(id)}`),
   sendMessage: (id: string, text: string) =>
     request<MessageResponse>(`/api/siege/${enc(id)}/message`, { method: "POST", json: { text } }),
 
@@ -254,6 +252,24 @@ export const api = {
 
   /** Sets the httpOnly owner cookie. Throws ApiError(401) on a wrong key. */
   ownerLogin: (key: string) => request<{ ok: true }>("/api/owner", { method: "POST", json: { key } }),
+
+  // ─── Part 2 (types at the end of this file) ───
+  /**
+   * One call for the replay: siege + castle + events + proof, plus `verify` — the siege turn by
+   * turn with the transcript, hash, HCS and inference checks recomputed (lib/replay). 404 `siege_not_found`.
+   * `{ verify: false }` skips the recomputation (`verify: null`): for pollers like the wall that only
+   * need the scene, since on testnet each check reads Swarm and the mirror node.
+   */
+  replay: (id: string, opts: { verify?: boolean } = {}) =>
+    request<ReplayWithVerify>(`/api/replay/${enc(id)}${opts.verify === false ? "?verify=0" : ""}`),
+  /** Season counters, Hall boards, breaches and live ops (GET /api/stats). */
+  stats: () => request<StatsResponse>("/api/stats"),
+  /**
+   * Free recon as this browser (`visitor`, lib/hooks/useVisitor): the once-a-day claim is per
+   * visitor, not per arena wallet, so one person's recon never spends everyone else's.
+   */
+  playRecon: (body: { castleId: string; visitor?: string }) =>
+    request<PlayStartResponse>("/api/play/start", { method: "POST", json: { ...body, free: true } }),
 };
 
 export type Api = typeof api;
@@ -276,3 +292,139 @@ export async function asOwner<T>(
     return fn();
   }
 }
+
+// ─── Part 2 ─────────────────────────────────────────────────────────────────
+// Additive (plan §2.9): the replay and the season/Hall stats. Nothing above changes.
+
+/** One guard reply's 0G request, with what the vault-scoped proxy recorded for it (when it did). */
+export type ReplayRequest = {
+  turn: number;
+  requestId: string;
+  protectedToolCalled?: boolean;
+  /** Tool names the model called (proxy record, else the decision event). */
+  toolCalls?: string[];
+  promptHash?: string;
+  responseHash?: string;
+  model?: string;
+  /** Offline mock response (no 0G call happened). */
+  mock?: boolean;
+};
+
+export type ReplayProof = {
+  transcriptHash: string | null;
+  receipt: PaymentReceipt | null;
+  attempt: TxRef | null;
+  release: (TxRef & { amount: Amount }) | null;
+  requests: ReplayRequest[];
+  /** The call to the castle's protected tool that opened the vault (breaches), with its arguments. */
+  toolCall: { name: string; args: Record<string, unknown>; turn: number } | null;
+  /** The castle's HCS audit topic and this op's messages on it. */
+  hcs: { topicId: string | null; topicUrl?: string; messages: { seq: number | null; localSeq: number | null; state: "pending" | "submitted"; type: string; siegeId?: string; txId?: string; at: string }[] };
+};
+
+/** GET /api/replay/[id]: the op, its castle, its whole event feed and its proof, in one call. */
+export type ReplayResponse = { siege: Siege; castle: Castle; events: StoredSiegeEvent[]; proof: ReplayProof };
+
+/** What GET /api/replay/[id] returns: the replay plus the recomputed evidence (null if it couldn't be built). */
+export type ReplayWithVerify = ReplayResponse & { verify: ReplayData | null };
+
+/** The label the Hall prints with the op of the day (computed, not voted). */
+export const OP_OF_DAY_RULE = "op of the day = highest peak threat held in 24h";
+
+export type VaultEntry = {
+  castleId: string;
+  name: string;
+  guardianName: string;
+  personality: string;
+  title: string;
+  tier: Castle["tier"];
+  transport: Castle["transport"];
+  streak: number;
+  ops: number;
+  pot: Amount;
+  fee: Amount;
+  vaultState: VaultState;
+};
+
+export type OperatorEntry = {
+  /** `agent:<id>` for agents, the account id otherwise. */
+  id: string;
+  name: string;
+  account: string;
+  agentId: string | null;
+  /** Ops run, paid or recon. */
+  ops: number;
+  recon: number;
+  /** Paid breaches (recon never counts). */
+  breaches: number;
+  flagsSurvived: number;
+  bestThreat: number;
+  /** Sum of paid-out releases. */
+  earned: Amount;
+};
+
+export type OpOfDay = {
+  siegeId: string;
+  castleId: string;
+  castleName: string;
+  guardianName: string;
+  personality: string;
+  transport: Castle["transport"];
+  operator: string;
+  agentId: string | null;
+  status: "held" | "banished";
+  turns: number;
+  maxPressure: number;
+  endedAt: string;
+  rule: string;
+};
+
+export type BreachExhibit = {
+  siegeId: string;
+  castleId: string;
+  castleName: string;
+  guardianName: string;
+  personality: string;
+  tier: Castle["tier"];
+  transport: Castle["transport"];
+  operator: string;
+  raider: string;
+  agentId: string | null;
+  /** Paid out (pot + fee); null while the release is settling. */
+  amount: Amount | null;
+  release: TxRef | null;
+  turns: number;
+  maxPressure: number;
+  /** Paid ops this guard held before it fell. */
+  survived: number;
+  /** Class of the line that did it (lib/scene/classes AttackClass) and the referee's label. */
+  cls: string | null;
+  label: string | null;
+  endedAt: string;
+};
+
+export type LiveOp = {
+  siegeId: string;
+  castleId: string;
+  castleName: string;
+  turn: number;
+  maxPressure: number;
+  operator: string;
+  agentId: string | null;
+  free: boolean;
+  createdAt: string;
+  /** Last sign of life: the newest message, else the start. Ops idle past `LIVE_IDLE_MS` are not listed. */
+  lastActiveAt: string;
+};
+
+/** An op nobody has written to for this long is abandoned, not live (the wall's LIVE OP skips it). */
+export const LIVE_IDLE_MS = 3 * 60 * 1000;
+
+/** GET /api/stats: season counters, Hall boards, paid breaches (newest first), live ops (highest threat first). */
+export type StatsResponse = {
+  season: { vaults: number; guarding: number; production: number; ops: number; recon: number; breaches: number; inPots: Amount; longestStreak: number };
+  boards: { unbreached: VaultEntry[]; largest: VaultEntry[]; operators: OperatorEntry[]; opOfDay: OpOfDay | null; opOfDayRule: string };
+  breaches: BreachExhibit[];
+  live: LiveOp[];
+  asOf: string;
+};
