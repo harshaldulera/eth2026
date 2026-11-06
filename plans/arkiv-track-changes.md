@@ -61,7 +61,7 @@ On Arkiv only the owner may edit an entity, so a castle becomes two entities:
 
 Visible to users: "owned by 0x…" on every card with an explorer link; a Castellan deleting their `castle` entity removes their listing; the live numbers still come from `castleState`.
 
-**Needs from Lane A (notice, not a question):** a Castellan wallet address column on `castles` (an EVM address, since Arkiv cannot use a Hedera `0.0.x` id as owner), set when a castle is created. The Build a Guardian form (Lane C) collects it. Seeded castles get generated addresses. Sieges and profiles stay arena-owned.
+**Built (PR #6).** No new column and no form field: the Castellan's wallet is the EVM address of the Hedera account that owns the vault, resolved with Lane A's `accountEvmAddress` (mirror-node alias, long-zero fallback, deterministic for stub ids). The same key that owns the vault on Hedera owns the listing on Arkiv. Verified on Rabdi: six listings owned by their Castellans, readonly, expiring at the vault deadline. Sieges and profiles stay arena-owned.
 
 ## 5. Keep off Arkiv, stated in the docs (no decision)
 
