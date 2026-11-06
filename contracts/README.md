@@ -56,9 +56,9 @@ The game-vocabulary version (owner, operator, opId, `Breached`, `ownerBalance`, 
 
 **Redeploying for this version**, in order:
 
-1. With the old `VAULT_ADDRESS` still set, let the worker settle or void every in-flight op, then close each open vault (`POST /api/castles/<id>/close`, or `closeVault` with reason 2 from the arena key) so its pot is refunded on the old contract.
+1. **Before** pulling this version: with the old code and the old `VAULT_ADDRESS` still running, let the worker settle or void every in-flight op (a paid breach waiting for its payout blocks a close), then close each open vault (`POST /api/castles/<id>/close`, or `closeVault` with reason 2 from the arena key) so its pot is refunded on the old contract. This version's worker refuses to start against the old contract, and could not pay its breaches anyway.
 2. Deploy (below) and set the new `VAULT_ADDRESS` in `frontend/.env.local`.
-3. `npm run seed`: it notices every vault tagged with the old address and opens a new one (an SDK vault goes back to `created` until its harness connects again).
+3. `npm run seed`: it notices every vault tagged with the old address and opens a new one. The SDK vault forgets its old vault and goes back to `created`, with a fresh deadline, until its harness connects again.
 4. Verify the new contract on Sourcify (exact match), so HashScan decodes `Breached`, `ownerCut` and the rest.
 5. Update the root README: the `SiegeVault` address and its Sourcify note, the proof links for `recordAttempt` and `release` (re-run the golden run), and the HashScan contract tab in `docs/demo-script.md`.
 

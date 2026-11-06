@@ -185,19 +185,27 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
 
     if (sdk) {
       // The SDK castle is never funded by seed: the harness has to connect and pass its smoke siege first.
+      // A vault on another contract (a redeploy) is forgotten whatever else happens, with a fresh
+      // deadline: otherwise the worker's chain-state check refuses to start on it, or its
+      // expired-vault close takes the castle before the harness can connect.
+      const forget = () =>
+        db()
+          .update(C)
+          .set({ vaultId: null, vaultAddress: null, potTinybar: f.potTinybar, streak: f.streak, deadline: Date.now() + VAULT_DAYS * 24 * 60 * 60 * 1000 })
+          .where(eq(C.id, row.id))
+          .run();
       if (rearm && row.vaultState !== "created") {
         if (row.vaultId != null && !foreign && row.status === "open" && VAULT_OPEN_STATES.has(row.vaultState)) {
           const c = await closeCastle(row.id, "owner_closed", { awaitSideEffects: true });
           say(c.ok ? `    ✓ closed vault #${row.vaultId} (${formatHbar(BigInt(c.refunded))} back to the castellan)` : `    ✗ closeVault: ${c.reason}`);
         }
-        db().update(C).set({ potTinybar: f.potTinybar, streak: f.streak }).where(eq(C.id, row.id)).run();
+        db().update(C).set({ potTinybar: f.potTinybar, streak: f.streak, deadline: Date.now() + VAULT_DAYS * 24 * 60 * 60 * 1000 }).where(eq(C.id, row.id)).run();
         await step(row.id, "created", "re-armed: waiting for the external harness to connect", true);
+        if (foreign) forget();
       } else if (foreign) {
-        // The vault lived on another contract (a redeploy): forget it, or the worker's chain-state
-        // check refuses to start on this castle. The harness re-runs its smoke op for a new vault.
         if (row.vaultState !== "created")
           await step(row.id, "created", `vault #${row.vaultId} was on ${recorded ?? "an unknown contract"}: waiting for the harness again`, true);
-        db().update(C).set({ vaultId: null, vaultAddress: null, potTinybar: f.potTinybar, streak: f.streak }).where(eq(C.id, row.id)).run();
+        forget();
       }
       continue;
     }

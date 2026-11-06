@@ -116,14 +116,16 @@ export async function contractProblems(): Promise<string[]> {
   const e = env();
   if (e.CHAIN_MODE === "stub") return [];
   if (!e.VAULT_ADDRESS) return ["VAULT_ADDRESS is not set (required when CHAIN_MODE=testnet)"];
-  const [{ publicClient }, { siegeVaultAbi }, { releaseCompatProblems }] = await Promise.all([import("./evm"), import("./abi/SiegeVault"), import("./releaseSig")]);
+  const [{ publicClient, rpcChainId }, { siegeVaultAbi }, { releaseCompatProblems }] = await Promise.all([import("./evm"), import("./abi/SiegeVault"), import("./releaseSig")]);
   const vault = e.VAULT_ADDRESS as `0x${string}`;
   const client = publicClient();
   try {
     const [typehash, separator, chainId] = await Promise.all([
       client.readContract({ address: vault, abi: siegeVaultAbi, functionName: "RELEASE_TYPEHASH" }),
       client.readContract({ address: vault, abi: siegeVaultAbi, functionName: "DOMAIN_SEPARATOR" }),
-      client.getChainId(),
+      // The chain id releases are signed for (lib/chain/settle.ts): it throws chain_id_mismatch when
+      // the RPC disagrees with the configured network, so that fails here, not on every payout.
+      rpcChainId(),
     ]);
     return releaseCompatProblems({ chainId, vault, typehash, domainSeparator: separator });
   } catch (err) {
