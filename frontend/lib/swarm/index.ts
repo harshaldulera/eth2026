@@ -69,9 +69,9 @@ export function swarmPending(siegeId: string, now = Date.now()): SealedState {
  * opened (live mode only: the stub server has no secret), and a request to the worker to put it
  * back on Swarm in its next pass.
  */
-export function sealedCopy(siegeId: string, now = Date.now()): Transcript | null {
+export function sealedCopy(siegeId: string): Transcript | null {
   const t = liveSwarm()?.copy(siegeId) ?? null;
-  if (t) requestReupload(siegeId, now);
+  if (t) requestReupload(siegeId);
   return t;
 }
 

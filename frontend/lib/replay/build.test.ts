@@ -265,14 +265,19 @@ describe("tampering and odd shapes", () => {
     expect(r!.transcript.url).toBeUndefined();
   });
 
-  it("a live Swarm reference carries its gateway link, even when the read fails", async () => {
+  it("a live Swarm reference carries its gateway link; a server that cannot read Swarm says so instead of failing the check", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     const ref = "2b527e58fbaaab506f66bfcb558c5b39264a9fce549c720ec6e3c1e63ab7d65d";
     recordSwarmRef(id, ref);
     const r = await buildReplay(id);
     expect(r!.transcript).toMatchObject({ source: "database", ref, url: `https://api.gateway.ethswarm.org/bytes/${ref}` });
-    expect(check(r, "transcript")).toMatchObject({ state: "fail", detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, but the transcript could not be read from it` });
+    // The test runner is a stub server: no secret, no gateway read. Not a tamper verdict.
+    expect(check(r, "transcript")).toMatchObject({ state: "na", detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, not read: this server is not in SWARM_MODE=live, so it cannot open the sealed bytes` });
     expect(check(r, "transcript")?.href).toBeUndefined();
+    // A live server that got nothing back: that is a failure.
+    expect(transcriptCheck({ ref, source: "database", ended: true, sealed: null, canRead: true })).toMatchObject({ state: "fail", detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, but the transcript could not be read from it` });
+    // A stand-in reference that cannot be read is a failure on any server.
+    expect(transcriptCheck({ ref: `swarm-stub:${ref}`, source: "database", ended: true, sealed: null, canRead: false })).toMatchObject({ state: "fail" });
   });
 
   it("a sealed transcript whose upload never landed: pending while a worker is retrying it, stranded when none is", async () => {

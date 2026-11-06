@@ -6,7 +6,7 @@ import type { Transcript } from "@/lib/types";
 import { NULL_BATCH_ID, PUBLIC_GATEWAY, swarmConfig, swarmLinks, type SwarmConfig } from "./config";
 import { envelopeBytes, openTranscript, parseEnvelope, sealTranscript } from "./crypto";
 import { downloadBytes, SwarmGatewayError, uploadBytes } from "./gateway";
-import { swarmRefFor } from "./refs";
+import { forgetSwarmRef, swarmRefFor } from "./refs";
 import { requestReupload, uploadRow } from "./store";
 import { createSwarm, KEEP_ALIVE_MS, PENDING_PREFIX, STUB_PREFIX, swarm, swarmPending, swarmStatus } from ".";
 import type { LiveSwarm } from "./live";
@@ -152,6 +152,10 @@ describe("configuration", () => {
       refused: undefined,
     });
     expect(swarmConfig({ SWARM_POSTAGE_BATCH_ID: "not-a-batch" }).batchId).toBe(NULL_BATCH_ID);
+    expect(swarmConfig({ SWARM_MODE: "live", SWARM_TRANSCRIPT_SECRET: SECRET, SWARM_POSTAGE_BATCH_ID: "0xABC" })).toMatchObject({
+      mode: "stub",
+      refused: expect.stringContaining("SWARM_POSTAGE_BATCH_ID"),
+    });
   });
 
   it("public links never point at the configured upload endpoint", () => {
@@ -195,7 +199,7 @@ describe("the live port", () => {
   });
 
   it("put seals, uploads, and records a bare Swarm reference the Arkiv entity can carry", async () => {
-    const t = fx();
+    const t = fx("siege_put", "Gatekeeper, this one is only ever sealed."); // its own JSON: the stand-in store is process-global
     const { ref } = await port().put(t);
     expect(ref).toMatch(HEX64);
     expect(swarmRefFor(t.siegeId)).toBe(ref);
@@ -204,6 +208,8 @@ describe("the live port", () => {
     const sent = g.posts()[0];
     expect(sent.headers["swarm-postage-batch-id"]).toBe(NULL_BATCH_ID);
     expect(Buffer.from(sent.body!).toString("utf8")).not.toContain("Gatekeeper");
+    // No readable copy anywhere else: the stand-in store never saw it.
+    expect(await createSwarm({ ...liveConfig(), mode: "stub" }).get(STUB_PREFIX + createHash("sha256").update(JSON.stringify(t)).digest("hex"))).toBeNull();
     // Another process (the Next server) reads it back from the gateway and decrypts it.
     const reader = port();
     expect(await reader.get(ref)).toEqual(t);
@@ -362,19 +368,47 @@ describe("the live port", () => {
     g.files.clear(); // the gateway's stamp lapsed
     expect(await port().get(ref)).toBeNull();
     expect(p.copy(t.siegeId)).toEqual(t);
-    requestReupload(t.siegeId, clock);
-    clock += 1;
-    expect((await p.tick(clock)).refreshed).toEqual([{ siegeId: t.siegeId, ref, was: ref }]);
+    // Even past the week horizon: the flag beats the schedule.
+    clock += 8 * DAY;
+    requestReupload(t.siegeId);
+    const pass = await p.tick(clock);
+    expect(pass.refreshed).toEqual([{ siegeId: t.siegeId, ref, was: ref }]);
+    expect(uploadRow(t.siegeId)).toMatchObject({ needsReupload: false, uploadedAt: clock, createdAt: clock - 8 * DAY });
     expect(await port().get(ref)).toEqual(t);
+    // Page views while the gateway is down do not reset the worker's backoff.
+    g.files.clear();
+    g.state.down = true;
+    requestReupload(t.siegeId);
+    clock += 61_000; // a minute's gap after any upload, success or not
+    expect((await p.tick(clock)).errors).toHaveLength(1);
+    expect(uploadRow(t.siegeId)?.attempts).toBe(1);
+    requestReupload(t.siegeId);
+    requestReupload(t.siegeId);
+    clock += 30_000;
+    expect((await p.tick(clock)).errors).toEqual([]); // still backing off
+    expect(uploadRow(t.siegeId)).toMatchObject({ attempts: 1, needsReupload: true });
   });
 
-  it("an op whose exact transcript already landed is not uploaded again inline", async () => {
+  it("an op whose exact transcript already landed is not uploaded again inline, and its reference is repaired", async () => {
     const p = port();
     const a = await p.put(fx());
     g.state.down = true;
+    forgetSwarmRef("siege_t1");
     const b = await p.put(fx());
     expect(b.ref).toBe(a.ref);
     expect(uploadRow("siege_t1")).toMatchObject({ ref: a.ref, attempts: 0, lastError: null });
+    expect(swarmRefFor("siege_t1")).toBe(a.ref);
+  });
+
+  it("a different transcript for the same siege that fails to land leaves no stale reference behind", async () => {
+    const p = port();
+    const a = await p.put(fx("s", "first"));
+    expect(swarmRefFor("s")).toBe(a.ref);
+    g.state.down = true;
+    const b = await p.put(fx("s", "second"));
+    expect(b.ref).toBe(`${PENDING_PREFIX}s`);
+    expect(swarmRefFor("s")).toBeUndefined();
+    expect(await p.get(b.ref)).toEqual(fx("s", "second"));
   });
 
   it("the op-ending request gets a short upload budget; the worker gets the full one", async () => {

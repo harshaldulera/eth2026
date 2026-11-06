@@ -13,6 +13,11 @@ export function recordSwarmRef(siegeId: string, ref: string): void {
     .run(siegeId, ref, new Date().toISOString());
 }
 
+/** The siege's transcript changed and the new one has not landed: no reference is better than a stale one. */
+export function forgetSwarmRef(siegeId: string): void {
+  sql().prepare("DELETE FROM swarm_refs WHERE siege_id = ?").run(siegeId);
+}
+
 export function swarmRefFor(siegeId: string): string | undefined {
   return (sql().prepare("SELECT ref FROM swarm_refs WHERE siege_id = ?").get(siegeId) as { ref: string } | undefined)?.ref;
 }

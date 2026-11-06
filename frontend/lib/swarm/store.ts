@@ -14,9 +14,22 @@ import { rawSqlite } from "@/lib/db/raw";
 const DDL = `
   CREATE TABLE IF NOT EXISTS swarm_uploads (
     siege_id TEXT PRIMARY KEY, body BLOB NOT NULL, transcript_hash TEXT NOT NULL, ref TEXT,
-    created_at INTEGER NOT NULL, uploaded_at INTEGER, tried_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT);
+    created_at INTEGER NOT NULL, uploaded_at INTEGER, tried_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+    needs_reupload INTEGER NOT NULL DEFAULT 0);
   CREATE TABLE IF NOT EXISTS swarm_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`;
-const sql = () => rawSqlite(DDL);
+const altered = new WeakSet<object>();
+function sql() {
+  const s = rawSqlite(DDL);
+  if (!altered.has(s)) {
+    try {
+      s.exec("ALTER TABLE swarm_uploads ADD COLUMN needs_reupload INTEGER NOT NULL DEFAULT 0");
+    } catch {
+      // column already there
+    }
+    altered.add(s);
+  }
+  return s;
+}
 
 export type UploadRow = {
   siegeId: string;
@@ -28,9 +41,22 @@ export type UploadRow = {
   triedAt: number | null;
   attempts: number;
   lastError: string | null;
+  /** A replay found Swarm not answering for the reference: re-upload in the next pass, whatever the schedule. */
+  needsReupload: boolean;
 };
 
-type Raw = { siege_id: string; body: Buffer; transcript_hash: string; ref: string | null; created_at: number; uploaded_at: number | null; tried_at: number | null; attempts: number; last_error: string | null };
+type Raw = {
+  siege_id: string;
+  body: Buffer;
+  transcript_hash: string;
+  ref: string | null;
+  created_at: number;
+  uploaded_at: number | null;
+  tried_at: number | null;
+  attempts: number;
+  last_error: string | null;
+  needs_reupload: number;
+};
 const fromRaw = (r: Raw): UploadRow => ({
   siegeId: r.siege_id,
   body: new Uint8Array(r.body),
@@ -41,6 +67,7 @@ const fromRaw = (r: Raw): UploadRow => ({
   triedAt: r.tried_at,
   attempts: r.attempts,
   lastError: r.last_error,
+  needsReupload: r.needs_reupload === 1,
 });
 
 /** Remember the sealed bytes for a siege. A different transcript for the same siege starts over; the same one keeps its reference. */
@@ -57,16 +84,20 @@ export function rememberUpload(siegeId: string, body: Uint8Array, transcriptHash
 }
 
 export function markUploaded(siegeId: string, ref: string, now = Date.now()): void {
-  sql().prepare("UPDATE swarm_uploads SET ref = ?, uploaded_at = ?, tried_at = ?, attempts = 0, last_error = NULL WHERE siege_id = ?").run(ref, now, now, siegeId);
+  sql().prepare("UPDATE swarm_uploads SET ref = ?, uploaded_at = ?, tried_at = ?, attempts = 0, last_error = NULL, needs_reupload = 0 WHERE siege_id = ?").run(ref, now, now, siegeId);
 }
 
 export function markFailed(siegeId: string, error: string, now = Date.now()): void {
   sql().prepare("UPDATE swarm_uploads SET attempts = attempts + 1, tried_at = ?, last_error = ? WHERE siege_id = ?").run(now, error.slice(0, 300), siegeId);
 }
 
-/** Swarm stopped answering for a landed reference: have the worker re-upload it in its next pass, and keep it alive for another week. */
-export function requestReupload(siegeId: string, now = Date.now()): void {
-  sql().prepare("UPDATE swarm_uploads SET uploaded_at = 0, created_at = ?, tried_at = NULL, attempts = 0 WHERE siege_id = ? AND ref IS NOT NULL").run(now, siegeId);
+/**
+ * Swarm stopped answering for a landed reference: have the worker re-upload it in its next pass,
+ * even past the week horizon. Only a flag: a public page view must not reset the worker's
+ * backoff or rewrite when the transcript was sealed or last uploaded.
+ */
+export function requestReupload(siegeId: string): void {
+  sql().prepare("UPDATE swarm_uploads SET needs_reupload = 1 WHERE siege_id = ? AND ref IS NOT NULL").run(siegeId);
 }
 
 export function uploadRow(siegeId: string): UploadRow | null {
@@ -88,11 +119,17 @@ export function pendingUploads(now: number, limit = 20): UploadRow[] {
   return (sql().prepare(`SELECT * FROM swarm_uploads WHERE ref IS NULL AND ${BACKOFF_SQL} ORDER BY created_at ASC LIMIT ?`).all(now, limit) as Raw[]).map(fromRaw);
 }
 
-/** Rows last uploaded before `before` (and created after `since`) whose backoff has passed: due for a keep-alive re-upload. */
+/**
+ * Rows due for a keep-alive re-upload: last uploaded before `before` and created after `since`,
+ * or flagged by a replay (then the horizon does not apply); in both cases once the backoff has passed.
+ */
 export function staleUploads(before: number, since: number, now: number, limit = 20): UploadRow[] {
   return (
     sql()
-      .prepare(`SELECT * FROM swarm_uploads WHERE ref IS NOT NULL AND uploaded_at < ? AND created_at >= ? AND ${BACKOFF_SQL} ORDER BY uploaded_at ASC LIMIT ?`)
+      .prepare(
+        `SELECT * FROM swarm_uploads WHERE ref IS NOT NULL AND ((uploaded_at < ? AND created_at >= ?) OR needs_reupload = 1) AND ${BACKOFF_SQL}
+         ORDER BY needs_reupload DESC, uploaded_at ASC LIMIT ?`,
+      )
       .all(before, since, now, limit) as Raw[]
   ).map(fromRaw);
 }

@@ -33,10 +33,12 @@ export function swarmConfig(e: Record<string, string | undefined> = process.env)
   const rawSecret = (e.SWARM_TRANSCRIPT_SECRET ?? "").trim().replace(/^0x/, "");
   const secret = HEX64.test(rawSecret) ? rawSecret.toLowerCase() : undefined;
   const rawBatch = (e.SWARM_POSTAGE_BATCH_ID ?? "").trim().replace(/^0x/, "");
+  const batchOk = rawBatch === "" || HEX64.test(rawBatch);
   const batchId = HEX64.test(rawBatch) ? rawBatch.toLowerCase() : NULL_BATCH_ID;
   const gatewayUrl = ((e.SWARM_GATEWAY_URL ?? "").trim() || PUBLIC_GATEWAY).replace(/\/+$/, "");
   let refused: string | undefined;
   if (wantsLive && !secret) refused = "SWARM_TRANSCRIPT_SECRET is missing or not 32 bytes of hex (openssl rand -hex 32)";
+  else if (wantsLive && !batchOk) refused = "SWARM_POSTAGE_BATCH_ID is set but not a 64-hex batch id (leave it unset for the public gateway)";
   else if (wantsLive && e.VITEST) refused = "the test runner never uploads";
   return { mode: wantsLive && !refused ? "live" : "stub", gatewayUrl, batchId, secret, refused };
 }

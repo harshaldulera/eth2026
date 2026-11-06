@@ -14,7 +14,7 @@ import { auditBacklog, chainStateProblems } from "@/lib/chain";
 import { db } from "@/lib/db";
 import { guardianMode } from "@/lib/transport";
 import { isArkivLive } from "@/lib/arkiv/config";
-import { isSwarmLive, swarmStatus } from "@/lib/swarm";
+import { swarmConfig, swarmStatus } from "@/lib/swarm";
 import { agentsTick } from "./agents";
 import { arkivTick } from "./arkiv";
 import { auditTick } from "./audit";
@@ -70,10 +70,11 @@ export function main(): void {
     loops.push(loop("arkiv", arkivTick, () => stopping));
   }
   // Lane C: retry and keep alive the sealed transcripts on Swarm.
-  if (isSwarmLive()) {
+  const sc = swarmConfig();
+  if (sc.mode === "live") {
     log.info(`swarm: ${swarmStatus()}`);
     loops.push(loop("swarm", swarmTick, () => stopping));
-  } else if (process.env.SWARM_MODE?.trim().toLowerCase() === "live") log.fail(`swarm: ${swarmStatus()}`);
+  } else if (sc.refused) log.fail(`swarm: ${swarmStatus()}`);
   const done = Promise.all(loops);
   const shutdown = (sig: string) => {
     if (stopping) process.exit(1);

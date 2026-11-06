@@ -3,13 +3,14 @@
  * content-addressed JSON, ref = "swarm-stub:<sha256 of the JSON>". Kept in memory and, outside
  * tests, mirrored to data/swarm/<sha>.json so a restarted server can still serve it.
  *
- * The live port (./live.ts) also keeps a copy here of every transcript it seals, so a replay can be
- * served while an upload is still pending.
+ * The live port (./live.ts) reads these references too, for sieges that ended before the mode went
+ * live; it never writes here.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { SwarmPort, Transcript } from "@/lib/types";
+import { REFERENCE_RE } from "./gateway";
 import { recordSwarmRef } from "./refs";
 
 const g = globalThis as unknown as { __swarmStub?: Map<string, Transcript> };
@@ -41,7 +42,7 @@ export function stubRead(ref: string): Transcript | null {
   if (hit) return hit;
   if (!ref.startsWith(STUB_PREFIX)) return null;
   const sha = ref.slice(STUB_PREFIX.length);
-  if (!/^[0-9a-f]{64}$/.test(sha)) return null;
+  if (!REFERENCE_RE.test(sha)) return null;
   try {
     const t = JSON.parse(readFileSync(path.join(dir(), `${sha}.json`), "utf8")) as Transcript;
     store.set(ref, t);

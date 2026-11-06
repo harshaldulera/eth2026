@@ -5,7 +5,8 @@
  *
  * References: a live one is the bare 64-hex Swarm reference (openable at <gateway>/bytes/<ref>).
  * "swarm-pending:<siegeId>" means the upload has not landed yet; the worker retries it and the
- * transcript is served from the local copy meanwhile. "swarm-stub:…" is the stand-in store.
+ * transcript is opened from the sealed bytes in swarm_uploads meanwhile. "swarm-stub:…" is the
+ * stand-in store (read here too, for sieges that ended before the mode went live).
  *
  * `put` runs inside the request that ends the op, so it gets a short budget (INLINE_TIMEOUT_MS)
  * and hands anything slower to the worker, which uploads with the full UPLOAD_TIMEOUT_MS.
@@ -16,9 +17,9 @@ import type { SwarmPort, Transcript } from "@/lib/types";
 import type { SwarmConfig } from "./config";
 import { envelopeBytes, openTranscript, parseEnvelope, sealTranscript } from "./crypto";
 import { downloadBytes, REFERENCE_RE, SwarmGatewayError, UPLOAD_TIMEOUT_MS, uploadBytes } from "./gateway";
-import { recordSwarmRef } from "./refs";
+import { forgetSwarmRef, recordSwarmRef } from "./refs";
 import { markFailed, markUploaded, pendingUploads, rememberUpload, staleUploads, touchWorker, uploadRef, uploadRow } from "./store";
-import { STUB_PREFIX, stubRead, stubStore } from "./stub";
+import { STUB_PREFIX, stubRead } from "./stub";
 
 export const PENDING_PREFIX = "swarm-pending:";
 /** How long the op-ending request waits for the gateway before leaving the upload to the worker. */
@@ -94,14 +95,18 @@ export function createLiveSwarm(config: SwarmConfig, deps: LiveDeps = {}): LiveS
     async put(transcript) {
       const known = uploadRef(transcript.siegeId);
       const landed = known?.ref;
-      if (landed && known.transcriptHash === transcript.transcriptHash.toLowerCase()) {
+      const hash = transcript.transcriptHash.toLowerCase();
+      if (landed && known.transcriptHash === hash) {
         // Already on Swarm with these exact bytes: nothing to upload; the keep-alive refreshes it.
         remember(landed, transcript);
+        recordSwarmRef(transcript.siegeId, landed); // repairs a missing swarm_refs row
         return { ref: landed };
       }
       const body = envelopeBytes(sealTranscript(transcript, secret));
-      stubStore(transcript); // a local copy, so a replay works while the upload is pending
+      // The sealed bytes in swarm_uploads are the local copy; nothing readable is written anywhere else.
       rememberUpload(transcript.siegeId, body, transcript.transcriptHash, now());
+      // A different transcript for this siege: until it lands, no reference beats a stale one.
+      if (known && known.transcriptHash !== hash) forgetSwarmRef(transcript.siegeId);
       try {
         const ref = await send(transcript.siegeId, body, INLINE_TIMEOUT_MS);
         remember(ref, transcript);
