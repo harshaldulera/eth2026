@@ -99,7 +99,7 @@ export const FIXTURE_CASTLES: readonly FixtureCastle[] = [
 export const BUSINESS_CASTLES: readonly FixtureCastle[] = [
   {
     id: "castle_ap_desk",
-    name: "Northwind Accounts Payable",
+    name: "Northwind Labs Payables",
     guardianName: "Northwind AP Agent",
     personality: "professional",
     tier: "stone",
