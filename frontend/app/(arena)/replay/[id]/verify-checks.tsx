@@ -62,6 +62,7 @@ export function VerifyChecklist({ verify, className }: { verify: ReplayData; cla
 
 const SOURCE: Record<ReplayData["transcript"]["source"], string> = {
   swarm: "SWARM",
+  "swarm-copy": "THE SEALED COPY · SWARM DID NOT ANSWER",
   "swarm-stub": "SWARM (LOCAL STAND-IN)",
   database: "DATABASE",
 };

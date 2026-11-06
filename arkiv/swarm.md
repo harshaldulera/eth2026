@@ -55,7 +55,8 @@ We hold no postage batch. Uploads go through Swarm's public gateway, `https://ap
 The gateway's batches last about a day, and it does not top them up. A transcript uploaded on Friday would be gone by Saturday night. Two things handle that:
 
 1. **Keep-alive.** `worker/swarm.ts` re-uploads every transcript from the last week every 12 hours. Same bytes, same reference, now stamped by the gateway's current batch. The entity's `swarmRef` never changes.
-2. **Retry.** The op-ending request gives the gateway 4 seconds. If it is slow or down, the sealed bytes wait in `swarm_uploads` and the worker retries with backoff (1, 2, 4 … minutes, at most an hour) and a 10-second budget. Until it lands, the op entity has no `swarmRef` and the replay says "sealed, upload to Swarm pending". When it lands, the worker re-queues the op through the Arkiv port, so the entity gets its `swarmRef` after all.
+2. **Retry.** The op-ending request gives the gateway 4 seconds. If it is slow or down, the sealed bytes wait in `swarm_uploads` and the worker retries with backoff (1, 2, 4 … minutes, at most an hour) and a 10-second budget; the same backoff covers keep-alive failures, and a pass stops after three failures in a row rather than timing out on every row. Until it lands, the op entity has no `swarmRef` and the replay says "sealed, upload to Swarm pending" (or "no worker is running to retry it": the worker leaves a heartbeat in the database, so the page reports what is true across processes). When it lands, the worker re-queues the op through the Arkiv port, so the entity gets its `swarmRef` after all.
+3. **Revive on open.** If a replay's reference stops resolving (an outage, or a transcript past the one-week horizon), the page shows the sealed copy the arena kept, says so ("THE SEALED COPY · SWARM DID NOT ANSWER"), and marks the row for the worker to put back in its next pass.
 
 ## Files
 

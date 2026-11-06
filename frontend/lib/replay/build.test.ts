@@ -16,7 +16,8 @@ import { STUB_PAYMENT_HEADER } from "@/lib/pay";
 import { siege } from "@/lib/siege";
 import { voidHeadline } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
-import { rememberUpload } from "@/lib/swarm/store";
+import { recordSwarmRef } from "@/lib/swarm/refs";
+import { rememberUpload, touchWorker } from "@/lib/swarm/store";
 import { transitionVault } from "@/lib/vault/state";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { SDK_FIXTURE_CASTLE, sdkFixtureCastleRow } from "@/lib/fixtures/castles";
@@ -267,27 +268,41 @@ describe("tampering and odd shapes", () => {
   it("a live Swarm reference carries its gateway link, even when the read fails", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     const ref = "2b527e58fbaaab506f66bfcb558c5b39264a9fce549c720ec6e3c1e63ab7d65d";
-    db().run(`UPDATE swarm_refs SET ref = '${ref}' WHERE siege_id = '${id}'`);
+    recordSwarmRef(id, ref);
     const r = await buildReplay(id);
     expect(r!.transcript).toMatchObject({ source: "database", ref, url: `https://api.gateway.ethswarm.org/bytes/${ref}` });
     expect(check(r, "transcript")).toMatchObject({ state: "fail", detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, but the transcript could not be read from it` });
     expect(check(r, "transcript")?.href).toBeUndefined();
   });
 
-  it("a sealed transcript whose upload never landed: pending while live retries it, stranded once the mode is stub", async () => {
+  it("a sealed transcript whose upload never landed: pending while a worker is retrying it, stranded when none is", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     db().run("DELETE FROM swarm_refs");
     rememberUpload(id, new Uint8Array([1, 2, 3]), "0xabc");
-    // The test runner is always stub mode: nothing will retry this row, and the page must not promise it.
-    const r = await buildReplay(id);
+    // No worker has made a pass: the page must not promise a retry.
+    let r = await buildReplay(id);
     expect(r!.transcript.source).toBe("database");
-    expect(check(r, "transcript")).toMatchObject({ state: "na", detail: "sealed for Swarm but never uploaded, and SWARM_MODE is stub now (nothing retries it)" });
-    // Live mode, same row: the worker is on it.
-    expect(transcriptCheck({ source: "database", ended: true, sealed: "pending" })).toMatchObject({ state: "pending", detail: "sealed, upload to Swarm pending (the worker retries it)" });
+    expect(check(r, "transcript")).toMatchObject({ state: "na", detail: "sealed for Swarm but never uploaded, and no worker is running to retry it" });
+    // A worker made a pass a moment ago (its heartbeat is in the database, whatever this process's mode).
+    touchWorker(Date.now() - 60_000);
+    r = await buildReplay(id);
+    expect(check(r, "transcript")).toMatchObject({ state: "pending", detail: "sealed, upload to Swarm pending (the worker retries it)" });
+    touchWorker(Date.now() - 10 * 60_000);
+    expect(check(await buildReplay(id), "transcript")?.state).toBe("na");
+    // The other wordings.
     expect(transcriptCheck({ source: "database", ended: false, sealed: null })).toMatchObject({ state: "pending", detail: "uploaded when the op ends" });
     expect(transcriptCheck({ source: "database", ended: true, sealed: null })).toMatchObject({ state: "na", detail: "no Swarm reference recorded for this op" });
     const ref = "ab".repeat(32);
     expect(transcriptCheck({ ref, source: "swarm", ended: true, sealed: null, refUrl: `https://x/${ref}` })).toMatchObject({ state: "pass", label: "Transcript read from Swarm", href: `https://x/${ref}` });
+    expect(transcriptCheck({ ref, source: "swarm-copy", ended: true, sealed: null, workerAlive: true })).toMatchObject({
+      state: "pending",
+      label: "Transcript read from the sealed copy kept for Swarm",
+      detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, Swarm did not answer for it; the worker is putting the sealed copy back`,
+    });
+    expect(transcriptCheck({ ref, source: "swarm-copy", ended: true, sealed: null, workerAlive: false })).toMatchObject({
+      state: "fail",
+      detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, Swarm did not answer for it, and no worker is running to put the sealed copy back`,
+    });
   });
 
   it("held siege: five turns, no tool call, no verifier", async () => {

@@ -10,10 +10,10 @@
  *
  * The replay (lib/replay/build.ts) reads through `swarm.get` and says where the transcript came from.
  */
-import type { SwarmPort } from "@/lib/types";
-import { isSwarmLive, swarmConfig, type SwarmConfig } from "./config";
+import type { SwarmPort, Transcript } from "@/lib/types";
+import { swarmConfig, type SwarmConfig } from "./config";
 import { createLiveSwarm, type LiveDeps, type LiveSwarm } from "./live";
-import { uploadRow, uploadStats } from "./store";
+import { requestReupload, uploadRef, uploadStats, workerSeenAt } from "./store";
 import { swarmStub } from "./stub";
 
 export { isSwarmLive, swarmConfig, swarmLinks, NULL_BATCH_ID, PUBLIC_GATEWAY } from "./config";
@@ -44,16 +44,35 @@ export const swarm: SwarmPort = {
   get: (ref) => (liveSwarm() ?? swarmStub).get(ref),
 };
 
+/** A live Swarm worker that made a pass this recently is retrying uploads. */
+export const WORKER_STALE_MS = 3 * 60_000;
+export const swarmWorkerAlive = (now = Date.now()) => {
+  const seen = workerSeenAt();
+  return seen !== null && now - seen < WORKER_STALE_MS;
+};
+
 /**
- * A siege whose transcript was sealed but never landed on Swarm: "pending" while the worker is
- * retrying it (live mode), "stranded" if the mode has since gone back to stub (nothing retries),
- * null otherwise. Live mode writes these rows; stub mode never does.
+ * A siege whose transcript was sealed but never landed on Swarm: "pending" while a worker is
+ * retrying it, "stranded" when no worker has made a pass lately (nothing retries it), null
+ * otherwise. Decided from the worker's heartbeat in the database, not from this process's env:
+ * the worker and the Next server are separate processes with separate settings.
  */
 export type SealedState = "pending" | "stranded" | null;
-export function swarmPending(siegeId: string, live = isSwarmLive()): SealedState {
-  const row = uploadRow(siegeId);
+export function swarmPending(siegeId: string, now = Date.now()): SealedState {
+  const row = uploadRef(siegeId);
   if (!row || row.ref) return null;
-  return live ? "pending" : "stranded";
+  return swarmWorkerAlive(now) ? "pending" : "stranded";
+}
+
+/**
+ * For a replay whose reference Swarm does not serve right now: the sealed copy this server keeps,
+ * opened (live mode only: the stub server has no secret), and a request to the worker to put it
+ * back on Swarm in its next pass.
+ */
+export function sealedCopy(siegeId: string, now = Date.now()): Transcript | null {
+  const t = liveSwarm()?.copy(siegeId) ?? null;
+  if (t) requestReupload(siegeId, now);
+  return t;
 }
 
 /** The startup line and the docs: what this process will do with transcripts. */

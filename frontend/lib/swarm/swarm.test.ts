@@ -7,7 +7,7 @@ import { NULL_BATCH_ID, PUBLIC_GATEWAY, swarmConfig, swarmLinks, type SwarmConfi
 import { envelopeBytes, openTranscript, parseEnvelope, sealTranscript } from "./crypto";
 import { downloadBytes, SwarmGatewayError, uploadBytes } from "./gateway";
 import { swarmRefFor } from "./refs";
-import { uploadRow } from "./store";
+import { requestReupload, uploadRow } from "./store";
 import { createSwarm, KEEP_ALIVE_MS, PENDING_PREFIX, STUB_PREFIX, swarm, swarmPending, swarmStatus } from ".";
 import type { LiveSwarm } from "./live";
 
@@ -200,7 +200,7 @@ describe("the live port", () => {
     expect(ref).toMatch(HEX64);
     expect(swarmRefFor(t.siegeId)).toBe(ref);
     expect(uploadRow(t.siegeId)).toMatchObject({ ref, attempts: 0, uploadedAt: clock, transcriptHash: t.transcriptHash });
-    expect(swarmPending(t.siegeId, true)).toBeNull();
+    expect(swarmPending(t.siegeId, clock)).toBeNull();
     const sent = g.posts()[0];
     expect(sent.headers["swarm-postage-batch-id"]).toBe(NULL_BATCH_ID);
     expect(Buffer.from(sent.body!).toString("utf8")).not.toContain("Gatekeeper");
@@ -236,17 +236,18 @@ describe("the live port", () => {
     const { ref } = await p.put(t);
     expect(ref).toBe(PENDING_PREFIX + t.siegeId);
     expect(swarmRefFor(t.siegeId)).toBeUndefined();
-    expect(swarmPending(t.siegeId, true)).toBe("pending");
-    expect(swarmPending(t.siegeId, false)).toBe("stranded");
-    expect(swarmPending(t.siegeId)).toBe("stranded"); // the test runner is stub mode
+    expect(swarmPending(t.siegeId, clock)).toBe("stranded"); // no worker has made a pass yet
     expect(uploadRow(t.siegeId)).toMatchObject({ ref: null, attempts: 1, lastError: expect.stringContaining("fetch failed") });
     expect(await p.get(ref)).toEqual(t);
+    expect(p.copy(t.siegeId)).toEqual(t);
+    expect(p.copy("siege_nobody")).toBeNull();
 
     // Backoff: one minute after the first failure, then doubling.
     g.state.down = false;
     clock += 30_000;
     expect(await p.tick(clock)).toEqual({ uploaded: [], refreshed: [], errors: [] });
     expect(g.posts()).toHaveLength(0);
+    expect(swarmPending(t.siegeId, clock)).toBe("pending"); // the pass left the worker's heartbeat
     clock += 31_000;
     const pass = await p.tick(clock);
     expect(pass.uploaded).toHaveLength(1);
@@ -254,7 +255,7 @@ describe("the live port", () => {
     const landed = swarmRefFor(t.siegeId)!;
     expect(landed).toMatch(HEX64);
     expect(pass.uploaded[0]).toEqual({ siegeId: t.siegeId, ref: landed });
-    expect(swarmPending(t.siegeId, true)).toBeNull();
+    expect(swarmPending(t.siegeId, clock)).toBeNull();
     expect(uploadRow(t.siegeId)).toMatchObject({ ref: landed, attempts: 0, lastError: null, uploadedAt: clock });
     expect(await port().get(landed)).toEqual(t);
   });
@@ -306,6 +307,74 @@ describe("the live port", () => {
     expect(pass.refreshed).toEqual([]);
     expect(pass.errors).toEqual([`${fresh.siegeId}: keep-alive upload to ${GW} failed: fetch failed`]);
     expect(swarmRefFor(fresh.siegeId)).toMatch(HEX64); // the old reference stands
+    expect(uploadRow(fresh.siegeId)).toMatchObject({ attempts: 1, lastError: `keep-alive upload to ${GW} failed: fetch failed` });
+    // Backoff applies to keep-alive too; then it lands.
+    g.state.down = false;
+    clock += 30_000;
+    expect((await p.tick(clock)).refreshed).toEqual([]);
+    clock += 31_000;
+    expect((await p.tick(clock)).refreshed).toHaveLength(1);
+    expect(uploadRow(fresh.siegeId)).toMatchObject({ attempts: 0, lastError: null, uploadedAt: clock });
+  });
+
+  it("a dead gateway stops a pass after three failures instead of timing out on every row", async () => {
+    const p = port();
+    for (let i = 0; i < 6; i++) await p.put(fx(`siege_${i}`));
+    clock += KEEP_ALIVE_MS + 1;
+    g.state.down = true;
+    const pass = await p.tick(clock);
+    expect(pass.errors).toHaveLength(4);
+    expect(pass.errors[3]).toBe("3 failures in a row: the gateway is not answering, stopping this pass");
+    const tried = [0, 1, 2, 3, 4, 5].map((i) => uploadRow(`siege_${i}`)!.attempts);
+    expect(tried.filter((a) => a === 1)).toHaveLength(3);
+    expect(tried.filter((a) => a === 0)).toHaveLength(3);
+  });
+
+  it("a reference the gateway could not serve is not asked for again for half a minute", async () => {
+    const p = port();
+    const ref = "ab".repeat(32);
+    expect(await p.get(ref)).toBeNull();
+    expect(await p.get(ref)).toBeNull();
+    expect(g.gets()).toHaveLength(1);
+    clock += 31_000;
+    await p.get(ref);
+    expect(g.gets()).toHaveLength(2);
+  });
+
+  it("a body that fails mid-stream is a SwarmGatewayError, so get() answers null instead of throwing", async () => {
+    const broken = (async () =>
+      new Response(
+        new ReadableStream({
+          pull(c) {
+            c.error(new Error("connection reset"));
+          },
+        }),
+      )) as unknown as typeof globalThis.fetch;
+    await expect(downloadBytes("ab".repeat(32), { gatewayUrl: GW, fetch: broken })).rejects.toMatchObject({ name: "SwarmGatewayError", message: expect.stringContaining("connection reset") });
+    const p = createSwarm(liveConfig(), { fetch: broken, now: () => clock }) as LiveSwarm;
+    expect(await p.get("ab".repeat(32))).toBeNull();
+  });
+
+  it("a replay whose reference Swarm stopped serving opens the sealed copy and asks the worker to put it back", async () => {
+    const p = port();
+    const t = fx();
+    const { ref } = await p.put(t);
+    g.files.clear(); // the gateway's stamp lapsed
+    expect(await port().get(ref)).toBeNull();
+    expect(p.copy(t.siegeId)).toEqual(t);
+    requestReupload(t.siegeId, clock);
+    clock += 1;
+    expect((await p.tick(clock)).refreshed).toEqual([{ siegeId: t.siegeId, ref, was: ref }]);
+    expect(await port().get(ref)).toEqual(t);
+  });
+
+  it("an op whose exact transcript already landed is not uploaded again inline", async () => {
+    const p = port();
+    const a = await p.put(fx());
+    g.state.down = true;
+    const b = await p.put(fx());
+    expect(b.ref).toBe(a.ref);
+    expect(uploadRow("siege_t1")).toMatchObject({ ref: a.ref, attempts: 0, lastError: null });
   });
 
   it("the op-ending request gets a short upload budget; the worker gets the full one", async () => {
@@ -347,6 +416,6 @@ describe("the live port", () => {
     expect(uploadRow("s")).toMatchObject({ ref: b.ref, transcriptHash: fx("s", "second").transcriptHash });
     const again = await p.put(fx("s", "second"));
     expect(again.ref).toBe(b.ref);
-    expect(g.posts()).toHaveLength(3);
+    expect(g.posts()).toHaveLength(2); // nothing to upload the third time
   });
 });

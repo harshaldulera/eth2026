@@ -65,7 +65,8 @@ export type ReplayData = {
   castle: Castle;
   transcript: {
     /** Where the transcript shown here was read from. */
-    source: "swarm" | "swarm-stub" | "database";
+    /** swarm-copy: Swarm did not answer for the reference; the sealed copy the arena kept is shown while the worker re-uploads it. */
+    source: "swarm" | "swarm-copy" | "swarm-stub" | "database";
     ref?: string;
     /** A live reference's bytes on the gateway (the sealed envelope: the text is encrypted). */
     url?: string;

@@ -28,6 +28,7 @@ const trim = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 200);
 export async function uploadBytes(body: Uint8Array, o: GatewayOpts): Promise<string> {
   const f = o.fetch ?? fetch;
   let res: Response;
+  let text: string;
   try {
     res = await f(`${o.gatewayUrl}/bytes`, {
       method: "POST",
@@ -35,10 +36,10 @@ export async function uploadBytes(body: Uint8Array, o: GatewayOpts): Promise<str
       body: body as unknown as BodyInit,
       signal: AbortSignal.timeout(o.timeoutMs ?? UPLOAD_TIMEOUT_MS),
     });
+    text = await res.text(); // the timeout covers the body too
   } catch (e) {
     throw new SwarmGatewayError(`upload to ${o.gatewayUrl} failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-  const text = await res.text();
   if (!res.ok) throw new SwarmGatewayError(`upload to ${o.gatewayUrl} refused: HTTP ${res.status} ${trim(text)}`, res.status);
   let ref: unknown;
   try {
@@ -54,13 +55,13 @@ export async function uploadBytes(body: Uint8Array, o: GatewayOpts): Promise<str
 export async function downloadBytes(ref: string, o: Omit<GatewayOpts, "batchId">): Promise<Uint8Array | null> {
   if (!REFERENCE_RE.test(ref)) return null;
   const f = o.fetch ?? fetch;
-  let res: Response;
   try {
-    res = await f(`${o.gatewayUrl}/bytes/${ref}`, { signal: AbortSignal.timeout(o.timeoutMs ?? UPLOAD_TIMEOUT_MS) });
+    const res = await f(`${o.gatewayUrl}/bytes/${ref}`, { signal: AbortSignal.timeout(o.timeoutMs ?? UPLOAD_TIMEOUT_MS) });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new SwarmGatewayError(`download from ${o.gatewayUrl} refused: HTTP ${res.status}`, res.status);
+    return new Uint8Array(await res.arrayBuffer()); // the timeout covers the body too
   } catch (e) {
+    if (e instanceof SwarmGatewayError) throw e;
     throw new SwarmGatewayError(`download from ${o.gatewayUrl} failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-  if (res.status === 404) return null;
-  if (!res.ok) throw new SwarmGatewayError(`download from ${o.gatewayUrl} refused: HTTP ${res.status}`, res.status);
-  return new Uint8Array(await res.arrayBuffer());
 }

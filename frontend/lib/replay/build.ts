@@ -17,7 +17,7 @@ import { verifier } from "@/lib/siege";
 import { getSiege, messageRows } from "@/lib/siege/read";
 import { reasonText, refundText, verifyText } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
-import { REFERENCE_RE, swarm, swarmLinks, swarmPending, type SealedState } from "@/lib/swarm";
+import { REFERENCE_RE, sealedCopy, swarm, swarmLinks, swarmPending, swarmWorkerAlive, type SealedState } from "@/lib/swarm";
 import { swarmRefFor } from "@/lib/swarm/refs";
 import type { SiegeMessage } from "@/lib/types";
 import type { HcsEntry, ReplayCheck, ReplayData, ReplayTurn } from "./types";
@@ -30,18 +30,32 @@ const ENDED = new Set(["held", "broken", "banished"]);
 const short = (h?: string | null) => (h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "");
 
 /** The "transcript on Swarm" line of the checklist. Pure, so every wording is testable without a gateway. */
-export function transcriptCheck(i: { ref?: string; source: ReplayData["transcript"]["source"]; ended: boolean; sealed: SealedState; refUrl?: string }): ReplayCheck {
-  const { ref, source, ended, sealed, refUrl } = i;
+export function transcriptCheck(i: { ref?: string; source: ReplayData["transcript"]["source"]; ended: boolean; sealed: SealedState; refUrl?: string; workerAlive?: boolean }): ReplayCheck {
+  const { ref, source, ended, sealed, refUrl, workerAlive } = i;
+  const LABEL: Record<ReplayData["transcript"]["source"], string> = {
+    swarm: "Transcript read from Swarm",
+    "swarm-copy": "Transcript read from the sealed copy kept for Swarm",
+    "swarm-stub": "Transcript read from the Swarm store (local stand-in)",
+    database: "Transcript read from the arena database",
+  };
   return {
     key: "transcript",
-    label: source === "swarm" ? "Transcript read from Swarm" : source === "swarm-stub" ? "Transcript read from the Swarm store (local stand-in)" : "Transcript read from the arena database",
-    state: ref ? (source === "database" ? "fail" : "pass") : sealed === "pending" || !ended ? "pending" : "na",
+    label: LABEL[source],
+    state: ref ? (source === "database" ? "fail" : source === "swarm-copy" ? (workerAlive ? "pending" : "fail") : "pass") : sealed === "pending" || !ended ? "pending" : "na",
     detail: ref
-      ? `reference ${short(ref.replace(/^swarm-stub:/, ""))}${source === "database" ? ", but the transcript could not be read from it" : ""}`
+      ? `reference ${short(ref.replace(/^swarm-stub:/, ""))}${
+          source === "database"
+            ? ", but the transcript could not be read from it"
+            : source === "swarm-copy"
+              ? workerAlive
+                ? ", Swarm did not answer for it; the worker is putting the sealed copy back"
+                : ", Swarm did not answer for it, and no worker is running to put the sealed copy back"
+              : ""
+        }`
       : sealed === "pending"
         ? "sealed, upload to Swarm pending (the worker retries it)"
         : sealed === "stranded"
-          ? "sealed for Swarm but never uploaded, and SWARM_MODE is stub now (nothing retries it)"
+          ? "sealed for Swarm but never uploaded, and no worker is running to retry it"
           : ended
             ? "no Swarm reference recorded for this op"
             : "uploaded when the op ends",
@@ -130,12 +144,21 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
     if (t?.messages?.length) {
       messages = t.messages;
       source = ref.startsWith("swarm-stub:") ? "swarm-stub" : "swarm";
+    } else if (REFERENCE_RE.test(ref)) {
+      // Swarm has nothing for the reference right now (gateway down, or its stamp lapsed): show the
+      // sealed copy kept here and have the worker put it back.
+      const copy = sealedCopy(siegeId, now);
+      if (copy?.messages?.length) {
+        messages = copy.messages;
+        source = "swarm-copy";
+      }
     }
   }
   /** A live reference is openable on the gateway (the bytes are the sealed envelope, not the text). */
   const refUrl = ref && REFERENCE_RE.test(ref) ? swarmLinks.bytes(ref) : undefined;
-  /** Sealed at siege end but never landed: the worker is retrying it, or nothing is (stub mode now). */
-  const sealed = ref ? null : swarmPending(siegeId);
+  /** Sealed at siege end but never landed: a worker is retrying it, or nothing is. */
+  const sealed = ref ? null : swarmPending(siegeId, now);
+  const workerAlive = swarmWorkerAlive(now);
   const recomputedHash = transcriptHash(messages);
   const storedHash = siege.transcriptHash;
   const transcriptMatches = storedHash ? storedHash.toLowerCase() === recomputedHash.toLowerCase() : null;
@@ -265,7 +288,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
 
   // ── The checklist ──────────────────────────────────────────────────────────────────────────────
   const checks: ReplayCheck[] = [];
-  checks.push(transcriptCheck({ ref, source, ended, sealed, refUrl }));
+  checks.push(transcriptCheck({ ref, source, ended, sealed, refUrl, workerAlive }));
   checks.push({
     key: "hash",
     label: "Transcript hash recomputed here matches the op's",

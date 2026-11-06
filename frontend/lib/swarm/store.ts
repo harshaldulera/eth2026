@@ -1,27 +1,22 @@
 /**
  * What the live port remembers in SQLite (next to swarm_refs, see ./refs.ts): one row per sealed
- * transcript, with the exact bytes that went (or should go) to Swarm.
+ * transcript, with the exact bytes that went (or should go) to Swarm, and a heartbeat from the
+ * worker that retries them.
  *
  *   ref NULL          the upload has not landed; worker/swarm.ts retries it with backoff
  *   uploaded_at       last successful upload; the worker re-uploads after KEEP_ALIVE_MS, because
  *                     the public gateway's stamps last about a day (see arkiv/swarm.md). The same
  *                     bytes give the same reference, so the entity's swarmRef never changes.
+ *   tried_at/attempts backoff for both retries and keep-alive re-uploads (1, 2, 4 … min, up to 1 h)
  */
-import { db } from "@/lib/db";
+import { rawSqlite } from "@/lib/db/raw";
 
-type Sqlite = { exec(sql: string): void; prepare(sql: string): { run(...a: unknown[]): unknown; get(...a: unknown[]): unknown; all(...a: unknown[]): unknown[] } };
-const ready = new WeakSet<object>();
-
-function sql(): Sqlite {
-  const s = (db() as unknown as { $client: Sqlite }).$client;
-  if (!ready.has(s)) {
-    s.exec(`CREATE TABLE IF NOT EXISTS swarm_uploads (
-      siege_id TEXT PRIMARY KEY, body BLOB NOT NULL, transcript_hash TEXT NOT NULL, ref TEXT,
-      created_at INTEGER NOT NULL, uploaded_at INTEGER, tried_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)`);
-    ready.add(s);
-  }
-  return s;
-}
+const DDL = `
+  CREATE TABLE IF NOT EXISTS swarm_uploads (
+    siege_id TEXT PRIMARY KEY, body BLOB NOT NULL, transcript_hash TEXT NOT NULL, ref TEXT,
+    created_at INTEGER NOT NULL, uploaded_at INTEGER, tried_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT);
+  CREATE TABLE IF NOT EXISTS swarm_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`;
+const sql = () => rawSqlite(DDL);
 
 export type UploadRow = {
   siegeId: string;
@@ -69,29 +64,36 @@ export function markFailed(siegeId: string, error: string, now = Date.now()): vo
   sql().prepare("UPDATE swarm_uploads SET attempts = attempts + 1, tried_at = ?, last_error = ? WHERE siege_id = ?").run(now, error.slice(0, 300), siegeId);
 }
 
+/** Swarm stopped answering for a landed reference: have the worker re-upload it in its next pass, and keep it alive for another week. */
+export function requestReupload(siegeId: string, now = Date.now()): void {
+  sql().prepare("UPDATE swarm_uploads SET uploaded_at = 0, created_at = ?, tried_at = NULL, attempts = 0 WHERE siege_id = ? AND ref IS NOT NULL").run(now, siegeId);
+}
+
 export function uploadRow(siegeId: string): UploadRow | null {
   const r = sql().prepare("SELECT * FROM swarm_uploads WHERE siege_id = ?").get(siegeId) as Raw | undefined;
   return r ? fromRaw(r) : null;
 }
 
+/** Just the reference column: `{ ref: null }` for a sealed transcript that has not landed, null for no row. */
+export function uploadRef(siegeId: string): { ref: string | null; transcriptHash: string } | null {
+  const r = sql().prepare("SELECT ref, transcript_hash FROM swarm_uploads WHERE siege_id = ?").get(siegeId) as { ref: string | null; transcript_hash: string } | undefined;
+  return r ? { ref: r.ref, transcriptHash: r.transcript_hash } : null;
+}
+
 /** Retry gaps after the 1st, 2nd, 3rd … failure: 1, 2, 4 … minutes, at most an hour. */
-const BACKOFF_SQL = "MIN(60000 * (1 << MIN(MAX(attempts - 1, 0), 10)), 3600000)";
+const BACKOFF_SQL = "(tried_at IS NULL OR tried_at + MIN(60000 * (1 << MIN(MAX(attempts - 1, 0), 10)), 3600000) <= ?)";
 
 /** Rows that never landed and whose backoff has passed, oldest first. */
 export function pendingUploads(now: number, limit = 20): UploadRow[] {
-  return (
-    sql()
-      .prepare(`SELECT * FROM swarm_uploads WHERE ref IS NULL AND (tried_at IS NULL OR tried_at + ${BACKOFF_SQL} <= ?) ORDER BY created_at ASC LIMIT ?`)
-      .all(now, limit) as Raw[]
-  ).map(fromRaw);
+  return (sql().prepare(`SELECT * FROM swarm_uploads WHERE ref IS NULL AND ${BACKOFF_SQL} ORDER BY created_at ASC LIMIT ?`).all(now, limit) as Raw[]).map(fromRaw);
 }
 
-/** Rows last uploaded before `before` (and created after `since`): due for a keep-alive re-upload. */
-export function staleUploads(before: number, since: number, limit = 20): UploadRow[] {
+/** Rows last uploaded before `before` (and created after `since`) whose backoff has passed: due for a keep-alive re-upload. */
+export function staleUploads(before: number, since: number, now: number, limit = 20): UploadRow[] {
   return (
     sql()
-      .prepare("SELECT * FROM swarm_uploads WHERE ref IS NOT NULL AND uploaded_at < ? AND created_at >= ? ORDER BY uploaded_at ASC LIMIT ?")
-      .all(before, since, limit) as Raw[]
+      .prepare(`SELECT * FROM swarm_uploads WHERE ref IS NOT NULL AND uploaded_at < ? AND created_at >= ? AND ${BACKOFF_SQL} ORDER BY uploaded_at ASC LIMIT ?`)
+      .all(before, since, now, limit) as Raw[]
   ).map(fromRaw);
 }
 
@@ -103,4 +105,20 @@ export function uploadStats(now = Date.now()): { total: number; pending: number;
     o: number | null;
   };
   return { total: r.n, pending: r.p ?? 0, failing: r.f ?? 0, oldestUploadMs: r.o == null ? null : now - r.o };
+}
+
+// ─── The worker's heartbeat ────────────────────────────────────────────────
+// Which process retries uploads is a fact about the worker, not about whoever renders a replay,
+// so the worker writes it down here and the replay reads it.
+
+const WORKER_KEY = "worker_seen_at";
+
+export function touchWorker(now = Date.now()): void {
+  sql().prepare("INSERT INTO swarm_meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(WORKER_KEY, String(now));
+}
+
+/** When a live Swarm worker last made a pass; null if never. */
+export function workerSeenAt(): number | null {
+  const r = sql().prepare("SELECT v FROM swarm_meta WHERE k = ?").get(WORKER_KEY) as { v: string } | undefined;
+  return r ? Number(r.v) : null;
 }

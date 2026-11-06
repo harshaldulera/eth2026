@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 process.env.SIEGE_FAST = "1";
 import { arkiv } from "@/lib/arkiv";
@@ -12,7 +13,7 @@ import { setWorkerQuiet } from "./log";
 import { swarmTick } from "./swarm";
 
 const SECRET = "33".repeat(32);
-const paid = (): Omit<PaidReceipt, "siegeId"> => ({ payer: "0.0.raider", amount: "50000000", asset: "0.0.0", txId: "stub:tx", receiptId: "stub:r", at: new Date().toISOString(), facilitator: "stub" }) as never;
+const paid = (): Omit<PaidReceipt, "siegeId"> => ({ free: false, txId: `stub:x402@${Date.now()}`, payer: "0.0.raider", amount: "50000000", asset: "0.0.0", network: "hedera:testnet", hashscanUrl: "#stub", stub: true });
 
 /** A content-addressed fake gateway that can be switched off. */
 function gateway() {
@@ -22,7 +23,7 @@ function gateway() {
     if (state.down) throw new TypeError("fetch failed");
     if ((init?.method ?? "GET") === "POST") {
       const body = new Uint8Array(init!.body as Uint8Array);
-      const ref = Buffer.from(body).toString("hex").slice(0, 64).padEnd(64, "0");
+      const ref = createHash("sha256").update(body).digest("hex"); // content-addressed, like Swarm
       files.set(ref, body);
       return new Response(JSON.stringify({ reference: ref }), { status: 201 });
     }
