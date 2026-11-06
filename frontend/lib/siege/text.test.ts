@@ -30,6 +30,15 @@ function sources(): string[] {
  * voidReason column, plus the reasons built at runtime (castle_closed_<close reason>,
  * verify:<reason>, castle_<lost>, the dormant constant).
  */
+/** Every value of the CastleClosed type (lib/castles.ts), read from the source. */
+function castleClosedValues(): string[] {
+  const m = /export type CastleClosed = ([^;]+);/.exec(src("lib/castles.ts"));
+  expect(m, "lib/castles.ts CastleClosed").toBeTruthy();
+  const values = [...m![1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  expect(values.length).toBeGreaterThan(3);
+  return values;
+}
+
 function allVoidReasons(): string[] {
   const found = new Set<string>();
   for (const f of sources()) {
@@ -46,7 +55,7 @@ function allVoidReasons(): string[] {
   expect(voidable, "worker/settle.ts VOIDABLE").toBeTruthy();
   for (const m of voidable![1].matchAll(/"([a-z0-9_]+)"/g)) found.add(m[1]);
   // lib/siege/stub.ts: castle_${castleClosedReason}, with being_broken/broken mapped to already_broken.
-  for (const lost of ["closed", "expired", "not_found"]) found.add(`castle_${lost}`);
+  for (const lost of castleClosedValues()) if (lost !== "being_broken" && lost !== "broken") found.add(`castle_${lost}`);
   found.add(DORMANT_VOID_REASON);
   return [...found].filter((r) => r !== "voided");
 }
@@ -139,7 +148,7 @@ describe("refund and headline text", () => {
       "Fen the Gatekeeper opened the vault, but another operator breached this vault moments earlier. Fee being refunded.",
     );
     expect(voidHeadline({ ...base, status: "held", settlement: { state: "void", reason: "castle_closed_owner_closed", refund: { state: "refunded", amount: "1" } } }, g)).toBe(
-      "Voided: the Owner closed the vault before this op finished. Fee refunded.",
+      "Voided: the Owner closed the vault before this op was settled. Fee refunded.",
     );
     expect(voidHeadline({ ...base, status: "broken", settlement: { state: "void", reason: "verify:stub_reply_while_0g", refund: { state: "failed", amount: "1" } } }, g)).toBe(
       "Fen the Gatekeeper opened the vault, but the breach could not be verified: the reply came from the test guard while the arena runs real models. Fee refund failed, owed by the arena.",
@@ -149,11 +158,38 @@ describe("refund and headline text", () => {
 
   it("void line in the Op room (operator voice) gives the op's own reason", () => {
     const g = "Fen the Gatekeeper";
-    expect(voidLine({ status: "held", settlement: { state: "void", reason: "castle_closed_expired" } }, g)).toBe("The vault reached its deadline before your op finished.");
+    expect(voidLine({ status: "held", settlement: { state: "void", reason: "castle_closed_expired" } }, g)).toBe("The vault reached its deadline before your op was settled.");
     expect(voidLine({ status: "broken", settlement: { state: "void", reason: "castle_already_broken" } }, g)).toBe(
       "Fen the Gatekeeper opened the vault, but another operator breached this vault moments before you did.",
     );
     expect(voidLine({ status: "held", settlement: { state: "void" } }, g)).toBe("Unknown error.");
+  });
+
+  it("an op that had already ended says it was voided before it was settled, not before it finished", () => {
+    expect(reasonText("castle_closed_owner_closed", "operator", { ended: true })).toBe("the Owner closed the vault before your op was settled");
+    expect(reasonText("castle_closed_expired", "public", { ended: true })).toBe("the vault reached its deadline before this op was settled");
+    expect(voidLine({ status: "held", settlement: { state: "void", reason: "castle_closed_owner_closed" } }, "Fen")).toBe("The Owner closed the vault before your op was settled.");
+    expect(voidLine({ status: "banished", settlement: { state: "void", reason: "castle_closed_expired" } }, "Fen")).toBe("The vault reached its deadline before your op was settled.");
+    expect(voidHeadline({ free: false, status: "held", settlement: { state: "void", reason: "castle_closed_owner_closed", refund: { state: "due", amount: "1" } } }, "Fen")).toBe(
+      "Voided: the Owner closed the vault before this op was settled. Fee being refunded.",
+    );
+    // Still in progress: it really had not finished.
+    expect(voidLine({ status: "in_progress", settlement: { state: "void", reason: "castle_closed_owner_closed" } }, "Fen")).toBe("The Owner closed the vault before your op finished.");
+  });
+
+  it("the 409 toast gives real words for every vault state the message route can send, and no refund while another breach settles", () => {
+    for (const closed of castleClosedValues()) {
+      for (const free of [false, true]) {
+        const t = voidedToast({ free }, closed);
+        expect(t, closed).not.toMatch(RETIRED);
+        expect(t, closed).not.toMatch(/_/);
+        expect(t.length, closed).toBeGreaterThan(20);
+      }
+    }
+    expect(voidedToast({ free: false }, "broken")).toBe("Another operator breached this vault before your op finished. Your fee will be refunded.");
+    expect(voidedToast({ free: false }, "closed")).toBe("The vault closed before your op finished. Your fee will be refunded.");
+    expect(voidedToast({ free: false }, "being_broken")).toBe("Another operator's breach on this vault is being paid out. Your op is paused until it settles.");
+    expect(voidedToast({ free: false }, "being_broken")).not.toMatch(/refund/i);
   });
 
   it("the Op room toast only promises a refund on a paid op, and gives the real reason", () => {

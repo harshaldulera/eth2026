@@ -121,11 +121,11 @@ export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; cl
             <span className="text-ink-dim">{MONEY.reconNoPayout}</span>
           ) : settlement?.state === "void" ? (
             <span className="text-warn">
-              void · {reasonText(settlement.reason, "public")} · {refundText(siege)}
+              void · {reasonText(settlement.reason, "public", { ended: siege.status === "held" || siege.status === "banished" })} · {refundText(siege)}
               {settlement.refund ? ` (${formatAmount(settlement.refund.amount, castle.asset)})` : ""}
             </span>
           ) : settlement?.state === "failed" ? (
-            <span className="text-threat">settlement failed · {settlement.reason}</span>
+            <span className="text-threat">settlement failed · {reasonText(settlement.reason, "public")}</span>
           ) : siege.status === "in_progress" || siege.status === "created" ? (
             <span className="text-ink-dim">op in progress</span>
           ) : (

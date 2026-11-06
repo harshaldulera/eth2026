@@ -14,7 +14,7 @@ import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { drainAudit } from "@/lib/chain/outbox";
 import { STUB_PAYMENT_HEADER } from "@/lib/pay";
 import { siege } from "@/lib/siege";
-import { isKnownReason, voidHeadline } from "@/lib/siege/text";
+import { voidHeadline } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
 import { transitionVault } from "@/lib/vault/state";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
@@ -304,7 +304,10 @@ describe("void paths through the real code", () => {
     return (res.headers.get("set-cookie") ?? "").split(";")[0];
   };
 
-  it("the Castellan closes the castle (owner route): an in-progress and a finished-unsettled paid siege are voided, refunded, in words", async () => {
+  it("the Owner closes the vault (owner route): an in-progress op and a finished-unsettled one are voided, refunded, each in true words", async () => {
+    // A vault with a contract id, so closing it runs the chain port's closeVault, which voids ended
+    // but unsettled ops too (includeEnded) with castle_closed_<reason>.
+    db().update(schema.castles).set({ vaultId: 901, vaultAddress: null }).where(eq(schema.castles.id, GRANITE)).run();
     const playing = await paidSiege(GRANITE, "0.0.stub-a");
     await say(playing, MUST_NOT_BREAK[0]);
     const finished = await paidSiege(GRANITE, "0.0.stub-b");
@@ -312,16 +315,16 @@ describe("void paths through the real code", () => {
     const close = await call<{ ok?: boolean }>("POST", `/api/castles/${GRANITE}/close`, { reason: "owner_closed" }, { cookie: await ownerCookie() });
     expect(close.status).toBe(200);
     await settle(6);
+    const expected: Record<string, { status: string; headline: RegExp }> = {
+      [playing]: { status: "in_progress", headline: /^Voided: the Owner closed the vault before this op finished\. Fee (refunded|being refunded)\.$/ },
+      [finished]: { status: "held", headline: /^Voided: the Owner closed the vault before this op was settled\. Fee (refunded|being refunded)\.$/ },
+    };
     for (const id of [playing, finished]) {
       const r = await replay(id);
-      const reason = r.siege.settlement?.reason ?? "";
       expect(r.voided, id).toBe(true);
-      expect(isKnownReason(reason), reason).toBe(true);
-      // In progress: voided by the vault transition (castle_closed). Finished but unsettled: the
-      // worker finds the vault no longer open (vault_not_open). Both must read as real words.
-      expect(reason).toMatch(/^(castle_closed|vault_not_open$)/);
-      const h = voidHeadline(r.siege, r.castle.guardianName);
-      expect(h).toMatch(/^Voided: the (Owner closed the vault before this op finished|vault closed before this op finished|vault had closed before this op could settle)\. Fee (refunded|being refunded)\.$/);
+      expect(r.siege.status, id).toBe(expected[id].status);
+      expect(r.siege.settlement?.reason, id).toBe("castle_closed_owner_closed");
+      expect(voidHeadline(r.siege, r.castle.guardianName), id).toMatch(expected[id].headline);
       expect(JSON.stringify(r.checks)).not.toMatch(/castle_closed|owner_closed|vault_not_open/);
       expect(r.checks.some((c) => c.state === "fail"), id).toBe(false);
     }
@@ -490,6 +493,29 @@ describe("tampering the proof must catch", () => {
     expect(check(r, "inference")).toMatchObject({ state: "fail", detail: "turn 1: the model record belongs to another op or turn" });
   });
 
+  it("a model record with no op or turn tag is untagged, not someone else's; one for another vault is flagged", async () => {
+    const id = await free(WOOD, WOODEN_BREAK);
+    db().run("DELETE FROM swarm_refs");
+    const tag = (requestId: string) =>
+      db().update(schema.messages).set({ requestId }).where(and(eq(schema.messages.siegeId, id), eq(schema.messages.turn, 1), eq(schema.messages.role, "guardian"))).run();
+    const rec = (requestId: string, castleId: string) =>
+      db()
+        .insert(schema.proxyRecords)
+        .values({ requestId, castleId, siegeId: null, turn: null, model: "m", promptHash: "p", responseHash: "r", protectedToolCalled: false, toolCalls: "[]", mock: false, provider: "0g", at: new Date().toISOString() })
+        .run();
+    // The reply keeps the request id the audit log committed; only its proxy record is untagged.
+    const own = db().select({ r: schema.messages.requestId }).from(schema.messages).where(and(eq(schema.messages.siegeId, id), eq(schema.messages.turn, 1), eq(schema.messages.role, "guardian"))).get()!.r!;
+    rec(own, WOOD);
+    let r = await buildReplay(id);
+    expect(r!.turns[0].guardian!.record).toBeTruthy();
+    expect(r!.turns[0].guardian!.issue).toBeUndefined();
+    tag("msg_other_vault");
+    rec("msg_other_vault", GRANITE);
+    r = await buildReplay(id);
+    expect(r!.turns[0].guardian!.issue).toBe("belongs to another vault");
+    expect(check(r, "inference")).toMatchObject({ state: "fail", detail: "turn 1: the model record belongs to another vault" });
+  });
+
   it("a reply whose request id differs from the one the audit log committed fails the inference check", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     db().run("DELETE FROM swarm_refs");
@@ -620,17 +646,31 @@ describe("testnet: the mirror node (mocked)", () => {
     expect(check(r, "hcs-all")!.detail).toBe(`siege.message #${msg2.seq} missing`);
   });
 
-  it("the last messages absent and nothing later on the topic: the mirror is behind, pending and retrying, whatever their age", async () => {
+  it("the last message absent and nothing later on the topic, submitted moments ago: the mirror is behind, pending and retrying", async () => {
+    const id = await free(WOOD, WOODEN_BREAK);
+    const rows = await onTestnet(id);
+    const end = rows.find((r) => r.type === "siege.end")!;
+    mirror.delete(end.seq!);
+    db().update(schema.auditLog).set({ submittedAt: new Date(Date.now() - 30_000).toISOString() }).where(eq(schema.auditLog.id, end.id)).run();
+    const r = await buildReplay(id);
+    expect(check(r, "hcs-end")!.state).toBe("pending");
+    expect(check(r, "hcs-end")!.detail).toMatch(/waiting for the mirror node$/);
+    expect(r!.checks.some((c) => c.state === "fail")).toBe(false);
+    expect(r!.live).toBe(true);
+  });
+
+  it("the last message still absent long after it was submitted: missing, a failure, and the page stops polling", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     const rows = await onTestnet(id);
     const end = rows.find((r) => r.type === "siege.end")!;
     mirror.delete(end.seq!);
     db().update(schema.auditLog).set({ submittedAt: new Date(Date.now() - 3_600_000).toISOString() }).where(eq(schema.auditLog.id, end.id)).run();
     const r = await buildReplay(id);
-    expect(check(r, "hcs-end")!.state).toBe("pending");
-    expect(check(r, "hcs-end")!.detail).toMatch(/waiting for the mirror node$/);
-    expect(r!.checks.some((c) => c.state === "fail")).toBe(false);
-    expect(r!.live).toBe(true);
+    expect(r!.hcs.entries.find((e) => e.type === "siege.end")!.mirror).toBe("missing");
+    expect(check(r, "hcs-end")!.state).toBe("fail");
+    expect(check(r, "hcs-end")!.detail).toMatch(/not on the topic$/);
+    expect(check(r, "hcs-all")!.state).toBe("fail");
+    expect(r!.live).toBe(false);
   });
 
   it("mirror node down: nothing claimed either way, says unreachable, keeps retrying", async () => {
@@ -643,6 +683,19 @@ describe("testnet: the mirror node (mocked)", () => {
     expect(check(r, "hcs-end")!.detail).toMatch(/mirror node unreachable, retrying$/);
     expect(r!.checks.some((c) => c.state === "fail")).toBe(false);
     expect(r!.live).toBe(true);
+  });
+
+  it("mirror node down for an op that ended long ago: nothing claimed, and the page no longer polls or says it is retrying", async () => {
+    const id = await free(WOOD, WOODEN_BREAK);
+    await onTestnet(id);
+    db().update(schema.sieges).set({ endedAt: new Date(Date.now() - 2 * 3_600_000).toISOString() }).where(eq(schema.sieges.id, id)).run();
+    answer = () => new Response("bad gateway", { status: 502 });
+    const r = await buildReplay(id);
+    expect(r!.hcs.mirror).toBe("unavailable");
+    expect(check(r, "hcs-end")!.state).toBe("pending");
+    expect(check(r, "hcs-end")!.detail).toMatch(/mirror node unreachable$/);
+    expect(r!.checks.some((c) => c.state === "fail")).toBe(false);
+    expect(r!.live).toBe(false);
   });
 
   const BAD_BODIES: [string, () => Response][] = [

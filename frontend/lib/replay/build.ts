@@ -32,6 +32,14 @@ const short = (h?: string | null) => (h ? `${h.slice(0, 10)}…${h.slice(-6)}` :
 const STUB_REPLY = /^(0g|sdk)-stub-/;
 /** A voided siege's refund normally lands within minutes; after this the page stops waiting for it. */
 const REFUND_WAIT_MS = 30 * 60_000;
+/**
+ * How long a submitted message may be absent from the mirror node before it counts as missing. Real
+ * mirror lag is seconds; past this the topic was reset or the message never landed, and waiting
+ * longer would only poll forever.
+ */
+const MIRROR_LAG_MS = 10 * 60_000;
+/** How long after an op ends the page keeps re-reading an unreachable mirror node. */
+const MIRROR_RETRY_MS = 30 * 60_000;
 
 /** The audit messages for this siege, in topic order, and how many were skipped (no topic). */
 function auditRows(siegeId: string) {
@@ -92,6 +100,8 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   const voided = siege.settlement?.state === "void";
   const ended = ENDED.has(siege.status) || voided;
   const now = Date.now();
+  /** The page keeps re-reading an unreachable mirror only while the op is live or recently ended. */
+  const retrying = !ended || now - Date.parse(siege.endedAt ?? siege.createdAt) < MIRROR_RETRY_MS;
 
   // ── Transcript: Swarm first, the database only when there is no reference ─────────────────────
   const ref = swarmRefFor(siegeId);
@@ -140,8 +150,10 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
       if (seen !== undefined) m = seen === r.message ? "confirmed" : "mismatch";
       else if (read.absent.has(r.seq)) {
         // Sequence numbers have no gaps: if the mirror already has a later message on this topic,
-        // this one is really missing. If not, the mirror is just behind.
-        if ((highestSeen.get(r.topicId) ?? -1) > r.seq) m = "missing";
+        // this one is really missing. If not, the mirror may just be behind, but only for a while:
+        // only this op's own messages are read, so a lost last message would otherwise wait forever.
+        const age = now - Date.parse(r.submittedAt ?? r.at);
+        if ((highestSeen.get(r.topicId) ?? -1) > r.seq || !(age < MIRROR_LAG_MS)) m = "missing";
         else mirrorBehind = true;
       }
     }
@@ -194,9 +206,11 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
       // audit log committed for this turn.
       const recordIssue = !rec
         ? undefined
-        : rec.castleId !== castle.id || rec.siegeId !== siegeId || rec.turn !== turn
-          ? "belongs to another op or turn"
-          : undefined;
+        : rec.castleId !== castle.id
+          ? "belongs to another vault"
+          : (rec.siegeId != null && rec.siegeId !== siegeId) || (rec.turn != null && rec.turn !== turn)
+            ? "belongs to another op or turn"
+            : undefined;
       const auditIssue = hcs?.requestId && g.requestId && hcs.requestId !== g.requestId ? "differs from the request id in the audit log" : undefined;
       out.guardian = {
         text: g.text,
@@ -257,7 +271,9 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
       ? "not audited: this vault had no HCS topic"
       : !end
         ? voided ? "voided before it ended" : "siege.end not in the audit log yet"
-        : endResultOk === false
+        : endHashOk === false
+          ? `the audit log's transcript hash ${short(end.hash)} differs from the one recomputed here`
+          : endResultOk === false
           ? `the audit log says ${outcomeWord(end.result)}, the op record says ${outcomeWord(siege.status)}`
           : `siege.end${end.seq != null ? ` #${end.seq}` : " (queued)"}${
               end.mirror === "confirmed"
@@ -267,7 +283,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
                   : end.mirror === "mismatch"
                     ? ", the topic carries different bytes"
                     : realTopic && end.state === "submitted"
-                      ? endReadFailed || mirror === "unavailable" ? ", mirror node unreachable, retrying" : ", waiting for the mirror node"
+                      ? endReadFailed || mirror === "unavailable" ? `, mirror node unreachable${retrying ? ", retrying" : ""}` : ", waiting for the mirror node"
                       : ""
             }`,
     href: realTopic && end?.topicId ? topicUrl(end.topicId) : realTopic && topicId ? topicUrl(topicId) : undefined,
@@ -299,7 +315,15 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
       state: bad.length ? "fail" : unchecked.length ? "pending" : entries.length ? "pass" : "na",
       detail: bad.length
         ? `${bad.map((e) => `${e.type}${e.seq != null ? ` #${e.seq}` : ""} ${e.mirror === "missing" ? "missing" : "differs"}`).join("; ")}`
-        : `${entries.length - unchecked.length} of ${entries.length} confirmed${mirror === "unavailable" || mirror === "partial" ? ", mirror node unreachable for some, retrying" : unchecked.length ? ", waiting for the mirror node" : ""}`,
+        : `${entries.length - unchecked.length} of ${entries.length} confirmed${
+            mirror === "unavailable" || mirror === "partial"
+              ? `, mirror node unreachable for some${retrying ? ", retrying" : ""}`
+              : unchecked.length && unchecked.every((e) => e.state === "pending")
+                ? ", the rest still queued in the arena's outbox"
+                : unchecked.length
+                  ? ", waiting for the mirror node"
+                  : ""
+          }`,
       href: topicId ? topicUrl(topicId) : undefined,
     });
   }
@@ -349,7 +373,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
         ? refund?.state === "refunded" ? "pass" : refund?.state === "failed" ? "fail" : "pending"
         : txMismatch ? "fail" : tx ? "pass" : siege.settlement?.state === "failed" ? "fail" : "pending",
       detail: voided
-        ? `${reasonText(siege.settlement?.reason, "public")}; ${refundText(siege)}`
+        ? `${reasonText(siege.settlement?.reason, "public", { ended: siege.status === "held" || siege.status === "banished" })}; ${refundText(siege)}`
         : txMismatch
           ? `the op records ${tx!.txId}, the audit log ${auditTx}`
           : tx
@@ -374,6 +398,6 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
     voided,
     // Keep polling while anything can still change: the siege, its chain result, a refund, the audit
     // outbox, a mirror node that is behind, or reads that failed and should be retried.
-    live: !ended || awaitingChain || refundDue || mirrorBehind || failedReads > 0 || entries.some((e) => e.state === "pending"),
+    live: !ended || awaitingChain || refundDue || mirrorBehind || (failedReads > 0 && retrying) || entries.some((e) => e.state === "pending"),
   };
 }
