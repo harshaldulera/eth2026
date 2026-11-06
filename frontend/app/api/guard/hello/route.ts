@@ -5,7 +5,7 @@ import { atRequestTime, err, json } from "../../_lib/http";
 import { guardCastle } from "../_lib/auth";
 
 /**
- * GET /api/guard/hello (Bearer gk_…) — the @siege/guard handshake (plan §2A).
+ * GET /api/guard/hello (Bearer gk_…) — the siege-guard handshake (plan §2A).
  * → 200 {castleId, name, protectedTool, vaultState, openai: {baseURL: <app>/api/proxy/v1, apiKey: vk_…}, model}
  *   The vk_ key is the castle's persisted vault key: the harness's model calls go through our proxy
  *   with it, billed to the owner's 0G key, and leave the records the verifier reads.

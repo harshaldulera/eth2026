@@ -101,10 +101,10 @@ export function PlugInAgent({ castleId, guardKey, baseURL }: PlugInAgentProps) {
   const secs = Number.isFinite(seen) && now > 0 ? Math.max(0, Math.round((now - seen) / 1000)) : null;
   const stale = secs !== null && secs > 30;
 
-  const install = "npm i @siege/guard openai";
+  const install = "npm i siege-guard openai";
   const snippet = [
     'import OpenAI from "openai";',
-    'import { createGuard } from "@siege/guard";',
+    'import { createGuard } from "siege-guard";',
     "",
     `const guard = await createGuard({ guardKey: "${key ?? PLUG_IN.keyMissing}", baseURL: "${baseURL}" });`,
     "const openai = new OpenAI(guard.openai);",

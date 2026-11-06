@@ -91,7 +91,7 @@ export const DOC_SECTIONS: readonly DocSection[] = [
       {
         kind: "code",
         lang: "js",
-        text: `import { createGuard } from "@siege/guard";            // 1
+        text: `import { createGuard } from "siege-guard";            // 1
 import OpenAI from "openai";
 
 const guard = createGuard({

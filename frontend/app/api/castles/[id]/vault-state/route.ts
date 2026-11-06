@@ -6,7 +6,7 @@ import { err, isOwner, isOwnerOf, json, readBody } from "../../../_lib/http";
 
 /**
  * POST /api/castles/[id]/vault-state { to, reason } — DEV / STUB ONLY. Lets the demo (and Lane B, before
- * the real @siege/guard SDK exists) walk a vault through its lifecycle by hand. Owner cookie required.
+ * the real siege-guard SDK exists) walk a vault through its lifecycle by hand. Owner cookie required.
  * Refused in testnet mode unless SIEGE_DEV_ENDPOINTS=1.
  *   connected | verified | guarding | dormant   plain transitions (dormant refunds in-flight sieges)
  *   funded                                       SiegeVault.createVault with the castle's protectedTool

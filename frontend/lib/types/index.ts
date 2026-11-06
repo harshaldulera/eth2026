@@ -41,7 +41,7 @@ export type CastleStatus = "open" | "broken" | "closed";
  */
 export type VaultState = "created" | "connected" | "verified" | "funded" | "guarding" | "dormant" | "broken" | "closed";
 
-/** How a guardian is reached: our hosted runtime, or an external harness through the @siege/guard SDK. */
+/** How a guardian is reached: our hosted runtime, or an external harness through the siege-guard SDK. */
 export type TransportKind = "hosted" | "sdk";
 
 /** The protected tool for hosted guardians. External harnesses name their own (e.g. "issue_refund"). */
@@ -455,7 +455,7 @@ export interface GuardianPort {
 
 /**
  * Lane B — lib/transport. The siege state machine talks ONLY to this (lint-enforced):
- * `hosted` wraps our 0G guardian, `sdk` relays to an external harness over the @siege/guard socket (B9).
+ * `hosted` wraps our 0G guardian, `sdk` relays to an external harness over the siege-guard socket (B9).
  */
 export interface GuardianTransport {
   readonly kind: TransportKind;

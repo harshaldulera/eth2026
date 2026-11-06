@@ -25,7 +25,7 @@ export type FixtureCastle = {
   streak: number;
   siegeCount: number;
   portraitUrl?: string;
-  /** Default "hosted" (our runtime). "sdk": an external harness through @siege/guard. */
+  /** Default "hosted" (our runtime). "sdk": an external harness through siege-guard. */
   transport?: TransportKind;
   /** Default HOSTED_PROTECTED_TOOL ("unlock_vault"); SDK harnesses and business agents name their own. */
   protectedTool?: string;

@@ -5,7 +5,7 @@ import { onReply } from "./lifecycle";
 import { answerTurn, claimNext, type GuardReply, type GuardTurnPayload, toPayload } from "./turns";
 
 /**
- * Tests and offline scripts: an in-process stand-in for an @siege/guard harness. It keeps its lease
+ * Tests and offline scripts: an in-process stand-in for an siege-guard harness. It keeps its lease
  * alive, claims turns, thinks through our proxy (proxy.chat with the castle's vault key, tagged with
  * the turn's siege id and turn, exactly what the SDK sends as x-siege-id / x-siege-turn) and answers.
  * Never used by the app itself.

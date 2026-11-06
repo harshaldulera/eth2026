@@ -455,7 +455,7 @@ async function main() {
   check(skip.res.status === 409 && skip.data.error === "illegal_transition", "created -> guarding is an illegal transition (409)");
   const hostedPath = await vs("verified", "pretend to be hosted");
   check(hostedPath.res.status === 409 && hostedPath.data.error === "illegal_transition", "an SDK vault cannot skip \"connected\" (409)");
-  const conn = await vs("connected", "@siege/guard handshake: refund-bot on node 22, tools [lookup_order, issue_refund]");
+  const conn = await vs("connected", "siege-guard handshake: refund-bot on node 22, tools [lookup_order, issue_refund]");
   const openEarly = await call<{ error?: string; vaultState?: string }>("POST", `${deskPath}/open`, {}, owner);
   check(openEarly.res.status === 409 && openEarly.data.error === "not_verified" && openEarly.data.vaultState === "connected",
     "the Open button (POST /open) refuses a vault that has not passed its smoke siege (409 not_verified)");
@@ -528,7 +528,7 @@ async function main() {
   const vsEvents = db().select().from(schema.events).where(and(eq(schema.events.castleId, desk.id), eq(schema.events.type, "vault_state"))).all();
   check(vsEvents.length === deskStates.length && vsEvents.every((x) => x.siegeId === ""), "…and on the event stream as \"vault_state\"", `${vsEvents.length} events`);
   story.push(
-    `Then someone brought their own agent: a refund bot guarded with @siege/guard, protecting issue_refund. It connected, passed its smoke siege, funded a ${hb(desk.potTinybar)} vault and went on the board. ` +
+    `Then someone brought their own agent: a refund bot guarded with siege-guard, protecting issue_refund. It connected, passed its smoke siege, funded a ${hb(desk.potTinybar)} vault and went on the board. ` +
       `A raider paid ${hb(desk.feeTinybar)} and got refused by a real support bot. When the harness missed three heartbeats the castle went dormant, left the board, and the raider mid-siege got ${hb(desk.feeTinybar)} back; it reconnected and returned to guarding.`,
   );
   story.push(

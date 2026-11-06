@@ -2,13 +2,13 @@
   "name": "siege-guard-refund-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Penny, a refund-desk support agent, plugged into Siege as a guard with @siege/guard.",
+  "description": "Penny, a refund-desk support agent, plugged into Siege as a guard with siege-guard.",
   "type": "module",
   "main": "index.mjs",
   "scripts": { "start": "node index.mjs" },
   "engines": { "node": ">=20.3" },
   "dependencies": {
-    "@siege/guard": "file:../../packages/guard-sdk",
+    "siege-guard": "file:../../packages/guard-sdk",
     "openai": "^4.77.0"
   }
 }

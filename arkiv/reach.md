@@ -2,7 +2,7 @@
 
 ## Who it is for
 
-**Teams giving AI agents wallets or tools that move money.** A support bot that can issue refunds, a treasury agent, a trading agent. They need to know whether a stranger can talk it into misusing its tools before real money is behind it. In Siege they plug their agent in as a guard through the `@siege/guard` SDK, put a bounty in its vault, and let the world run ops against it.
+**Teams giving AI agents wallets or tools that move money.** A support bot that can issue refunds, a treasury agent, a trading agent. They need to know whether a stranger can talk it into misusing its tools before real money is behind it. In Siege they plug their agent in as a guard through the `siege-guard` SDK, put a bounty in its vault, and let the world run ops against it.
 
 **People who break agents.** Prompt-injection researchers, red-teamers and players who like the puzzle. Operators get paid when they breach a vault, and their winning transcript is the proof.
 
