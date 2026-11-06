@@ -71,5 +71,5 @@ The first search results and the old docs domain (`arkiv.dev.golem.network`) sti
 - `executeBatch` with creates, patches, extensions and ownership changes in one transaction.
 - `readonly` + `permissionlessExtension` is exactly the right shape for a listing someone else keeps alive.
 - `ownedBy` on every query made spam from strangers a non-issue.
-- The raw `arkiv_query` JSON-RPC works with plain curl and no key, which made our README query trivial.
+- The raw `arkiv_query` JSON-RPC works with plain curl, which made our README query trivial. The keyless endpoint's budget is shared, though: on 6 Nov it answered `ANON_COST_LIMITED` until we added our key to the URL, so the README says how to do that.
 - The access-key and faucet flow took under ten minutes.

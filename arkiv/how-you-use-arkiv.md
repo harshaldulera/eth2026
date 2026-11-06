@@ -17,7 +17,7 @@ The Grid and the operator's target picker run one query on `vaultStatus`. The fi
 
 Under the grid, a terminal line prints the query it ran and the Arkiv block it was answered at. If the RPC fails, it says so in red and falls back to the server's cached copy; it never falls back silently. The filters are in the URL, so a filtered Grid can be shared.
 
-Run it yourself (no key needed):
+Run it yourself:
 
 ```bash
 curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: application/json' -d '{
@@ -25,6 +25,8 @@ curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: appli
   "params":["arkiv.schema = str('"'"'siege.vaultStatus'"'"') AND vaultState = str('"'"'guarding'"'"') AND $owner = addr(0xA69d59B6d6e55Aa6da960405D4150ea59460bb18) ORDER BY pot:u64 DESC",
     {"select":{"key":true,"expiresAt":true,"attributes":{"name":true,"tier":true,"pot":true,"streak":true,"ownerWallet":true}},"limit":"0x14"}]}'
 ```
+
+If the keyless endpoint answers `ANON_COST_LIMITED`, its shared query budget is used up: get a free key at [hub.arkiv.network](https://hub.arkiv.network) and put it at the end of the URL, `https://rpc.rabdi.db-chain.testnet.arkiv.network/<your-key>`.
 
 ## Owner: an Owner owns their vault's listing
 

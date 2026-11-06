@@ -150,7 +150,7 @@ Avoid these claims:
 
 **Wallet that writes our entities (the arena):** [`0xA69d59B6d6e55Aa6da960405D4150ea59460bb18`](https://rabdi.explorer.arkiv.network/address/0xA69d59B6d6e55Aa6da960405D4150ea59460bb18). Vault listings are then transferred to each Owner's wallet, for example [`0x6c5270FA826D134C99dE24921e69156079fd957D`](https://rabdi.explorer.arkiv.network/address/0x6c5270FA826D134C99dE24921e69156079fd957D) for The Iron Warden.
 
-**One query you can run** (The Grid: guarding vaults, biggest pot first; no key needed):
+**One query you can run** (The Grid: guarding vaults, biggest pot first):
 
 ```bash
 curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: application/json' -d '{
@@ -158,6 +158,8 @@ curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: appli
   "params":["arkiv.schema = str('"'"'siege.vaultStatus'"'"') AND vaultState = str('"'"'guarding'"'"') AND $owner = addr(0xA69d59B6d6e55Aa6da960405D4150ea59460bb18) ORDER BY pot:u64 DESC",
     {"select":{"key":true,"expiresAt":true,"attributes":{"name":true,"tier":true,"pot":true,"streak":true,"ownerWallet":true}},"limit":"0x14"}]}'
 ```
+
+If the keyless endpoint answers `ANON_COST_LIMITED`, its shared query budget is used up: get a free key at [hub.arkiv.network](https://hub.arkiv.network) and put it at the end of the URL, `https://rpc.rabdi.db-chain.testnet.arkiv.network/<your-key>`.
 
 | | Where |
 |---|---|
