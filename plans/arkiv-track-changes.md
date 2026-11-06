@@ -37,20 +37,18 @@ Today `GET /api/castles` can read Arkiv, but the board sends no filter, ignores 
 
 No decision needed; listing so you know what the board will look like.
 
-## 3. Agent auto-targeting through Arkiv (needs Lane A/B agreement)
+## 3. Discovery through Arkiv, done by the owner, not the agent (Sujal)
 
-This is the item that makes "why Arkiv" a real answer.
+Product decision (Sujal, 6 Nov): the raider agent's owner picks the target castle; the agent does not choose on its own. So no change to `worker/agents.ts` or `startRun`.
 
-Today a raider agent never discovers anything: the owner picks the castle on `/raider` and `startRun(agentId, castleId)` fixes it (`app/api/_lib/runs.ts`). Nothing in product code calls `arkiv.liveSieges()`.
+What makes "why Arkiv" real under that decision:
+- The raider setup page (`/raider`), where the owner picks a castle, already loads its list through `api.castles()`, which reads Arkiv in live mode. Add the same tier, sort and minimum-pot filters as the board, so the owner's choice is an Arkiv query they apply.
+- An "under siege" marker on each castle from `arkiv.liveSieges()`, so the owner avoids a castle already being attacked. This is the "claims that agents share and let expire" part of the Agents direction: a siege claim shows while it is live and drops off ten minutes after it ends, with no cleanup code.
+- The README's runnable query is the same castle query the raider page runs.
 
-Proposed, small:
-- Allow a run with no `castleId`. In the run loop (`worker/agents.ts`), call `arkiv.listCastles({ tier, sort: "fee" })` through the port, log the query it ran as an agent event, and take the top `guarding` castle within the agent's caps.
-- Before paying, call `arkiv.liveSieges()` and skip a castle that already has a live siege ("avoid", not "lock": the start route stays as it is).
-- The README's runnable query is exactly this discovery query, so judges run what our agents run.
+Honest answer to "swap Arkiv for Postgres": a raider, or anyone building their own raider, could only discover castles and live sieges through our API. With Arkiv they query the chain directly, and stale claims expire instead of needing a cleanup job.
 
-Then the honest answer to "swap Arkiv for Postgres" is: any raider agent, ours or a stranger's, loses the ability to find castles without our API, and stale claims would need a cleanup job instead of expiring.
-
-**Decision needed:** may Lane C make this change in `worker/agents.ts` and `app/api/_lib/runs.ts`, or does one of you do it against `ArkivPort`? Estimate 2 to 3 hours either way.
+No decision needed from Lane A/B.
 
 ## 4. Ownership: arena keeps it (decision to confirm)
 
@@ -74,5 +72,5 @@ Guardian orders, payment receipts, approval requests, owner secrets, proxy recor
 
 1. Qualification pack (section 1).
 2. Board UI (section 2).
-3. Agent auto-targeting (section 3), if approved for Lane C.
+3. Raider page filters and the under-siege marker (section 3).
 4. C2 live-update hooks, then the rest of the C3 screens.
