@@ -50,13 +50,14 @@ Honest answer to "swap Arkiv for Postgres": a raider, or anyone building their o
 
 No decision needed from Lane A/B.
 
-## 4. Ownership: arena keeps it (decision to confirm)
+## 4. Ownership: each Owner owns their vault's listing (decided and built, PR #6)
 
-All entities are owned by the arena wallet, and every read filters `.ownedBy(arena)`. I propose we keep that and say why in `how-you-use-arkiv.md`: pots and streaks are settled on Hedera by the arena, so only the arena may write them, and the owner filter is what stops a stranger from planting a castle on the board under our schema name.
+On Arkiv only an entity's owner can change it, so a vault is two entities:
 
-The alternative, per-Castellan ownership via `changeOwnership`, needs an EVM address per Castellan (we only have Hedera ids), wallet connect for delisting, and breaks the outbox's patch model. Half a day for one line of markdown.
+- **`vault`, owned by the vault's Owner.** The arena creates it `readonly` + `permissionlessExtension`, then hands it to the Owner's wallet with `changeOwnership`. The wallet is the EVM address of the Hedera account that owns the vault (its ECDSA alias from the mirror node), so no new column or form field was needed. After the handover nobody, including us, can edit it, and only the Owner can delete it. Deleting it delists the vault: the worker checks once a minute and stops publishing it.
+- **`vaultStatus`, `op` and the profiles, owned by the arena.** Pot, streak and op outcomes are settled on Hedera by the arena, so only the arena may write them. Reads of these filter `.ownedBy(arena)`, which keeps strangers' entities off our screens.
 
-**Decision needed:** agree arena ownership, or ask for the split.
+This is the core of the "why Arkiv" answer: an Owner owns their listing in a way no Postgres row can be owned. On screen: "owner 0x…" on every vault card, and an Arkiv footprint panel on the vault page. Details: `arkiv/how-you-use-arkiv.md`, `arkiv/schema.md`.
 
 ## 5. Keep off Arkiv, stated in the docs (no decision)
 
@@ -79,5 +80,6 @@ Guardian orders, payment receipts, approval requests, owner secrets, proxy recor
 
 - **Licence and AI-usage note: done on `main`.** `LICENSE` (MIT) is at the repo root, and the AI-usage note is a section of the root `README.md`. Add the Arkiv writer wallet and the runnable query to that README in your own section, next to the Hedera one.
 - **Ownership (section 4): agreed.** The arena wallet owns every entity, and every read filters `.ownedBy(arena)`. Use your reasoning in `how-you-use-arkiv.md`.
+  - *Superseded later on 6 Nov:* we switched to per-Owner listings (section 4), built in PR #6 and merged.
 - **Discovery (section 3): agreed as rewritten.** The owner picks the target from an Arkiv query; agents don't auto-target.
 - **Deploy (section 1): host still to be chosen.** Plan for one deployment: a single container on a host with a persistent disk (Railway, Render, Fly or a VPS, not serverless), running two processes. One is `next start`. The other is the worker, with the Arkiv drainer folded into it as you offered; adding that loop to `worker/index.ts` is fine with Lane A. The worker stays a separate process from Next, because it holds the verifier key. The URL comes as soon as the host is picked.
