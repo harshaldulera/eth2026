@@ -8,7 +8,7 @@ Lane A's beats are scripted in full below. **Lane B and Lane C slots** are marke
 
 | # | Prep | Why |
 |---|---|---|
-| 1 | `cd frontend && npm run dev` and `npm run worker` on **testnet** (the top bar shows no STUB badge). Arkiv publisher running (`npm run arkiv`). | Real HashScan links and a live Arkiv block. |
+| 1 | `cd frontend && npm run dev` and `npm run worker` on **testnet** (the top bar shows no STUB badge). The worker also publishes to Arkiv (ARKIV_MODE=live), so don't run `npm run arkiv` alongside it. | Real HashScan links and a live Arkiv block. |
 | 2 | `npm run seed -- --rearm wooden` if Splinter Gate is broken. At the freeze, add `--new-topics` once (before the golden run) so every castle gets a fresh HCS topic. | The break needs an open wooden vault. The old topics predate the ordered audit outbox and show some messages out of order. |
 | 3 | Phone: open `/raider/approvals` through the tunnel (`cloudflared tunnel --url http://localhost:3000`), enter the owner key once. Mirror the phone on screen (scrcpy or QuickTime), or hold it up to the webcam. | The deny and approve beat happens on the phone. |
 | 4 | Stage the **approve** half of the agent beat: create a second agent (e.g. "Ember Wren", per-castle cap 2 ℏ) on `/raider`, run it on The Grey Bastion, and let it pause with a pending request **before** recording. Check Night Sapper has never sieged **Saltmarsh Keep** on this database and has at least 2 ℏ left of its 8 ℏ daily cap (the golden run's agent step spends up to 4 ℏ of it). | A denied agent stays stopped. The approve beat needs a second request already waiting, or the take runs long. Night Sapper already used up its Granite Hold cap and allowance on the testnet DB, so on Granite Hold it would pause at once with no new sieges. |

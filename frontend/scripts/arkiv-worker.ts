@@ -5,8 +5,8 @@
  * not running (e.g. a board-only demo). If both run, the lease makes one of them wait.
  *
  * Every 3 s: reconcile (queue castles, sieges and profiles whose public values changed), then drain
- * (send the queue to Arkiv in batched transactions). Run it next to `npm run dev` and
- * `npm run worker`. Only one drainer runs at a time (a lease in SQLite), so a second copy just waits.
+ * (send the queue to Arkiv in batched transactions). Only one drainer runs at a time (a lease in
+ * SQLite), but the lease is not renewed during a slow pass, so don't run this next to the worker.
  *
  *   npm run arkiv -- --once   one pass, then exit (scripts, CI)
  */
