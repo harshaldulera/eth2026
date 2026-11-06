@@ -11,7 +11,7 @@ import { titleFor } from "@/lib/castles";
 
 export const TINYBAR = 100_000_000; // 1 ℏ
 
-export type Personality = "bumbling" | "stern" | "bureaucratic" | "mocking" | "paranoid";
+export type Personality = "bumbling" | "stern" | "bureaucratic" | "mocking" | "paranoid" | "professional";
 
 export type FixtureCastle = {
   id: string;
@@ -27,8 +27,10 @@ export type FixtureCastle = {
   portraitUrl?: string;
   /** Default "hosted" (our runtime). "sdk": an external harness through @siege/guard. */
   transport?: TransportKind;
-  /** Default HOSTED_PROTECTED_TOOL ("unlock_vault"); SDK harnesses name their own. */
+  /** Default HOSTED_PROTECTED_TOOL ("unlock_vault"); SDK harnesses and business agents name their own. */
   protectedTool?: string;
+  /** Orders file in lib/fixtures/orders (without .md). Default: the tier's file. */
+  ordersFile?: string;
 };
 
 export const FIXTURE_CASTLES: readonly FixtureCastle[] = [
@@ -89,19 +91,56 @@ export const FIXTURE_CASTLES: readonly FixtureCastle[] = [
   },
 ];
 
+/**
+ * Business agents: realistic production agents a company would put a bounty on (see
+ * lib/guardian/agents for their tools). Hosted on our runtime, seeded beside the five game castles,
+ * and given their own system prompt with no castle framing. Tier sets the stub guardian's behaviour.
+ */
+export const BUSINESS_CASTLES: readonly FixtureCastle[] = [
+  {
+    id: "castle_ap_desk",
+    name: "Northwind Accounts Payable",
+    guardianName: "Northwind AP Agent",
+    personality: "professional",
+    tier: "stone",
+    feeTinybar: 1 * TINYBAR,
+    potTinybar: 30 * TINYBAR,
+    streak: 0,
+    siegeCount: 0,
+    protectedTool: "pay_invoice",
+    ordersFile: "ap-desk",
+  },
+  {
+    id: "castle_dao_treasury",
+    name: "Monsoon DAO Treasury",
+    guardianName: "Monsoon Treasury Agent",
+    personality: "professional",
+    tier: "stone",
+    feeTinybar: 1 * TINYBAR,
+    potTinybar: 40 * TINYBAR,
+    streak: 0,
+    siegeCount: 0,
+    protectedTool: "transfer_funds",
+    ordersFile: "dao-treasury",
+  },
+];
+
 /** Unix ms `days` from now (vault deadline). Default: 3 days. */
 export function deadlineIn(days = 3, from: number = Date.now()): number {
   return from + Math.round(days * 24 * 60 * 60 * 1000);
 }
 
-const ordersCache = new Map<Tier, string>();
+const ordersCache = new Map<string, string>();
 
-/** Secret guardian orders for a tier, read at runtime from lib/fixtures/orders/<tier>.md. Server only. */
-export function loadOrders(tier: Tier): string {
-  const hit = ordersCache.get(tier);
+/**
+ * Secret guardian orders, read at runtime from lib/fixtures/orders/<name>.md: a tier ("wooden"…) for
+ * the game castles, or a business agent's own system prompt ("ap-desk"…). Server only.
+ */
+export function loadOrders(name: Tier | string): string {
+  const hit = ordersCache.get(name);
   if (hit) return hit;
-  const text = readFileSync(path.join(process.cwd(), "lib", "fixtures", "orders", `${tier}.md`), "utf8");
-  ordersCache.set(tier, text);
+  const text = readFileSync(path.join(process.cwd(), "lib", "fixtures", "orders", `${name}.md`), "utf8");
+  ordersCache.set(name, text);
   return text;
 }
 
@@ -131,7 +170,7 @@ export function fixtureCastleRow(f: FixtureCastle, o: FixtureRowOptions = {}): t
     title: titleFor(f.streak),
     personality: f.personality,
     tier: f.tier,
-    orders: loadOrders(f.tier),
+    orders: loadOrders(f.ordersFile ?? f.tier),
     feeTinybar: f.feeTinybar,
     potTinybar: f.potTinybar,
     asset: o.asset ?? "0.0.0",
