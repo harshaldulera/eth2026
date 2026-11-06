@@ -1,0 +1,12 @@
+Tiny Dungeon
+by Kenney (https://kenney.nl)
+
+Licence: Creative Commons Zero, CC0 1.0 Universal
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The tiles in public/pixel/tiny-dungeon/tiles/ are Kenney's "Tiny Dungeon"
+pack, fetched from the mirror github.com/shorepine/kenney
+(2d/Tiny Dungeon/Tiles/) by qa/fetch-assets.mjs.
+
+You may use these assets in personal, educational and commercial projects.
+Credit is not required, but is appreciated: "Kenney" / www.kenney.nl

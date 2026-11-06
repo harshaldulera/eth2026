@@ -1,0 +1,1290 @@
+{
+ "version": 1,
+ "tileSize": 16,
+ "note": "Sprite name -> PNG (src, one strip or one file per frame) or code generator (svg, lib/pixel/sprite.ts). Guard portraits compose a Tiny Dungeon tile (pixels embedded under tiles, CC0, see LICENSE-kenney.txt) with code-drawn gear. Hand-drawn replacements: set src to a horizontal strip PNG with the same frame count; the generator stays the fallback.",
+ "sprites": {
+  "door.closed": {
+   "svg": "door.closed",
+   "w": 16,
+   "h": 16,
+   "frames": 1
+  },
+  "door.shaking": {
+   "svg": "door.shaking",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 12,
+   "loop": true
+  },
+  "door.open": {
+   "svg": "door.open",
+   "w": 16,
+   "h": 16,
+   "frames": 4,
+   "fps": 6,
+   "loop": false
+  },
+  "shutter": {
+   "svg": "shutter",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 10,
+   "loop": false
+  },
+  "packet": {
+   "svg": "packet",
+   "w": 8,
+   "h": 8,
+   "frames": 2,
+   "fps": 6,
+   "loop": true
+  },
+  "coin": {
+   "svg": "coin",
+   "w": 8,
+   "h": 8,
+   "frames": 4,
+   "fps": 10,
+   "loop": true
+  },
+  "clock": {
+   "svg": "clock",
+   "w": 16,
+   "h": 16,
+   "frames": 4,
+   "fps": 8,
+   "loop": true
+  },
+  "inbox": {
+   "svg": "inbox",
+   "w": 16,
+   "h": 16,
+   "frames": 2
+  },
+  "mirror": {
+   "svg": "mirror",
+   "w": 16,
+   "h": 16,
+   "frames": 2
+  },
+  "padlock": {
+   "svg": "padlock",
+   "w": 16,
+   "h": 16,
+   "frames": 1
+  },
+  "credential": {
+   "svg": "credential",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 4,
+   "loop": true
+  },
+  "radio": {
+   "svg": "radio",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 3,
+   "loop": true
+  },
+  "pager": {
+   "svg": "pager",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true
+  },
+  "fx.static": {
+   "svg": "static",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 12,
+   "loop": true
+  },
+  "icon.authority": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "cls": "authority"
+   }
+  },
+  "icon.override": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "cls": "override"
+   }
+  },
+  "icon.injection": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "cls": "injection"
+   }
+  },
+  "icon.obfuscation": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 8,
+   "loop": true,
+   "args": {
+    "cls": "obfuscation"
+   }
+  },
+  "icon.pressure": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "cls": "pressure"
+   }
+  },
+  "icon.escalation": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "cls": "escalation"
+   }
+  },
+  "icon.extraction": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "cls": "extraction"
+   }
+  },
+  "icon.unclassified": {
+   "svg": "icon",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "cls": "unclassified"
+   }
+  },
+  "move.hold": {
+   "svg": "move",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "move": "hold"
+   }
+  },
+  "move.flag": {
+   "svg": "move",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "move": "flag"
+   }
+  },
+  "move.lockdown": {
+   "svg": "move",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "move": "lockdown"
+   }
+  },
+  "move.breach": {
+   "svg": "move",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "args": {
+    "move": "breach"
+   }
+  },
+  "rank.0": {
+   "svg": "rank",
+   "w": 16,
+   "h": 10,
+   "frames": 1,
+   "args": {
+    "level": 0
+   }
+  },
+  "rank.1": {
+   "svg": "rank",
+   "w": 16,
+   "h": 10,
+   "frames": 1,
+   "args": {
+    "level": 1
+   }
+  },
+  "rank.2": {
+   "svg": "rank",
+   "w": 16,
+   "h": 10,
+   "frames": 1,
+   "args": {
+    "level": 2
+   }
+  },
+  "rank.3": {
+   "svg": "rank",
+   "w": 16,
+   "h": 10,
+   "frames": 1,
+   "args": {
+    "level": 3
+   }
+  },
+  "guard.bumbling.idle": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true,
+   "args": {
+    "kind": "bumbling",
+    "pose": "idle"
+   },
+   "base": "tile_0086"
+  },
+  "guard.bumbling.think": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 4,
+   "loop": true,
+   "args": {
+    "kind": "bumbling",
+    "pose": "think"
+   },
+   "base": "tile_0086"
+  },
+  "guard.bumbling.hold": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "fps": 1,
+   "loop": false,
+   "args": {
+    "kind": "bumbling",
+    "pose": "hold"
+   },
+   "base": "tile_0086"
+  },
+  "guard.bumbling.flag": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 4,
+   "loop": false,
+   "args": {
+    "kind": "bumbling",
+    "pose": "flag"
+   },
+   "base": "tile_0086"
+  },
+  "guard.bumbling.lockdown": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 6,
+   "loop": false,
+   "args": {
+    "kind": "bumbling",
+    "pose": "lockdown"
+   },
+   "base": "tile_0086"
+  },
+  "guard.bumbling.breach": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 4,
+   "fps": 5,
+   "loop": false,
+   "args": {
+    "kind": "bumbling",
+    "pose": "breach"
+   },
+   "base": "tile_0086"
+  },
+  "guard.stern.idle": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true,
+   "args": {
+    "kind": "stern",
+    "pose": "idle"
+   },
+   "base": "tile_0096"
+  },
+  "guard.stern.think": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 4,
+   "loop": true,
+   "args": {
+    "kind": "stern",
+    "pose": "think"
+   },
+   "base": "tile_0096"
+  },
+  "guard.stern.hold": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "fps": 1,
+   "loop": false,
+   "args": {
+    "kind": "stern",
+    "pose": "hold"
+   },
+   "base": "tile_0096"
+  },
+  "guard.stern.flag": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 4,
+   "loop": false,
+   "args": {
+    "kind": "stern",
+    "pose": "flag"
+   },
+   "base": "tile_0096"
+  },
+  "guard.stern.lockdown": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 6,
+   "loop": false,
+   "args": {
+    "kind": "stern",
+    "pose": "lockdown"
+   },
+   "base": "tile_0096"
+  },
+  "guard.stern.breach": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 4,
+   "fps": 5,
+   "loop": false,
+   "args": {
+    "kind": "stern",
+    "pose": "breach"
+   },
+   "base": "tile_0096"
+  },
+  "guard.bureaucratic.idle": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true,
+   "args": {
+    "kind": "bureaucratic",
+    "pose": "idle"
+   },
+   "base": "tile_0085"
+  },
+  "guard.bureaucratic.think": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 4,
+   "loop": true,
+   "args": {
+    "kind": "bureaucratic",
+    "pose": "think"
+   },
+   "base": "tile_0085"
+  },
+  "guard.bureaucratic.hold": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "fps": 1,
+   "loop": false,
+   "args": {
+    "kind": "bureaucratic",
+    "pose": "hold"
+   },
+   "base": "tile_0085"
+  },
+  "guard.bureaucratic.flag": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 4,
+   "loop": false,
+   "args": {
+    "kind": "bureaucratic",
+    "pose": "flag"
+   },
+   "base": "tile_0085"
+  },
+  "guard.bureaucratic.lockdown": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 6,
+   "loop": false,
+   "args": {
+    "kind": "bureaucratic",
+    "pose": "lockdown"
+   },
+   "base": "tile_0085"
+  },
+  "guard.bureaucratic.breach": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 4,
+   "fps": 5,
+   "loop": false,
+   "args": {
+    "kind": "bureaucratic",
+    "pose": "breach"
+   },
+   "base": "tile_0085"
+  },
+  "guard.mocking.idle": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true,
+   "args": {
+    "kind": "mocking",
+    "pose": "idle"
+   },
+   "base": "tile_0112"
+  },
+  "guard.mocking.think": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 4,
+   "loop": true,
+   "args": {
+    "kind": "mocking",
+    "pose": "think"
+   },
+   "base": "tile_0112"
+  },
+  "guard.mocking.hold": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "fps": 1,
+   "loop": false,
+   "args": {
+    "kind": "mocking",
+    "pose": "hold"
+   },
+   "base": "tile_0112"
+  },
+  "guard.mocking.flag": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 4,
+   "loop": false,
+   "args": {
+    "kind": "mocking",
+    "pose": "flag"
+   },
+   "base": "tile_0112"
+  },
+  "guard.mocking.lockdown": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 6,
+   "loop": false,
+   "args": {
+    "kind": "mocking",
+    "pose": "lockdown"
+   },
+   "base": "tile_0112"
+  },
+  "guard.mocking.breach": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 4,
+   "fps": 5,
+   "loop": false,
+   "args": {
+    "kind": "mocking",
+    "pose": "breach"
+   },
+   "base": "tile_0112"
+  },
+  "guard.paranoid.idle": {
+   "svg": "guard",
+   "w": 24,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true,
+   "args": {
+    "kind": "paranoid",
+    "pose": "idle"
+   },
+   "base": "tile_0096"
+  },
+  "guard.paranoid.think": {
+   "svg": "guard",
+   "w": 24,
+   "h": 16,
+   "frames": 3,
+   "fps": 4,
+   "loop": true,
+   "args": {
+    "kind": "paranoid",
+    "pose": "think"
+   },
+   "base": "tile_0096"
+  },
+  "guard.paranoid.hold": {
+   "svg": "guard",
+   "w": 24,
+   "h": 16,
+   "frames": 1,
+   "fps": 1,
+   "loop": false,
+   "args": {
+    "kind": "paranoid",
+    "pose": "hold"
+   },
+   "base": "tile_0096"
+  },
+  "guard.paranoid.flag": {
+   "svg": "guard",
+   "w": 24,
+   "h": 16,
+   "frames": 2,
+   "fps": 4,
+   "loop": false,
+   "args": {
+    "kind": "paranoid",
+    "pose": "flag"
+   },
+   "base": "tile_0096"
+  },
+  "guard.paranoid.lockdown": {
+   "svg": "guard",
+   "w": 24,
+   "h": 16,
+   "frames": 3,
+   "fps": 6,
+   "loop": false,
+   "args": {
+    "kind": "paranoid",
+    "pose": "lockdown"
+   },
+   "base": "tile_0096"
+  },
+  "guard.paranoid.breach": {
+   "svg": "guard",
+   "w": 24,
+   "h": 16,
+   "frames": 4,
+   "fps": 5,
+   "loop": false,
+   "args": {
+    "kind": "paranoid",
+    "pose": "breach"
+   },
+   "base": "tile_0096"
+  },
+  "guard.support-bot.idle": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true,
+   "args": {
+    "kind": "support-bot",
+    "pose": "idle"
+   },
+   "base": "tile_0099"
+  },
+  "guard.support-bot.think": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 4,
+   "loop": true,
+   "args": {
+    "kind": "support-bot",
+    "pose": "think"
+   },
+   "base": "tile_0099"
+  },
+  "guard.support-bot.hold": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "fps": 1,
+   "loop": false,
+   "args": {
+    "kind": "support-bot",
+    "pose": "hold"
+   },
+   "base": "tile_0099"
+  },
+  "guard.support-bot.flag": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 4,
+   "loop": false,
+   "args": {
+    "kind": "support-bot",
+    "pose": "flag"
+   },
+   "base": "tile_0099"
+  },
+  "guard.support-bot.lockdown": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 6,
+   "loop": false,
+   "args": {
+    "kind": "support-bot",
+    "pose": "lockdown"
+   },
+   "base": "tile_0099"
+  },
+  "guard.support-bot.breach": {
+   "svg": "guard",
+   "w": 16,
+   "h": 16,
+   "frames": 4,
+   "fps": 5,
+   "loop": false,
+   "args": {
+    "kind": "support-bot",
+    "pose": "breach"
+   },
+   "base": "tile_0099"
+  },
+  "operator.idle": {
+   "svg": "operator",
+   "w": 16,
+   "h": 16,
+   "frames": 2,
+   "fps": 2,
+   "loop": true,
+   "args": {
+    "pose": "idle"
+   },
+   "base": "tile_0111"
+  },
+  "operator.think": {
+   "svg": "operator",
+   "w": 16,
+   "h": 16,
+   "frames": 3,
+   "fps": 4,
+   "loop": true,
+   "args": {
+    "pose": "think"
+   },
+   "base": "tile_0111"
+  },
+  "tile.banner": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0029.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0029"
+   }
+  },
+  "tile.wall": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0040.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0040"
+   }
+  },
+  "tile.door": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0046.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0046"
+   }
+  },
+  "tile.door-open": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0021.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0021"
+   }
+  },
+  "tile.chest": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0090.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0090"
+   }
+  },
+  "tile.chest-open": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0091.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0091"
+   }
+  },
+  "tile.shield": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0102.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0102"
+   }
+  },
+  "tile.spikes": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0041.png",
+   "w": 16,
+   "h": 16,
+   "frames": 1,
+   "svg": "tile",
+   "args": {
+    "tile": "tile_0041"
+   }
+  }
+ },
+ "tiles": {
+  "tile_0021": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0021.png",
+   "name": "door_open_left",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#52607c",
+    "#262b44",
+    "#8b9bb4",
+    "#3f2631",
+    "#bd6c4a",
+    "#c0cbdc"
+   ],
+   "rows": [
+    "aabbbbbbbbbbbbaa",
+    "cbbbbbbbbbbbbbbc",
+    "bbbccccaaccccbbb",
+    "bbcadddaacccacbb",
+    "bbcdddddbbbbccbb",
+    "bbcddeddbbbbccbb",
+    "bbfddeddbbbbffbb",
+    "baaddeddbbbbaaab",
+    "baaddeddbbbbaaab",
+    "bbcddedddbbbccbb",
+    "bbcddecddbbbccbb",
+    "bbfddecddbbbffbb",
+    "baaddedddbbbaaab",
+    "baaddeddbbbbaaab",
+    "bbcddeddbbbbccbb",
+    "bbcddeddbbbbccbb"
+   ]
+  },
+  "tile_0029": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0029.png",
+   "name": "banner",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#52607c",
+    "#3f2631",
+    "#ff706d",
+    "#8b9bb4",
+    "#e84537",
+    "#feae34",
+    "#fee761",
+    "#c0cbdc"
+   ],
+   "rows": [
+    "aabbcbbccbbcbbaa",
+    "ddbbefeeeefebbdd",
+    "ddbbefeeeefebbdd",
+    "ddbbcfeeeefcbbdd",
+    "aabbcgccccgcbbaa",
+    "hhbbcgccccgcbbhh",
+    "ddbbegccccgebbdd",
+    "ddbbefeeeefebbdd",
+    "aabbbefeefebbbaa",
+    "ddabbbeffebbbadd",
+    "dddabbbeebbbaadd",
+    "ddddabbbbbbadadd",
+    "aaaaaabbbbaaaaaa",
+    "hhdaddddddadhhhh",
+    "dddaddddddaddddd",
+    "dddaddddddaddddd"
+   ]
+  },
+  "tile_0040": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0040.png",
+   "name": "wall_stone_brick_alt",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#52607c",
+    "#8b9bb4",
+    "#c0cbdc"
+   ],
+   "rows": [
+    "aaaaaaaaaaaaaaaa",
+    "bbbbbbabccccbabb",
+    "bbbbbbabbbbbbabb",
+    "bbbbbbabbbbbbabb",
+    "aaaaaaaaaaaaaaaa",
+    "ccbabbbbbbabcccc",
+    "bbbabbbbbbabbbbb",
+    "bbbabbbbbbabbbbb",
+    "aaaaaaaaaaaaaaaa",
+    "bbbbbbabccccbabb",
+    "bbbbbbabbbbbbabb",
+    "bbbbbbabbbbbbabb",
+    "aaaaaaaaaaaaaaaa",
+    "ccbabbbbbbabcccc",
+    "bbbabbbbbbabbbbb",
+    "bbbabbbbbbabbbbb"
+   ]
+  },
+  "tile_0041": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0041.png",
+   "name": "spike_trap",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#eaa56c",
+    "#262b44",
+    "#c0cbdc",
+    "#8b9bb4",
+    "#52607c"
+   ],
+   "rows": [
+    "aaaabbbaabbbaaaa",
+    "aabbbbbbbbbbbbaa",
+    "abbbbcbbbbcbbbba",
+    "abbdeceddecedbba",
+    "abbeccdeeccdebba",
+    "abbeccdeeccdebba",
+    "abbddeddddeddbba",
+    "abbdeceddecedbba",
+    "abbdeceddecedbba",
+    "abbeccdeeccdebba",
+    "abbeccdeeccdebba",
+    "abbddddddddddbba",
+    "abbccccccccccbba",
+    "abbbbbbbbbbbbbba",
+    "aabbbbbbbbbbbbaa",
+    "aaaaaaaaaaaaaaaa"
+   ]
+  },
+  "tile_0046": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0046.png",
+   "name": "door_closed",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#52607c",
+    "#262b44",
+    "#8b9bb4",
+    "#c0cbdc",
+    "#3f2631",
+    "#763b36",
+    "#bd6c4a"
+   ],
+   "rows": [
+    "aabbbbbbbbbbbbbb",
+    "cbbbbbbaabbbbbaa",
+    "bbbcccdaadcccdaa",
+    "bbcaeeeeeeeeeeee",
+    "bbceeeeeeeeeeeee",
+    "bbceefggggggggge",
+    "bbdeegffffffffge",
+    "baaeegffffffffge",
+    "baaeegffffffffge",
+    "bbceegffffffffge",
+    "bbceegfffffccfge",
+    "bbdeegfffffccfge",
+    "baaeegfffffeefge",
+    "baaeegffffffffge",
+    "bbceegffffffffge",
+    "bbceegggggggggge"
+   ]
+  },
+  "tile_0085": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0085.png",
+   "name": "villager",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#763b36",
+    "#bd6c4a",
+    "#f7c282",
+    "#262b44",
+    "#e19a65",
+    "#c0cbdc",
+    "#8b9bb4"
+   ],
+   "rows": [
+    "................",
+    "....aaaaaaaa....",
+    "...aaaaaaaaaa...",
+    "..aaabccccbaaa..",
+    "..aabccccccbaa..",
+    "..aaccdcccdcaa..",
+    "..aacdddddddaa..",
+    "..aaddedddedaa..",
+    "..aafdefffefaa..",
+    "..aaaffdddfaaa..",
+    ".aaaghcccchgaaa.",
+    "aaaggggggggggaaa",
+    "aaddhgggggghddaa",
+    "aaddaccccccaddaa",
+    "aaaaabbaabbaaaaa",
+    ".aaaaccaaccaaaa."
+   ]
+  },
+  "tile_0086": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0086.png",
+   "name": "bald_man",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#e19a65",
+    "#f7c282",
+    "#bd6c4a",
+    "#262b44",
+    "#763b36",
+    "#c0cbdc",
+    "#8b9bb4"
+   ],
+   "rows": [
+    "................",
+    "....aaaaaaaa....",
+    "...aaaaaaaaaa...",
+    "..aaabccccbaaa..",
+    "..aabccccccbaa..",
+    "..aadccccccdaa..",
+    "..aadccccccdaa..",
+    "..aacceeceecaa..",
+    "..aafccdfdcfaa..",
+    "..aaafffcffaaa..",
+    ".aaagdfffffgaaa.",
+    "aaaggdggggdggaaa",
+    "aacchfddddfhccaa",
+    "aaccaddddddaccaa",
+    "aaaaaffffffaaaaa",
+    ".aaaaddddddaaaa."
+   ]
+  },
+  "tile_0090": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0090.png",
+   "name": "chest_closed_front",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#bd6c4a",
+    "#8b9bb4",
+    "#c0cbdc",
+    "#eaa56c",
+    "#5a6988",
+    "#262b44",
+    "#763b36"
+   ],
+   "rows": [
+    "................",
+    "................",
+    ".aaaaaaaaaaaaaa.",
+    "aaaaaaaaaaaaaaaa",
+    "aabccbbbbbbccbaa",
+    "aabddeeeeeeddbaa",
+    "aabccbddddbccbaa",
+    "aadddfdggdfdddaa",
+    "aadddfdggdfdddaa",
+    "aahaaaddddaaahaa",
+    "aahaaaaaaaaaahaa",
+    "aabaaaaaaaaaabaa",
+    "aabbbbbbbbbbbbaa",
+    "aafhhhhhhhhhhfaa",
+    "aadbbbbbbbbbbdaa",
+    "aaddddddddddddaa"
+   ]
+  },
+  "tile_0091": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0091.png",
+   "name": "chest_open",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#bd6c4a",
+    "#8b9bb4",
+    "#c0cbdc",
+    "#eaa56c",
+    "#5a6988",
+    "#262b44",
+    "#763b36"
+   ],
+   "rows": [
+    ".aaaaaaaaaaaaaa.",
+    "aaaaaaaaaaaaaaaa",
+    "aabccbbbbbbccbaa",
+    "aabddeeeeeeddbaa",
+    "aabccbddddbccbaa",
+    "aadddfdggdfdddaa",
+    "aadddfdggdfdddaa",
+    "aahaaaddddaaahaa",
+    "aahaaaaaaaaaahaa",
+    "aahaaaaaaaaaahaa",
+    "aabaaaaaaaaaabaa",
+    "aabaaaaaaaaaabaa",
+    "aabbbbbbbbbbbbaa",
+    "aafhhhhhhhhhhfaa",
+    "aadbbbbbbbbbbdaa",
+    "aaddddddddddddaa"
+   ]
+  },
+  "tile_0096": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0096.png",
+   "name": "knight",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#c0cbdc",
+    "#8b9bb4",
+    "#52607c",
+    "#bd6c4a"
+   ],
+   "rows": [
+    "................",
+    "......aaaa......",
+    "....aaaaaaaa....",
+    "...aaaabbaaaa...",
+    "..aaacbbbbcaaa..",
+    "..aadcbbbbcdaa..",
+    "..aaccccccccaa..",
+    "..aaccacacacaa..",
+    "..aaccacacacaa..",
+    "..aaccccccccaa..",
+    ".aabbaaaaaabbaa.",
+    "aaabbcbbbbcbbaaa",
+    "aaddccbddbccddaa",
+    "aaddaeeeeeeaddaa",
+    "aaaaaddaaddaaaaa",
+    ".aaaabbaabbaaaa."
+   ]
+  },
+  "tile_0099": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0099.png",
+   "name": "princess",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#763b36",
+    "#f7c282",
+    "#bd6c4a",
+    "#262b44",
+    "#eaa56c",
+    "#e19a65",
+    "#9b4ca3",
+    "#d176d0"
+   ],
+   "rows": [
+    "................",
+    "....aaaaaaaa....",
+    "...aaaaaaaaaa...",
+    "..aaabcdddbaaa..",
+    "..aadcdcddddaa..",
+    ".aaaddcdddddaaa.",
+    ".aabdddddccdbaa.",
+    ".aadddecccecdaa.",
+    ".aaddcecccecfaa.",
+    ".aaddcccgcccdaa.",
+    ".aadddcccccbdaa.",
+    "aaacddggggbhcaaa",
+    "aacccdhhihhcccaa",
+    "aaccadiidiiaccaa",
+    "aaaaahhhhhhaaaaa",
+    ".aaahhhhihhaaaa."
+   ]
+  },
+  "tile_0102": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0102.png",
+   "name": "shield_round",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#8b9bb4",
+    "#c0cbdc"
+   ],
+   "rows": [
+    "................",
+    "................",
+    "................",
+    "...aaaaaaaaaa...",
+    "...aaaaaaaaaa...",
+    "...aabccccbaa...",
+    "...aacccbbcaa...",
+    "...aacccbbcaa...",
+    "...aacbbcccaa...",
+    "...aacbbcccaa...",
+    "...aaaccccaaa...",
+    "....aaaaaaaa....",
+    ".....aaaaaa.....",
+    "................",
+    "................",
+    "................"
+   ]
+  },
+  "tile_0111": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0111.png",
+   "name": "hooded_figure",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#bd6c4a",
+    "#763b36",
+    "#eaa56c",
+    "#e84537",
+    "#c0cbdc",
+    "#8b9bb4",
+    "#f7c282",
+    "#aab7cc"
+   ],
+   "rows": [
+    "...aaaaaa.......",
+    "..aaaaaaaaa.....",
+    ".aaabbbbaaaa....",
+    ".aabacbbbbaaaa..",
+    ".aaaabbbbbbaaaa.",
+    ".aabddddddddbaa.",
+    ".aadbaaaaaabdaa.",
+    ".aabbaaaaaabbaa.",
+    ".aabbaeaaaebbaa.",
+    ".aacbaafffabca..",
+    "aaaabagaaagbaaa.",
+    "aahhbbfffffbhhaa",
+    "aahhbbfffffbhhaa",
+    "aabbabfffffabbaa",
+    "aabbabbffibabbaa",
+    ".aaabbfffbbaaaa."
+   ]
+  },
+  "tile_0112": {
+   "src": "/pixel/tiny-dungeon/tiles/tile_0112.png",
+   "name": "ranger",
+   "w": 16,
+   "h": 16,
+   "palette": [
+    "#3f2631",
+    "#bd6c4a",
+    "#763b36",
+    "#25956a",
+    "#43e1b3",
+    "#f7c282",
+    "#e19a65",
+    "#262b44"
+   ],
+   "rows": [
+    "......aaaaa.....",
+    "....aaaaaaaa....",
+    "...aaaabbbaaa...",
+    "..aaacbbbbcaaa..",
+    "..aacbbbbbbcaa..",
+    "..aadddeeeddaa..",
+    "..aabffgggffaa..",
+    "..aaffhfffhfaa..",
+    "..aagfhfffhgaa..",
+    "..aaagfcccgbaa..",
+    ".aaadcccbccdaaa.",
+    "aaabddaaaaddbaaa",
+    "aabgbdbbdddbgbaa",
+    "aabbadddbbdabbaa",
+    "aaaaaccaaccaaaaa",
+    ".aaaabbaabbaaaa."
+   ]
+  }
+ }
+}

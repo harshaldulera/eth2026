@@ -23,7 +23,11 @@
     "deploy:vault": "tsx scripts/deploy-vault.ts",
     "contracts:test": "vitest run contracts.test",
     "contracts:forge": "cd ../contracts && forge test -vv",
-    "guardian:fixtures": "tsx scripts/guardian-fixtures.ts"
+    "guardian:fixtures": "tsx scripts/guardian-fixtures.ts",
+    "qa:op": "node qa/stub-op.mjs",
+    "qa:shots": "node qa/screenshots.mjs",
+    "qa:sfx": "node qa/sfx-smoke.mjs",
+    "qa:lint": "node qa/vocab-lint.mjs"
   },
   "dependencies": {
     "@arkiv-network/sdk": "^1.0.1",
@@ -59,6 +63,7 @@
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.4.5",
+    "playwright-core": "1.65.0",
     "solc": "^0.8.38",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",

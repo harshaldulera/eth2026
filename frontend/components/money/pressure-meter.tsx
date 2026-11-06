@@ -1,22 +1,22 @@
 "use client";
 
-import { motion, useReducedMotion } from "motion/react";
+import { Meter } from "@/components/pixel/meter";
+import { threatWord } from "@/lib/vocab";
 import { cn } from "@/lib/utils";
 
-/** Colour ramp for pressure 0–100: ward (calm) → gold (rising) → ember (danger). */
+/** Colour ramp for threat 0–100: safe (calm) → warn (rising) → threat (danger). */
 export function pressureColor(value: number): string {
-  if (value >= 70) return "var(--color-ember)";
-  if (value >= 40) return "var(--color-gold)";
-  return "var(--color-ward)";
+  if (value >= 70) return "var(--color-threat)";
+  if (value >= 40) return "var(--color-warn)";
+  return "var(--color-safe)";
 }
 
+/** Threat as a word: QUIET · LOW · RISING · HIGH · CRITICAL (copy deck). */
 export function pressureWord(value: number): string {
-  if (value >= 85) return "Breaking point";
-  if (value >= 70) return "Heavy";
-  if (value >= 40) return "Rising";
-  if (value > 0) return "Calm";
-  return "Quiet";
+  return threatWord(value);
 }
+
+const TEXT_TONE = (v: number) => (v >= 70 ? "text-threat" : v >= 40 ? "text-warn" : v > 0 ? "text-safe" : "text-ink-dim");
 
 export type PressureMeterProps = {
   /** 0–100 referee pressure. */
@@ -25,50 +25,32 @@ export type PressureMeterProps = {
   /** e.g. "authority claim" — shown next to the label. */
   tactic?: string;
   size?: "sm" | "md" | "lg";
+  /** Caption under the bar (the op room says "watchers only"). */
+  caption?: string;
   className?: string;
 };
 
 /**
- * How hard the raider is pushing (display only — never decides the outcome).
+ * Threat gauge (display only — it never decides the outcome): 10 segments that light in the
+ * threat colour ramp, the number and the word.
  *
  * @example <PressureMeter value={72} tactic="authority claim" />
  */
-export function PressureMeter({ value, label = "Pressure", tactic, size = "md", className }: PressureMeterProps) {
-  const reduced = useReducedMotion();
+export function PressureMeter({ value, label = "Threat", tactic, size = "md", caption, className }: PressureMeterProps) {
   const v = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)));
-  const color = pressureColor(v);
-  const h = size === "lg" ? "h-3" : size === "sm" ? "h-1.5" : "h-2";
   return (
-    <div className={cn("w-full", className)}>
-      <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
-        <span className="text-stone">
+    <div className={cn("w-full min-w-0", className)}>
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="min-w-0 truncate font-ui text-[11px] tracking-[0.1em] text-ink-dim uppercase">
           {label}
-          {tactic ? <span className="text-parchment/80"> · {tactic}</span> : null}
+          {tactic ? <span className="text-ink normal-case"> · {tactic}</span> : null}
         </span>
-        <span className="tabular font-medium" style={{ color }}>
-          {v}
-          <span className="text-stone">/100</span> <span className="hidden sm:inline">· {pressureWord(v)}</span>
+        <span className={cn("tabular shrink-0 font-ui text-[11px] tracking-[0.08em]", TEXT_TONE(v))}>
+          {String(v).padStart(2, "0")} · {pressureWord(v)}
         </span>
       </div>
-      <div
-        role="meter"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={v}
-        aria-label={label}
-        className={cn("relative w-full overflow-hidden rounded-full bg-arena-line/70", h)}
-      >
-        <motion.div
-          className="absolute inset-y-0 left-0 rounded-full"
-          initial={false}
-          animate={{ width: `${v}%`, backgroundColor: color }}
-          transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 120, damping: 20 }}
-          style={{ boxShadow: v >= 70 ? `0 0 12px ${color}` : undefined }}
-        />
-        {[40, 70].map((t) => (
-          <span key={t} className="absolute inset-y-0 w-px bg-arena-bg/80" style={{ left: `${t}%` }} aria-hidden />
-        ))}
-      </div>
+      <Meter value={v} max={100} cells={10} size={size} label={label} />
+      {caption ? <p className="mt-1 font-ui text-[10px] tracking-[0.1em] text-ink-dim uppercase">{caption}</p> : null}
     </div>
   );
 }

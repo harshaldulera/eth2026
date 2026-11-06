@@ -1,35 +1,78 @@
 @import "tailwindcss";
 
 /*
- * Siege visual identity — dark arena, dark only.
- * Colour roles (keep them meaningful, they carry the story):
- *   gold      money (pots, fees, payouts) — always tabular, always with ℏ
- *   ember     the raider / attack / deny
- *   ward      the hold / castellan / approve
- *   stone     muted text, arena cut
- *   parchment body text
+ * Siege Part 2: the ops terminal.
+ *
+ * Every colour, font, radius and effect is a token. The defaults below are the CRT skin
+ * (phosphor green on black); `html[data-skin="neon"]` swaps them for the neon 16-bit skin.
+ * `html[data-crt="off"]` hides the scanline overlay. `html[data-calm="1"]` (or the OS
+ * reduced-motion setting) stills every decorative animation.
+ *
+ * Semantic roles (new code uses only these):
+ *   bg / panel / raised / line   surfaces, from back to front, and the frame colour
+ *   ink / ink-dim / accent       body text, secondary text, the skin's signature glow
+ *   money                        pots, fees, payouts: always ℏ, always tabular
+ *   threat / safe / warn         attack and deny / hold and approve / caution
+ *   stamp-*                      the four verdict colours, at full saturation only on stamps
+ *
+ * Legacy names (arena-*, gold, ember, ward, stone, parchment) alias the semantic tokens so the
+ * Part 1 components reskin without edits.
  */
-@theme {
-  --color-arena-bg: #0b0a12;
-  --color-arena-panel: #15131f;
-  --color-arena-raised: #1c1a29;
-  --color-arena-line: #2a2738;
-  --color-gold: #f5c451;
-  --color-gold-dim: #a8873a;
-  --color-ember: #ff5c38;
-  --color-ward: #5ee0a0;
-  --color-stone: #8a879a;
-  --color-parchment: #efe6d2;
+@theme static {
+  --color-bg: #040705;
+  --color-panel: #0a120c;
+  --color-raised: #101b12;
+  --color-line: #1e3a24;
+  --color-ink: #c9f7c9;
+  --color-ink-dim: #7fae86;
+  --color-accent: #7dff9a;
+  --color-money: #ffd24a;
+  --color-threat: #ff5a3c;
+  --color-safe: #5ee0a0;
+  --color-warn: #ffb347;
+  /* pure shade / glint for bevels, vignettes and inset shadows (mixed with transparent, never raw rgb) */
+  --color-shade: #000;
+  --color-glint: #fff;
+  --color-stamp-hold: var(--color-safe);
+  --color-stamp-flag: var(--color-warn);
+  --color-stamp-lockdown: var(--color-threat);
+  --color-stamp-breach: var(--color-money);
 
-  --animate-shimmer: shimmer 1.6s linear infinite;
-  --animate-ring: ring 1.8s cubic-bezier(0.2, 0.7, 0.3, 1) infinite;
+  /* legacy aliases */
+  --color-arena-bg: var(--color-bg);
+  --color-arena-panel: var(--color-panel);
+  --color-arena-raised: var(--color-raised);
+  --color-arena-line: var(--color-line);
+  --color-gold: var(--color-money);
+  --color-gold-dim: color-mix(in oklab, var(--color-money) 65%, black);
+  --color-ember: var(--color-threat);
+  --color-ward: var(--color-safe);
+  --color-stone: var(--color-ink-dim);
+  --color-parchment: var(--color-ink);
+
+  /* pixel geometry: every radius is square; rounded-full (dots) stays round */
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+
+  --animate-shimmer: shimmer 1.6s steps(16) infinite;
+  --animate-ring: ring 1.8s steps(6) infinite;
+  --animate-blink: blink 1s steps(1, end) infinite;
+  --animate-led: led 1.6s steps(2, jump-none) infinite;
+  --animate-caret: blink 1.06s steps(1, end) infinite;
+  --animate-pip: pip 180ms steps(3) 1;
 
   @keyframes shimmer {
     0% {
-      background-position: -200% 0;
+      background-position: 0 -100%;
     }
     100% {
-      background-position: 200% 0;
+      background-position: 0 200%;
     }
   }
   @keyframes ring {
@@ -42,72 +85,262 @@
       opacity: 0;
     }
   }
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+  @keyframes pip {
+    0% {
+      transform: scale(1.4);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes led {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
 }
 
 @theme inline {
+  --font-pixel: var(--font-press-start), ui-monospace, monospace;
+  --font-ui: var(--font-silkscreen), ui-monospace, monospace;
+  --font-term: var(--font-vt323), ui-monospace, monospace;
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
 }
 
+/* effect tokens (not utilities) */
 :root {
+  --px: 8px;
+  --radius-px: 0px;
+  --glow: 0 0 6px color-mix(in oklab, var(--color-accent) 60%, transparent);
+  --glow-strong:
+    0 0 2px color-mix(in oklab, var(--color-accent) 80%, transparent),
+    0 0 12px color-mix(in oklab, var(--color-accent) 45%, transparent);
+  --bevel-hi: color-mix(in oklab, var(--color-ink) 14%, transparent);
+  --bevel-lo: color-mix(in oklab, var(--color-shade) 45%, transparent);
+  --scan-alpha: 0.18;
+  --body-glow: color-mix(in oklab, var(--color-accent) 7%, transparent);
+  --grid-line: color-mix(in oklab, var(--color-line) 22%, transparent);
   color-scheme: dark;
 }
 
+/* neon 16-bit skin: one attribute flips the whole app */
+:root[data-skin="neon"] {
+  --color-bg: #12062a;
+  --color-panel: #1b0b3d;
+  --color-raised: #26114f;
+  --color-line: #4a2a8a;
+  --color-ink: #f4e9ff;
+  --color-ink-dim: #b49ad8;
+  --color-accent: #ff3df5;
+  --color-money: #ffe14d;
+  --color-threat: #ff4d6d;
+  --color-safe: #35f0c6;
+  --color-warn: #ffa63d;
+  --glow: 0 0 10px color-mix(in oklab, var(--color-accent) 70%, transparent);
+  --glow-strong:
+    0 0 2px color-mix(in oklab, var(--color-accent) 90%, transparent),
+    0 0 16px color-mix(in oklab, var(--color-accent) 55%, transparent);
+  --bevel-hi: color-mix(in oklab, var(--color-accent) 22%, transparent);
+  --scan-alpha: 0.1;
+  --body-glow: color-mix(in oklab, var(--color-accent) 14%, transparent);
+  --grid-line: color-mix(in oklab, var(--color-line) 35%, transparent);
+}
+
 html {
-  background: var(--color-arena-bg);
+  background: var(--color-bg);
 }
 
 body {
-  background-color: var(--color-arena-bg);
-  /* vignette: a faint warm glow from above, darkening toward the edges */
+  background-color: var(--color-bg);
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -10%, rgb(245 196 81 / 0.07), transparent 70%),
-    radial-gradient(ellipse 120% 90% at 50% 40%, transparent 55%, rgb(0 0 0 / 0.55) 100%);
+    radial-gradient(ellipse 80% 50% at 50% -10%, var(--body-glow), transparent 70%),
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    32px 32px,
+    32px 32px;
   background-attachment: fixed;
-  color: var(--color-parchment);
+  color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-tap-highlight-color: transparent;
 }
 
-/* subtle film grain over everything, never intercepts clicks */
-body::before {
-  content: "";
+@layer base {
+  /* Silkscreen for page titles; sentences (and long names) stay in Geist. */
+  h1 {
+    font-family: var(--font-ui);
+    letter-spacing: 0.02em;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 35%, transparent);
+    color: var(--color-ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-bg);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border: 2px solid var(--color-bg);
+  }
+}
+
+/* Pixel geometry for Part 1 pills and dots too: rounded-full becomes square (LEDs, chips, pips).
+   Need a real circle? use rounded-[50%]. */
+.rounded-full {
+  border-radius: 0;
+}
+
+/* ─── CRT overlay (one fixed layer; toggled by html[data-crt]) ─────────────────────────── */
+[data-crt-overlay] {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  z-index: 60;
   pointer-events: none;
-  opacity: 0.05;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  contain: strict;
+  background:
+    repeating-linear-gradient(0deg, rgb(0 0 0 / var(--scan-alpha)) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse 110% 90% at 50% 50%, transparent 60%, rgb(0 0 0 / 0.55) 100%);
+  box-shadow: inset 0 0 120px rgb(0 0 0 / 0.6);
+  animation: crt-flicker 4s steps(2) infinite;
+}
+html[data-crt="off"] [data-crt-overlay] {
+  display: none;
+}
+@keyframes crt-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.97;
+  }
+}
+@media (max-width: 640px), (prefers-reduced-motion: reduce) {
+  [data-crt-overlay] {
+    animation: none;
+  }
 }
 
-::selection {
-  background: rgb(245 196 81 / 0.3);
-  color: var(--color-parchment);
+/* ─── pixel utilities ───────────────────────────────────────────────────────────────────── */
+@utility pixelated {
+  image-rendering: pixelated;
 }
-
-:focus-visible {
-  outline: 2px solid var(--color-gold);
-  outline-offset: 2px;
-  border-radius: 6px;
+@utility glow {
+  text-shadow: var(--glow);
 }
-
+@utility glow-strong {
+  text-shadow: var(--glow-strong);
+}
 @utility tabular {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
-
-/* "Settling on Hedera…" style placeholder bar */
+/* 2px notched frame (corners left open) + inner bevel. Set --frame to recolour. */
+@utility px-frame {
+  box-shadow:
+    0 -2px 0 0 var(--frame, var(--color-line)),
+    0 2px 0 0 var(--frame, var(--color-line)),
+    -2px 0 0 0 var(--frame, var(--color-line)),
+    2px 0 0 0 var(--frame, var(--color-line)),
+    inset 2px 2px 0 0 var(--bevel-hi),
+    inset -2px -2px 0 0 var(--bevel-lo);
+}
+/* raised key; px-key-down is the pressed state */
+@utility px-key {
+  box-shadow:
+    0 -2px 0 0 var(--frame, var(--color-line)),
+    0 2px 0 0 var(--frame, var(--color-line)),
+    -2px 0 0 0 var(--frame, var(--color-line)),
+    2px 0 0 0 var(--frame, var(--color-line)),
+    inset 2px 2px 0 0 rgb(255 255 255 / 0.28),
+    inset -2px -4px 0 0 rgb(0 0 0 / 0.32);
+}
+@utility px-key-down {
+  box-shadow:
+    0 -2px 0 0 var(--frame, var(--color-line)),
+    0 2px 0 0 var(--frame, var(--color-line)),
+    -2px 0 0 0 var(--frame, var(--color-line)),
+    2px 0 0 0 var(--frame, var(--color-line)),
+    inset 2px 4px 0 0 rgb(0 0 0 / 0.32);
+}
+/* "loading…" placeholder: a scanline sweeping down a dim block */
 @utility shimmer {
+  background-color: color-mix(in oklab, var(--color-line) 30%, transparent);
   background-image: linear-gradient(
-    90deg,
-    rgb(255 255 255 / 0.03) 0%,
-    rgb(245 196 81 / 0.12) 50%,
-    rgb(255 255 255 / 0.03) 100%
+    180deg,
+    transparent 0%,
+    color-mix(in oklab, var(--color-accent) 16%, transparent) 48%,
+    color-mix(in oklab, var(--color-accent) 16%, transparent) 52%,
+    transparent 100%
   );
-  background-size: 200% 100%;
+  background-size: 100% 50%;
+  background-repeat: no-repeat;
   animation: var(--animate-shimmer);
 }
+/* diagonal hazard stripe (STUB strip, lockdown) */
+@utility hazard {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--color-money) 12%, transparent) 0 8px,
+    transparent 8px 16px
+  );
+}
+@utility scanlines {
+  background-image: repeating-linear-gradient(0deg, rgb(0 0 0 / 0.22) 0 1px, transparent 1px 3px);
+}
 
+/* marquee track: the content is rendered twice, the track slides by one copy */
+.px-marquee-track {
+  animation: px-marquee var(--marquee-duration, 40s) linear infinite;
+}
+.px-marquee:hover .px-marquee-track,
+.px-marquee:focus-within .px-marquee-track {
+  animation-play-state: paused;
+}
+@keyframes px-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes px-pop {
+  0% {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ─── reduced motion: OS setting or ?calm=1 ─────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -116,4 +349,18 @@ body::before {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+  .px-marquee-track {
+    animation: none !important;
+  }
+}
+html[data-calm="1"] *,
+html[data-calm="1"] *::before,
+html[data-calm="1"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+html[data-calm="1"] .px-marquee-track,
+html[data-calm="1"] [data-crt-overlay] {
+  animation: none !important;
 }

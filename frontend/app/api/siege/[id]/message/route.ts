@@ -3,6 +3,7 @@ import { castleClosedReason } from "@/lib/castles";
 import { siege, siegeRow } from "@/lib/siege";
 import { TransportUnavailableError } from "@/lib/transport";
 import { vaultStateOf } from "@/lib/vault";
+import { eventsSince } from "@/lib/events/bus";
 import { err, errorMessage, json, readBody } from "../../../_lib/http";
 
 /**
@@ -47,5 +48,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const { siege: s, decision } = r;
   const { raw: _raw, ...publicDecision } = decision;
   void _raw;
-  return json({ siege: s, decision: publicDecision });
+  return json({ siege: s, decision: publicDecision, referee: refereeFor(id, s.turn) });
+}
+
+/**
+ * ADDITIVE (Part 2): the referee's read of this turn — threat 0–100 and the tactic label — from the
+ * latest "message" event the engine just emitted, so the op room can play the class effect without
+ * waiting for the next event poll. Display only; absent if the event is missing.
+ */
+function refereeFor(siegeId: string, turn: number): { pressure: number; tactic: string } | undefined {
+  const evs = eventsSince(0, { siegeId });
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const e = evs[i];
+    if (e.type !== "message" || (e.turn !== undefined && e.turn !== turn)) continue;
+    const { pressure, tactic } = e.payload ?? {};
+    if (typeof pressure === "number") return { pressure, tactic: typeof tactic === "string" ? tactic : "probing" };
+  }
+  return undefined;
 }

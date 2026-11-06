@@ -2,17 +2,18 @@ import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
+/** Pixel chip: square, 1px frame, Silkscreen caps. Tones keep their Part 1 names. */
 export const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 whitespace-nowrap [&_svg]:size-3 [&_svg]:shrink-0",
+  "inline-flex items-center gap-1 border px-1.5 py-[3px] font-ui text-[10px] leading-3 tracking-[0.08em] whitespace-nowrap uppercase [&_svg]:size-3 [&_svg]:shrink-0",
   {
     variants: {
       tone: {
-        neutral: "border-arena-line bg-white/[0.03] text-stone",
-        gold: "border-gold/30 bg-gold/10 text-gold",
-        ember: "border-ember/35 bg-ember/10 text-ember",
-        ward: "border-ward/30 bg-ward/10 text-ward",
-        parchment: "border-parchment/20 bg-parchment/5 text-parchment",
-        stub: "border-dashed border-stone/50 bg-transparent text-stone",
+        neutral: "border-line bg-bg/40 text-ink-dim",
+        gold: "border-money/45 bg-money/10 text-money",
+        ember: "border-threat/50 bg-threat/10 text-threat",
+        ward: "border-safe/45 bg-safe/10 text-safe",
+        parchment: "border-ink/30 bg-ink/5 text-ink",
+        stub: "border-dashed border-ink-dim/60 bg-transparent text-ink-dim",
       },
     },
     defaultVariants: { tone: "neutral" },
