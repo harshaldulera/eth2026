@@ -15,7 +15,7 @@ import { useCalmMotion } from "@/lib/hooks/usePrefs";
 import { useFork } from "@/lib/hooks/useFork";
 import { lastOf, parseAttempt } from "@/lib/money/events";
 import { formatAmount, toUnits } from "@/lib/money/format";
-import { voidCause } from "@/lib/money/vault";
+import { reasonText, voidLine, voidedToast } from "@/lib/siege/text";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { toBeats } from "@/lib/scene/beats";
 import { opMoney } from "@/lib/scene/money";
@@ -56,20 +56,6 @@ function splitFor(fee: string, bps: FeeSplitBps = { castellan: 8000, pot: 1500, 
 const refundPending = (s: Siege) =>
   s.settlement?.state === "void" && !s.free && s.settlement.refund !== undefined && s.settlement.refund.state === "due";
 
-const REASON_TEXT: Record<string, string> = {
-  castle_already_broken: "another operator breached this vault moments before you did",
-  castle_broken: "another operator breached this vault before your op finished",
-  castle_closed: "the vault closed before your op finished",
-  vault_expired: "the vault expired before your op finished",
-  vault_not_open: "the vault had already been emptied",
-  expired: "the vault had expired",
-  dormant: "the guard went offline",
-  guardian_dormant: "the guard went offline",
-  castle_dormant: "the guard went offline",
-  orders_changed: "the guard's orders changed and the vault closed",
-  owner_closed: "the owner closed the vault",
-};
-const reasonText = (r?: string) => (r ? (REASON_TEXT[r] ?? r.replace(/_/g, " ")) : "unknown error");
 
 /** How long the room waits for the event backlog before mounting the scene anyway. */
 const BACKLOG_WAIT_MS = 2500;
@@ -269,7 +255,8 @@ function Room({
               : e.code === "not_guarding"
                 ? `${describeError(e)}${siege.free ? "" : " Your fee will be refunded."}`
                 : "OP OVER",
-          e.code === "castle_closed" ? { description: TOASTS.opVoid.body } : undefined,
+          // The arena sends the op's own void reason; say that one, not a guess.
+          e.code === "castle_closed" ? { description: voidedToast(siege, (e.body as { reason?: string } | null)?.reason) } : undefined,
         );
         refresh();
       } else {
@@ -542,13 +529,11 @@ function Outcome({ siege, castle, events, frame }: { siege: Siege; castle: Castl
 
   if (settlement?.state === "void") {
     const refund = settlement.refund;
-    const cause = voidCause(settlement.reason, castle.vaultState);
-    const what = cause === "offline" ? "the guard went offline" : "the vault closed";
-    const lead = siege.free ? "Op ended" : refund?.state === "refunded" ? "Refunded" : refund?.state === "failed" ? "Refund owed" : "Refunding";
     return (
       <PixelPanel tone="warn" className="px-4 py-4" role="status">
         <p className="font-pixel text-[14px] text-warn">OP VOID</p>
-        <p className="mt-2 text-base text-ink">{cause === "other" ? <>This op can&apos;t pay out — {reasonText(settlement.reason)}.</> : <>{lead} — {what}</>}</p>
+        {/* The reason this op was voided for, never guessed from the vault's state today. */}
+        <p className="mt-2 text-base text-ink">{voidLine(siege, castle.guardianName)}</p>
         <p className="mt-1 text-sm text-ink-dim">
           {siege.free ? (
             "It was a free recon, so nothing was charged."

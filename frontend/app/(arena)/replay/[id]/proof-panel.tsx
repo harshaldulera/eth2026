@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { ReplayWithVerify } from "@/lib/api/client";
 import { formatAmount, shortAccount } from "@/lib/money/format";
 import { MONEY, STAMPS, TOASTS } from "@/lib/vocab";
+import { reasonText, refundText } from "@/lib/siege/text";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { PixelPanel } from "@/components/pixel";
 import { playCue } from "@/components/pixel/sfx-link";
@@ -120,8 +121,8 @@ export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; cl
             <span className="text-ink-dim">{MONEY.reconNoPayout}</span>
           ) : settlement?.state === "void" ? (
             <span className="text-warn">
-              void · {settlement.reason?.replaceAll("_", " ")}
-              {settlement.refund ? ` · ${formatAmount(settlement.refund.amount, castle.asset)} refund ${settlement.refund.state}` : ""}
+              void · {reasonText(settlement.reason, "public")} · {refundText(siege)}
+              {settlement.refund ? ` (${formatAmount(settlement.refund.amount, castle.asset)})` : ""}
             </span>
           ) : settlement?.state === "failed" ? (
             <span className="text-threat">settlement failed · {settlement.reason}</span>

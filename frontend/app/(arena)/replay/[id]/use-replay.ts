@@ -9,11 +9,13 @@ type ReplayState = { id: string; data?: ReplayWithVerify; error?: unknown };
  * Still changing: an op in progress, ended but its money event has not landed yet, or one whose
  * recomputed evidence (lib/replay `verify.live`) is still waiting for its chain result.
  */
-function stillMoving(r: ReplayWithVerify): boolean {
+export function stillMoving(r: ReplayWithVerify): boolean {
   if (r.verify?.live) return true;
   const s = r.siege;
-  if (s.status === "created" || s.status === "in_progress") return true;
+  // Settled first: an op voided under the operator keeps status in_progress forever. A refund
+  // still due keeps the page polling through verify.live (lib/replay), which gives up after a while.
   if (s.settlement?.state === "failed" || s.settlement?.state === "void") return false;
+  if (s.status === "created" || s.status === "in_progress") return true;
   const money = s.status === "broken" ? "release" : "attempt";
   return !r.events.some((e) => e.type === money);
 }

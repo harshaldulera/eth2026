@@ -84,7 +84,7 @@ export function StepChips({
               </span>
               {ev ? (
                 <span className="col-start-2 min-w-0 border-t-2 border-line/50 pt-1.5">
-                  <TurnEvidence t={ev} protectedTool={protectedTool} />
+                  <TurnEvidence t={ev} protectedTool={protectedTool} audited={!verify?.hcs.noTopic} />
                 </span>
               ) : null}
             </button>

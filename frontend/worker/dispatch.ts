@@ -16,6 +16,7 @@ import * as playStart from "@/app/api/play/start/route";
 import * as siegeDetail from "@/app/api/siege/[id]/route";
 import * as siegeMessage from "@/app/api/siege/[id]/message/route";
 import * as siegeStart from "@/app/api/siege/start/route";
+import * as replay from "@/app/api/replay/[id]/route";
 
 /**
  * In-process fetch over the real route handlers (no Next server): used by scripts/demo.ts and any
@@ -46,6 +47,8 @@ const ROUTES: [string, RouteModule][] = [
   ["/api/approvals", approvals],
   ["/api/approvals/[id]", approvalDecide],
   ["/api/owner", owner],
+  // Public read: the replay (lib/replay tests drive it end to end through this dispatcher).
+  ["/api/replay/[id]", replay],
 ];
 
 function match(pattern: string, path: string): Record<string, string> | null {
