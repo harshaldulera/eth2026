@@ -57,7 +57,11 @@ function sql(): Sqlite {
     // ...and so does a schema layout change (entity names or columns): old records name old kinds.
     const layout = (s.prepare("SELECT v FROM arkiv_meta WHERE k = 'schema_version'").get() as { v: string } | undefined)?.v;
     if (known !== ns || layout !== SCHEMA_VERSION) {
-      s.exec("DELETE FROM arkiv_entities; DELETE FROM arkiv_outbox; DELETE FROM arkiv_meta WHERE k LIKE 'delisted:%' OR k = 'delist_check'");
+      s.exec("DELETE FROM arkiv_entities; DELETE FROM arkiv_outbox; DELETE FROM arkiv_meta WHERE k = 'delist_check'");
+      // An Owner's delisting is a fact about the vault, not about the column layout: keep it across
+      // a layout change, so a vault its Owner took down is never republished. A new namespace is a
+      // separate deployment, so it starts without them.
+      if (known !== ns) s.exec("DELETE FROM arkiv_meta WHERE k LIKE 'delisted:%'");
       s.prepare("INSERT INTO arkiv_meta (k, v) VALUES ('namespace', ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(ns);
       s.prepare("INSERT INTO arkiv_meta (k, v) VALUES ('schema_version', ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(SCHEMA_VERSION);
     }

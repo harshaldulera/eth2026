@@ -74,7 +74,7 @@ One op, live while it runs. Written at start, on every turn and at the end. Live
 
 ## `guardProfile`, `operatorProfile`
 
-One per vault Owner and per operator wallet: `wallet` (indexed), `ops`, `breaches` (indexed), `streak` (indexed), `earned` (tinybars). Only paid, non-voided ops count: recon is unlimited and a voided op won nothing. The Hall's boards sort on `streak` and `breaches`.
+One per vault Owner and per operator wallet: `wallet` (indexed), `ops`, `breaches` (indexed), `streak` (indexed), `earned` (tinybars). Only paid, non-voided ops count: recon is unlimited and a voided op won nothing. Indexed so any app can rank guards by `streak` and operators by `breaches`.
 
 ## Never on Arkiv
 

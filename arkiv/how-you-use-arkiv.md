@@ -12,7 +12,7 @@ The Grid and the operator's target picker run one query on `vaultStatus`. The fi
 |---|---|---|
 | Tier 1 / 2 / 3 | `tier` | `tier = u64(2)` |
 | Pot: ≥ 10 / 20 / 50 ℏ | `pot` | `pot >= u64(2000000000)` |
-| Sort: biggest pot / longest streak / cheapest fee / newest | `pot`, `streak`, `fee`, `createdAtMs` | `ORDER BY streak:u64 DESC` |
+| Sort: biggest pot / longest streak / cheapest fee / newest | `pot`, `streak`, `fee`, `createdAtMs` | `ORDER BY streak:u64 DESC` (EASIEST and QUIET, the other two chips, reorder the same Arkiv result on screen) |
 | State: Guarding / All | `vaultState` | `vaultState = str('guarding')` |
 
 Under the grid, a terminal line prints the query it ran and the Arkiv block it was answered at. If the RPC fails, it says so in red and falls back to the server's cached copy; it never falls back silently. The filters are in the URL, so a filtered Grid can be shared.
@@ -50,8 +50,8 @@ curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: appli
 | Entity | Expires | What the user sees |
 |---|---|---|
 | `vault`, `vaultStatus` | the vault deadline | Each vault card shows "expires in 2d 21h". When the vault closes, it leaves The Grid because the query stops returning it. |
-| `op` | 10 min after its last write | While an op is live, its vault shows **OP LIVE** on The Grid and in the operator's target picker, so an Owner sending an agent can avoid a vault already being hit. Ten minutes after the op ends, the claim disappears with no cleanup code. |
-| profiles | ~182 days, refreshed | The Hall's boards stay put while the season runs. |
+| `op` | 10 min after its last write | While an op is live, its vault card lights a red **LIVE** light on The Grid and in the operator's target picker, so an Owner sending an agent can avoid a vault already being hit. Ten minutes after the op ends, the claim disappears with no cleanup code. |
+| profiles | ~182 days, refreshed | A guard's and an operator's record stays queryable all season, from any app. The Hall's boards on our site are computed from the server's copy today; the same ranking is one Arkiv query (`ORDER BY breaches:u64 DESC`). |
 
 `permissionlessExtension` on the listing lets the arena push its expiry out when a vault is re-armed, without taking ownership back.
 

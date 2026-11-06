@@ -8,7 +8,7 @@
 
 **Claims would need a janitor.** An op is an operator's claim on a vault. On Arkiv it disappears ten minutes after it ends, and a vault disappears at its deadline. In Postgres we would need a cleanup job, and anyone reading our API would have to trust that it ran.
 
-**Our history would be ours to edit.** The arena's own records (pots, streaks, op outcomes, the Hall's boards) are signed writes from one public wallet, readable by anyone at any block. In Postgres we could quietly change a streak.
+**Our history would be ours to edit.** The arena's own records (pots, streaks, op outcomes, every guard's and operator's record) are signed writes from one public wallet, readable by anyone at any block. In Postgres we could quietly change a streak.
 
 ## What we kept off Arkiv, and why
 

@@ -97,6 +97,29 @@ describe("arkiv vocabulary", () => {
     expect(raw().prepare("SELECT COUNT(*) AS n FROM arkiv_entities").all()).toEqual([{ n: 0 }]);
     expect(raw().prepare("SELECT v FROM arkiv_meta WHERE k = 'schema_version'").all()).toEqual([{ v: SCHEMA_VERSION }]);
   });
+
+  it("a layout change keeps an Owner's delisting: the vault they took down is never republished", () => {
+    const c = getCastle("castle_granite_hold")!;
+    raw().exec(`
+      CREATE TABLE IF NOT EXISTS arkiv_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+      INSERT INTO arkiv_meta VALUES ('namespace', 'siege');
+      INSERT INTO arkiv_meta VALUES ('schema_version', '1');
+      INSERT INTO arkiv_meta VALUES ('delisted:${c.id}', '2026-11-06T00:00:00Z');
+    `);
+    expect(enqueue({ kind: "vault", data: c })).toEqual({ queued: false });
+    expect(raw().prepare("SELECT v FROM arkiv_meta WHERE k = 'schema_version'").all()).toEqual([{ v: SCHEMA_VERSION }]);
+  });
+
+  it("a new namespace is a separate deployment and starts without the old delistings", () => {
+    const c = getCastle("castle_granite_hold")!;
+    raw().exec(`
+      CREATE TABLE IF NOT EXISTS arkiv_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+      INSERT INTO arkiv_meta VALUES ('namespace', 'some-other-namespace');
+      INSERT INTO arkiv_meta VALUES ('schema_version', '${SCHEMA_VERSION}');
+      INSERT INTO arkiv_meta VALUES ('delisted:${c.id}', '2026-11-06T00:00:00Z');
+    `);
+    expect(enqueue({ kind: "vault", data: c }).queued).toBe(true);
+  });
 });
 
 describe("arkiv", () => {

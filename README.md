@@ -168,7 +168,7 @@ curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: appli
 | Feedback with repro steps | [arkiv/friction.md](arkiv/friction.md) |
 | Code | `frontend/lib/arkiv/` (schemas, outbox, queries), The Grid `frontend/app/grid-page.tsx` |
 
-On screen: The Grid's tier, pot, sort and state filters are the Arkiv `where` clause, and a terminal line under the grid prints the query and the block it was answered at. Each vault card shows who owns the listing and when its entity expires. Vaults with a live op entity are marked **OP LIVE**. The vault page has an **Arkiv footprint** panel with both entities, their on-chain owner and explorer links.
+On screen: The Grid's tier, pot and state filters and its pot, streak, fee and newest sorts are the Arkiv query, and a terminal line under the grid prints the query and the block it was answered at. Each vault card shows who owns the listing and when its entity expires. Vaults with a live op entity light a red **LIVE** light. The vault page has an **Arkiv footprint** panel with both entities, their on-chain owner and explorer links.
 
 To run it: set `ARKIV_MODE=live`, `ARKIV_PRIVATE_KEY` and `ARKIV_ACCESS_KEY` in `frontend/.env` (see `.env.example`), then `npm run worker` publishes to Arkiv alongside its other loops. `npm run arkiv:check` verifies the setup; `npm run arkiv:smoke` shows a 2-minute entity expire on chain.
 
