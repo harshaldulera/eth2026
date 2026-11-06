@@ -1,9 +1,9 @@
 /**
- * Guardian model check against REAL 0G (plan B1):  npm run guardian:fixtures [model…]
+ * Guardian model check against a REAL model (plan B1):  npm run guardian:fixtures [model…]
  *
  * For each model: WOODEN_BREAK must open the wooden guardian, and every MUST_NOT_BREAK message must
- * hold against every stone/iron guardian. Uses an in-memory DB (proxy records only) and your
- * ZG_API_KEY from .env.local. Costs roughly $0.01 per model. Exit 0 = PASS.
+ * hold against every stone/iron guardian. Uses an in-memory DB (proxy records only) and the active
+ * INFERENCE_PROVIDER from .env.local (0g: ZG_API_KEY, claude: ANTHROPIC_API_KEY). Exit 0 = PASS.
  */
 import "@/lib/config/load-env";
 process.env.DATABASE_URL = ":memory:";
@@ -34,7 +34,7 @@ async function play(c: (typeof FIXTURE_CASTLES)[number], texts: readonly string[
 }
 
 async function run(model: string) {
-  console.log(`\n━━━ ${model} ━━━`);
+  console.log(`\n━━━ ${zgConfig.provider} · ${model} ━━━`);
   let pass = true;
   const wooden = FIXTURE_CASTLES.find((c) => c.tier === "wooden")!;
   console.log(`  ${wooden.guardianName} (wooden) must open:`);
@@ -55,13 +55,15 @@ async function run(model: string) {
 
 async function main() {
   if (zgConfig.mock) {
-    console.error("ZG_API_KEY is not set (or ZG_MOCK=1): this script checks real 0G models. Add a key to .env.local.");
+    const need = zgConfig.provider === "claude" ? "ANTHROPIC_API_KEY" : "ZG_API_KEY";
+    console.error(`${need} is not set (or ZG_MOCK=1): this script checks real models (INFERENCE_PROVIDER=${zgConfig.provider}). Add the key to .env.local.`);
     process.exit(2);
   }
   freshFixtureDb();
   const models = process.argv.slice(2);
   let all = true;
-  for (const m of models.length ? models : [zgConfig.defaultModel]) all = (await run(m)) && all;
+  const fallback = zgConfig.provider === "claude" ? zgConfig.anthropicModel : zgConfig.defaultModel;
+  for (const m of models.length ? models : [fallback]) all = (await run(m)) && all;
   process.exit(all ? 0 : 1);
 }
 main();

@@ -2,14 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import type { Castle, FeeSplit as FeeSplitT, Siege, StoredSiegeEvent } from "@/lib/types";
 import { MAX_TURNS } from "@/lib/types";
 import { ApiError, api, describeError, type FeeSplitBps, type MessageResponse } from "@/lib/api/client";
 import { useConfig } from "@/lib/hooks/useConfig";
 import { usePolling } from "@/lib/hooks/usePolling";
-import { useEventFeed } from "@/lib/hooks/useEventFeed";
+import { useSiege, type DemoSiege, type SiegeView } from "@/lib/hooks/useSiege";
+import demoSiege from "@/lib/fixtures/demo-siege.json";
 import { useCalmMotion } from "@/lib/hooks/usePrefs";
 import { useFork } from "@/lib/hooks/useFork";
 import { lastOf, parseAttempt } from "@/lib/money/events";
@@ -51,8 +52,6 @@ function splitFor(fee: string, bps: FeeSplitBps = { castellan: 8000, pot: 1500, 
   return { castellan: castellan.toString(), pot: (f - castellan - arena).toString(), arena: arena.toString() };
 }
 
-/** The worker will not produce an attempt/release for this siege any more. */
-const settlementDone = (s: Siege) => s.settlement?.state === "failed" || s.settlement?.state === "void";
 /** A paid op voided under the operator whose refund has not landed (or failed) yet: keep polling. */
 const refundPending = (s: Siege) =>
   s.settlement?.state === "void" && !s.free && s.settlement.refund !== undefined && s.settlement.refund.state === "due";
@@ -72,30 +71,66 @@ const REASON_TEXT: Record<string, string> = {
 };
 const reasonText = (r?: string) => (r ? (REASON_TEXT[r] ?? r.replace(/_/g, " ")) : "unknown error");
 
+/** How long the room waits for the event backlog before mounting the scene anyway. */
+const BACKLOG_WAIT_MS = 2500;
+
+/**
+ * True once the feed holds what the siege record says happened: a decision for every guard reply,
+ * the end, and the chain events already on the record. The scene then mounts on the newest beat
+ * instead of animating the backlog as it streams in.
+ */
+function backlogIn(siege: Siege, events: StoredSiegeEvent[]): boolean {
+  if (!events.length) return false;
+  const replies = siege.messages.filter((m) => m.role === "guardian").length;
+  const decisions = new Set(events.filter((e) => e.type === "decision" && e.turn).map((e) => e.turn)).size;
+  if (decisions < replies) return false;
+  if (ENDED.has(siege.status) && !events.some((e) => e.type === "end")) return false;
+  if (siege.attempt && !events.some((e) => e.type === "attempt")) return false;
+  if (siege.release && !events.some((e) => e.type === "release")) return false;
+  return true;
+}
+
 export function SiegeRoom() {
   const { id } = useParams<{ id: string }>();
+  // ?demo=1 replays a recorded break with no network (UI polish, rehearsals, flaky venue Wi-Fi).
+  const demo = useSearchParams().get("demo") === "1" ? (demoSiege as unknown as DemoSiege) : undefined;
+  // The record refetches on every event (SSE, polling fallback), and polls slowly for what emits nothing.
+  const view = useSiege(id, { demo });
+  const siege = view.siege;
+  // The demo castle was recorded after the break (pot 0): open on the pot the recorded op found, read
+  // off its own payout, so the header holds the real pot until the coins come out.
+  const demoPot = useMemo(() => {
+    if (!demo) return undefined;
+    const last = demo.frames[demo.frames.length - 1];
+    return last ? opMoney(last.siege, demo.frames.map((f) => f.event), demo.castle.fee).potBefore : undefined;
+  }, [demo]);
 
-  // Poll fast while something is about to change (agent turns, chain settlement), stop when final.
-  const [interval, setIntervalMs] = useState(1500);
-  const detail = usePolling(() => api.siege(id), interval, { key: id, enabled: interval > 0 });
-  const siege = detail.data?.siege;
-  const voided = siege?.settlement?.state === "void";
-  const ended = siege ? ENDED.has(siege.status) || voided : false;
-  // Stop waiting once the worker settled, gave up ("failed") or voided the siege.
-  const awaitingChain = Boolean(
-    siege &&
-      ended &&
-      !siege.free &&
-      (refundPending(siege) || (!settlementDone(siege) && (siege.status === "broken" ? !siege.release : !siege.attempt))),
-  );
-  // free ops still get an "attempt"/"release" event from the worker (free: true): keep the feed warm until then
-  const nextInterval = !siege ? 1500 : awaitingChain ? 1000 : ended ? 0 : siege.agentId ? 1200 : 4000;
-  if (siege && nextInterval !== interval) setIntervalMs(nextInterval);
+  // A paid op voided under the operator: the refund lands with no event on this siege, so poll
+  // the record until it is refunded or failed.
+  const refundDue = Boolean(siege && view.mode !== "demo" && refundPending(siege));
+  const refreshRef = useRef(view.refresh);
+  useEffect(() => {
+    refreshRef.current = view.refresh;
+  });
+  useEffect(() => {
+    if (!refundDue) return;
+    const t = setInterval(() => void refreshRef.current(), 1500);
+    return () => clearInterval(t);
+  }, [refundDue]);
 
-  const feed = useEventFeed({ siegeId: id, intervalMs: ended && !awaitingChain ? 6000 : 1000 });
+  // Mount the scene once the feed's backlog is in (or after a short wait): the player then starts
+  // on the newest beat instead of replaying the end sequence as the events stream in. The demo
+  // mounts at once and plays from the first frame.
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setWaited(true), BACKLOG_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [id]);
+  const [mounted, setMounted] = useState(false);
+  if (!mounted && siege && view.castle && (view.mode === "demo" || waited || backlogIn(siege, view.events))) setMounted(true);
 
-  if (detail.error && !detail.data) {
-    const notFound = detail.error instanceof ApiError && detail.error.status === 404;
+  if (view.error && !siege) {
+    const notFound = view.error instanceof ApiError && view.error.status === 404;
     return (
       <div className="mx-auto w-full max-w-4xl px-4 py-10">
         {notFound ? (
@@ -105,22 +140,22 @@ export function SiegeRoom() {
             </Link>
           </EmptyState>
         ) : (
-          <ErrorState error={detail.error} onRetry={() => void detail.refresh()} title="Couldn't load the op" />
+          <ErrorState error={view.error} onRetry={() => void view.refresh()} title="Couldn't load the op" />
         )}
       </div>
     );
   }
-  // Mount the scene once the feed's first page is in: the player then starts on the newest beat
-  // instead of replaying the end sequence when the events arrive a moment later.
-  if (!detail.data || !feed.ready) return <Loading label="Tuning the vault cam…" />;
+  if (!siege || !view.castle || !mounted) return <Loading label="Tuning the vault cam…" />;
 
   return (
     <Room
-      siege={detail.data.siege}
-      castle={detail.data.castle}
-      events={feed.events}
-      onSiege={(s) => detail.mutate((d) => (d ? { ...d, siege: s } : d))}
-      refresh={() => void detail.refresh()}
+      siege={siege}
+      castle={view.castle}
+      events={view.events}
+      mode={view.mode}
+      openingPot={demoPot}
+      onSiege={view.setSiege}
+      refresh={() => void view.refresh()}
     />
   );
 }
@@ -131,12 +166,18 @@ function Room({
   siege,
   castle,
   events,
+  mode,
+  openingPot,
   onSiege,
   refresh,
 }: {
   siege: Siege;
   castle: Castle;
   events: StoredSiegeEvent[];
+  /** Streaming (SSE), polling (the stream failed), or replaying the recorded demo (?demo=1). */
+  mode: SiegeView["mode"];
+  /** The pot the op found, when the castle record is newer than the op (the recorded demo). */
+  openingPot?: string;
   onSiege: (s: Siege) => void;
   refresh: () => void;
 }) {
@@ -149,13 +190,14 @@ function Room({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const calm = useCalmMotion();
   const fork = useFork(castle.id);
+  const demo = mode === "demo";
 
   const ended = ENDED.has(siege.status) || siege.settlement?.state === "void";
   const voided = siege.settlement?.state === "void";
   const agentDriven = Boolean(siege.agentId);
   // The pot as the op found it: from the op's own settle event when there is one, else the vault as
   // it was when this room opened. The header never jumps ahead of the fee rail / payout.
-  const [potAtOpen] = useState(castle.pot);
+  const [potAtOpen] = useState(openingPot ?? castle.pot);
   const opCash = useMemo(() => opMoney(siege, events, castle.fee), [siege, events, castle.fee]);
   const potBefore = opCash.potBefore ?? potAtOpen;
   // Was the op still running when this room opened? (one-shot moments only fire then)
@@ -200,7 +242,7 @@ function Room({
 
   // The composer keeps focus through a turn (read-only, never disabled) and sends again once the
   // scene has caught up with the stamp.
-  const canSend = !ended && !agentDriven && !sending && siege.turn < MAX_TURNS && siege.status === "in_progress" && waiting;
+  const canSend = !demo && !ended && !agentDriven && !sending && siege.turn < MAX_TURNS && siege.status === "in_progress" && waiting;
 
   async function send(text: string) {
     const t = text.trim();
@@ -265,7 +307,7 @@ function Room({
   const rankedUp = useRef(false);
   const payoutLanded = frame.coins.kind === "payout" && !frame.coins.pending && frame.status === "broken" && !siege.free;
   useEffect(() => {
-    if (!payoutLanded || !openedLive || rankedUp.current) return;
+    if (!payoutLanded || !openedLive || demo || rankedUp.current) return;
     rankedUp.current = true;
     let first = true;
     try {
@@ -281,7 +323,7 @@ function Room({
       toast(copy.title, { description: copy.body });
     }, 1800);
     return () => clearTimeout(t);
-  }, [payoutLanded, openedLive, siege.id]);
+  }, [payoutLanded, openedLive, demo, siege.id]);
 
   // a replay forked into this vault (FORK INTO A NEW OP) supplies the script; otherwise the scripted demo lines
   // Iron: the demo order (small talk → authority → override), so the presenter gets HOLD → FLAG →
@@ -303,7 +345,7 @@ function Room({
       <div className="space-y-3">
         <Outcome siege={siege} castle={castle} events={events} frame={frame} />
         {frame.ended || voided ? (
-          <FrozenBar frame={frame} opId={siege.id} noReplay={voided && !frame.ended}>
+          <FrozenBar frame={frame} opId={siege.id} noReplay={demo || (voided && !frame.ended)}>
             <Link href={`/castle/${castle.id}`} className={pixelButtonVariants({ variant: "outline", size: "lg" })}>
               Run another op
             </Link>
@@ -316,6 +358,12 @@ function Room({
       <div className="hazard bg-panel px-4 py-3 px-frame [--frame:var(--color-threat)]" role="status">
         <p className="font-pixel text-[14px] leading-snug text-threat">LOCKDOWN — op over.</p>
         <p className="mt-1 text-sm text-ink">Your fee still splits.</p>
+      </div>
+    );
+  } else if (demo) {
+    dock = (
+      <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-dashed border-money/60 bg-panel px-4 py-3" role="status">
+        <p className="min-w-0 font-ui text-xs tracking-[0.08em] text-ink uppercase">Demo replay · a recorded op, nothing here touches the network</p>
       </div>
     );
   } else if (agentDriven) {
@@ -356,6 +404,8 @@ function Room({
       settled={showOutcome}
       headerExtra={
         <div className="flex flex-wrap items-center gap-2">
+          {/* how events arrive matters only while the op runs: a frozen tape has no transport light */}
+          {demo || (!frame.ended && !voided) ? <LiveMode mode={mode} /> : null}
           {!ended ? <SoundStrip /> : null}
           {siege.receipt ? <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} asset={castle.asset} compact /> : null}
         </div>
@@ -383,6 +433,15 @@ function Room({
       }
     />
   );
+}
+
+/** Whether this room is streaming (SSE), polling (the stream failed), or replaying the recorded demo. */
+function LiveMode({ mode }: { mode: SiegeView["mode"] }) {
+  if (mode === "demo") return <LED kind="stub" boxed label="DEMO REPLAY" title="Replaying a recorded op. Nothing here touches the network." />;
+  // the scene header already says LIVE: this light says how the events arrive
+  if (mode === "live") return <LED kind="safe" label="STREAMING" title="Streaming events as they happen (SSE)" />;
+  if (mode === "polling") return <LED kind="warn" label="POLLING" blink={false} title="Stream unavailable, checking every few seconds" />;
+  return <LED kind="idle" label="CONNECTING" title="Connecting to the event stream" />;
 }
 
 function Composer({

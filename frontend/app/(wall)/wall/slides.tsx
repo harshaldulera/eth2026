@@ -70,7 +70,7 @@ export type OpSlideProps = {
 /** The op scene in its wall layout (stage 2×, last lines at 40 px, no composer). */
 export function OpSlide({ siegeId, mode, sound, calm, onDone, interrupt }: OpSlideProps) {
   const [final, setFinal] = React.useState(false);
-  const { data, error } = usePolling(() => api.replay(siegeId), mode === "live" ? 1_000 : 1_500, { key: siegeId, enabled: !final });
+  const { data, error } = usePolling(() => api.replay(siegeId, { verify: false }), mode === "live" ? 1_000 : 1_500, { key: siegeId, enabled: !final });
   const isFinal = data ? settled(data) : false;
   if (isFinal !== final) setFinal(isFinal);
   if (!data) return <Loading text={error ? "op feed offline · retrying" : "tuning the vault cam"} />;

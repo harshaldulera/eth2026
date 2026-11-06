@@ -30,10 +30,13 @@ export function GuardianBubble({
   guardianName,
   exposed,
   fresh,
+  provider = "0G",
 }: {
   message: SiegeMessage;
   guardianName?: string;
   exposed?: string;
+  /** Who answered: "0G" by default; the replay passes the recorded provider (e.g. "anthropic"). */
+  provider?: string;
   /** Just landed: the request id glows in. */
   fresh?: boolean;
 }) {
@@ -42,8 +45,8 @@ export function GuardianBubble({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-term text-[19px] leading-none text-ink">&lt; GUARD · {(guardianName ?? "Guard").toUpperCase()}</p>
         {m.requestId ? (
-          <span className={cn("font-mono text-[11px]", fresh ? "text-money" : "text-ink-dim")} title="0G request id of this reply (recorded by the arena's model proxy)">
-            0G {m.requestId}
+          <span className={cn("font-mono text-[11px]", fresh ? "text-money" : "text-ink-dim")} title="Request id of this reply, recorded by the arena's model proxy (hashes only)">
+            {provider} {m.requestId}
           </span>
         ) : null}
       </div>

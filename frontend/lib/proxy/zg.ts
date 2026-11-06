@@ -41,6 +41,8 @@ export interface ChatResult {
   costUsdMicro?: string;
   /** Router's check of the provider's TEE signature: true / false / undefined (not requested). */
   teeVerified?: boolean;
+  /** The provider declined the request (e.g. Claude stop_reason "refusal"). Treated as a hold. */
+  refused?: boolean;
   raw: unknown;
 }
 

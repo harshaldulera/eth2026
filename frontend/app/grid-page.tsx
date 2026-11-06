@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { LiveSiege } from "@/lib/api/client";
 import { api } from "@/lib/api/client";
 import { usePolling, useNow } from "@/lib/hooks/usePolling";
+import { useLiveEvents } from "@/lib/hooks/useLiveEvents";
+import type { StoredSiegeEvent } from "@/lib/types";
 import { vaultStateOf } from "@/lib/money/vault";
 import { ArkivBar } from "@/components/arena/arkiv-bar";
 import { BoardFilters, paramsFromQuery, queryFromParams, type BoardQuery } from "@/components/arena/board-filters";
@@ -31,6 +33,9 @@ function gridUrl(pathname: string, current: URLSearchParams, query: BoardQuery, 
  * NOT TAKING OPS → bottom ticker. `?recon=1` (the QR) opens the recon briefing.
  * The filters are the Arkiv query (Sujal's): only guarding vaults unless ALL STATES is on.
  */
+
+/** Events that change what the Grid shows (pots, streaks, LIVE frames, vault states). */
+const BOARD_EVENTS = new Set(["start", "end", "attempt", "release", "vault_state"]);
 
 /** A live op older than this is treated as abandoned on the Grid (no LIVE frame). */
 const ABANDONED_MS = 10 * 60 * 1000;
@@ -67,6 +72,28 @@ export function GridPage() {
   // … and the ops running right now.
   const live = usePolling(() => api.liveSieges(), 5000);
   const now = useNow(30_000);
+
+  // Live events over SSE (polling fallback): the bottom ticker, plus an early refetch when something
+  // on the Grid changed. Castles are read from Arkiv, which the worker updates a few seconds after
+  // the event, so refetch twice.
+  const refetchGrid = useRef<() => void>(() => {});
+  const refreshEvery = every.refresh;
+  const refreshLive = live.refresh;
+  useEffect(() => {
+    refetchGrid.current = () => {
+      void refresh();
+      void refreshEvery();
+      void refreshLive();
+    };
+  }, [refresh, refreshEvery, refreshLive]);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const onEvent = useCallback((e: StoredSiegeEvent) => {
+    if (!BOARD_EVENTS.has(e.type)) return;
+    timers.current.forEach(clearTimeout);
+    timers.current = [setTimeout(() => refetchGrid.current(), 800), setTimeout(() => refetchGrid.current(), 7000)];
+  }, []);
+  const feed = useLiveEvents({ tail: 60, limit: 60, onEvent });
 
   const liveMap = useMemo(() => {
     const m = new Map<string, LiveSiege>();
@@ -152,7 +179,7 @@ export function GridPage() {
         {!q.all ? <NotTakingOps castles={resting} now={now} noneGuarding={every.data ? guardingAll.length === 0 : false} /> : null}
       </div>
 
-      <GridTicker names={names} />
+      <GridTicker names={names} feed={feed} />
       <ReconBriefing open={reconOpen} castles={guardingAll} loading={!every.data} onClose={closeRecon} onLeave={leaveRecon} />
     </div>
   );

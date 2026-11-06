@@ -68,6 +68,8 @@ export type OpSceneProps = {
   agent?: boolean;
   /** Phones: the full-screen breach takeover (default on). The replay passes `playing`, so a paused or scrubbed frame never covers the scrubber. */
   takeover?: boolean;
+  /** Console: who answered each guard reply, by turn (replay: the recorded provider). Unlisted turns say 0G. */
+  guardProviders?: Readonly<Record<number, string>>;
   className?: string;
 };
 
@@ -106,6 +108,7 @@ export function OpScene({
   empty,
   agent,
   takeover = true,
+  guardProviders,
   className,
 }: OpSceneProps) {
   const wall = layout === "wall";
@@ -164,7 +167,7 @@ export function OpScene({
           </div>
           <div className="flex min-h-0 flex-col gap-5">
             <div className="flex min-h-0 flex-1 flex-col">
-              <OpConsole frame={f} guardName={castle.guardianName} layout="wall" reduced={reduced} agent={agent} freezeStyle={freezeStyle} className="flex-1" />
+              <OpConsole frame={f} guardName={castle.guardianName} layout="wall" reduced={reduced} agent={agent} freezeStyle={freezeStyle} guardProviders={guardProviders} className="flex-1" />
             </div>
             {dock === undefined ? <SceneOutcome frame={f} fee={castle.fee} asset={castle.asset} streak={streak} wall /> : dock}
           </div>
@@ -250,6 +253,7 @@ export function OpScene({
               empty={empty}
               freezeStyle={freezeStyle}
               settled={isSettled}
+              guardProviders={guardProviders}
               className={cn(
                 isSettled
                   ? "h-[260px] sm:h-[320px]"

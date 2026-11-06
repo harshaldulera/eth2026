@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, type ReplayResponse } from "@/lib/api/client";
+import { api, type ReplayWithVerify } from "@/lib/api/client";
 
-type ReplayState = { id: string; data?: ReplayResponse; error?: unknown };
+type ReplayState = { id: string; data?: ReplayWithVerify; error?: unknown };
 
-/** Still changing: an op in progress, or ended but its money event has not landed yet. */
-function stillMoving(r: ReplayResponse): boolean {
+/**
+ * Still changing: an op in progress, ended but its money event has not landed yet, or one whose
+ * recomputed evidence (lib/replay `verify.live`) is still waiting for its chain result.
+ */
+function stillMoving(r: ReplayWithVerify): boolean {
+  if (r.verify?.live) return true;
   const s = r.siege;
   if (s.status === "created" || s.status === "in_progress") return true;
   if (s.settlement?.state === "failed" || s.settlement?.state === "void") return false;

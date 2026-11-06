@@ -30,6 +30,11 @@ export type OpConsoleProps = {
   freezeStyle?: CSSProperties;
   /** The op's end sequence is up (the console shrinks): keep the last stamp fully in view. */
   settled?: boolean;
+  /**
+   * Who answered each guard reply, by turn (the replay passes the recorded provider, e.g. "claude"
+   * or "test"); a turn without one is labelled 0G, the arena's default model.
+   */
+  guardProviders?: Readonly<Record<number, string>>;
   className?: string;
 };
 
@@ -63,12 +68,13 @@ type TurnRow = { turn: number; op?: SceneMessage; guard?: SceneMessage };
 
 /**
  * The console: the op's transcript as terminal blocks. Operator lines carry their class chip and
- * threat; guard lines type out, print their 0G request id, and take their stamp (LOCKDOWN and
- * BREACH stamp before the text; a breach also prints the tool call that fired).
+ * threat; guard lines type out, print their request id (labelled 0G unless `guardProviders` names
+ * who answered), and take their stamp (LOCKDOWN and BREACH stamp before the text; a breach also
+ * prints the tool call that fired).
  *
  * @example <OpConsole frame={frame} guardName={castle.guardianName} />
  */
-export function OpConsole({ frame: f, guardName, layout = "room", reduced = false, sendingTurn, agent, tail, empty, freezeStyle, settled, className }: OpConsoleProps) {
+export function OpConsole({ frame: f, guardName, layout = "room", reduced = false, sendingTurn, agent, tail, empty, freezeStyle, settled, guardProviders, className }: OpConsoleProps) {
   const wall = layout === "wall";
   const ref = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -141,6 +147,7 @@ export function OpConsole({ frame: f, guardName, layout = "room", reduced = fals
           // (the wall tilts every stamp less: at 64–96 px a −6° tilt eats the reply's lines)
           const tilt = wall ? -2 : stamp && !stamp.before && stamp.text.length > 16 ? -3 : undefined;
           const call = g?.toolCalls?.[0];
+          const provider = guardProviders?.[r.turn] ?? "0G";
           return (
             <div key={r.turn} className="space-y-2">
               {r.op ? (
@@ -167,14 +174,14 @@ export function OpConsole({ frame: f, guardName, layout = "room", reduced = fals
                   <div className={cn("flex items-baseline justify-between gap-3 font-term leading-none", meta)} style={freezeStyle}>
                     <span className="truncate text-ink">&lt; GUARD · {guardName.toUpperCase()}</span>
                     {g?.requestId && !typing && !wall ? (
-                      <span className="shrink-0 font-mono text-[11px] text-ink-dim" title="0G request id of this reply (recorded by the arena's model proxy)">
-                        0G {shortReq(g.requestId)}
+                      <span className="shrink-0 font-mono text-[11px] text-ink-dim" title={`${provider} request id of this reply (recorded by the arena's model proxy)`}>
+                        {provider} {shortReq(g.requestId)}
                       </span>
                     ) : null}
                   </div>
                   {!g && current && thinking ? (
                     <p className={cn("pl-3 font-term text-warn", meta)} role="status">
-                      THINKING ON 0G · req pending
+                      THINKING ON {provider === "test" || provider === "mock" ? "0G" : provider.toUpperCase()} · req pending
                       <Caret />
                     </p>
                   ) : null}

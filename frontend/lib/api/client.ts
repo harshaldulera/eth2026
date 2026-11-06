@@ -1,3 +1,4 @@
+import type { ReplayData } from "@/lib/replay/types";
 import type {
   ApprovalRequest,
   ApprovalStatus,
@@ -227,11 +228,12 @@ export const api = {
     request<MessageResponse>(`/api/siege/${enc(id)}/message`, { method: "POST", json: { text } }),
 
   /** `tail` (first load only): just the newest N events and the cursor to continue from. */
-  events: (q: { cursor?: number; siegeId?: string; tail?: number } = {}) => {
+  events: (q: { cursor?: number; siegeId?: string; castleId?: string; tail?: number } = {}) => {
     const p = new URLSearchParams();
     if (q.tail && !q.cursor) p.set("tail", String(q.tail));
     else p.set("cursor", String(q.cursor ?? 0));
     if (q.siegeId) p.set("siegeId", q.siegeId);
+    if (q.castleId) p.set("castleId", q.castleId);
     return request<EventsResponse>(`/api/events?${p}`);
   },
 
@@ -252,8 +254,14 @@ export const api = {
   ownerLogin: (key: string) => request<{ ok: true }>("/api/owner", { method: "POST", json: { key } }),
 
   // ─── Part 2 (types at the end of this file) ───
-  /** One call for the replay: siege + castle + events + proof. 404 `siege_not_found`. */
-  replay: (id: string) => request<ReplayResponse>(`/api/replay/${enc(id)}`),
+  /**
+   * One call for the replay: siege + castle + events + proof, plus `verify` — the siege turn by
+   * turn with the transcript, hash, HCS and inference checks recomputed (lib/replay). 404 `siege_not_found`.
+   * `{ verify: false }` skips the recomputation (`verify: null`): for pollers like the wall that only
+   * need the scene, since on testnet each check reads Swarm and the mirror node.
+   */
+  replay: (id: string, opts: { verify?: boolean } = {}) =>
+    request<ReplayWithVerify>(`/api/replay/${enc(id)}${opts.verify === false ? "?verify=0" : ""}`),
   /** Season counters, Hall boards, breaches and live ops (GET /api/stats). */
   stats: () => request<StatsResponse>("/api/stats"),
   /**
@@ -316,6 +324,9 @@ export type ReplayProof = {
 
 /** GET /api/replay/[id]: the op, its castle, its whole event feed and its proof, in one call. */
 export type ReplayResponse = { siege: Siege; castle: Castle; events: StoredSiegeEvent[]; proof: ReplayProof };
+
+/** What GET /api/replay/[id] returns: the replay plus the recomputed evidence (null if it couldn't be built). */
+export type ReplayWithVerify = ReplayResponse & { verify: ReplayData | null };
 
 /** The label the Hall prints with the op of the day (computed, not voted). */
 export const OP_OF_DAY_RULE = "op of the day = highest peak threat held in 24h";

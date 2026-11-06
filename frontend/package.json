@@ -13,6 +13,7 @@
     "db:reset": "tsx scripts/db-reset.ts",
     "seed": "tsx scripts/seed.ts",
     "demo": "tsx scripts/demo.ts",
+    "demo:record": "tsx scripts/record-demo.ts",
     "golden": "tsx scripts/golden-run.ts",
     "worker": "tsx worker/index.ts",
     "abi": "tsx scripts/compile-contracts.ts",
@@ -30,6 +31,7 @@
     "qa:lint": "node qa/vocab-lint.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
     "@arkiv-network/sdk": "^1.0.1",
     "@hiero-ledger/sdk": "^2.90.1",
     "@x402/core": "^2.30.0",

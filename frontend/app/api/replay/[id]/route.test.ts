@@ -11,7 +11,7 @@ import { db, schema } from "@/lib/db";
 import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { toBeats } from "@/lib/scene/beats";
-import type { ReplayResponse } from "@/lib/api/client";
+import type { ReplayWithVerify } from "@/lib/api/client";
 import { GET } from "./route";
 import { runOp, settle } from "../../stats/ops.test-util";
 
@@ -21,7 +21,7 @@ const BASE = "http://localhost:3000";
 
 async function replay(id: string) {
   const res = await GET(new Request(`${BASE}/api/replay/${id}`), { params: Promise.resolve({ id }) });
-  return { status: res.status, headers: res.headers, data: (await res.json()) as ReplayResponse & { error?: string } };
+  return { status: res.status, headers: res.headers, data: (await res.json()) as ReplayWithVerify & { error?: string } };
 }
 
 beforeEach(() => {
@@ -71,6 +71,23 @@ describe("GET /api/replay/[id]", () => {
     expect(beats.at(-1)?.kind).toBe("end");
     expect(beats.filter((b) => b.kind === "stamp").map((b) => b.data.stamp?.kind)).toEqual(["hold", "hold", "breach"]);
     expect(beats.some((b) => b.kind === "payout" && b.data.amount === "550000000")).toBe(true);
+
+    // And lib/replay's recomputed evidence rides along in `verify`.
+    const v = r.data.verify;
+    expect(v?.siege.id).toBe(id);
+    expect(v?.transcript.source).toMatch(/^(swarm|swarm-stub|database)$/);
+    expect(v?.checks.length).toBeGreaterThan(0);
+    expect(v?.checks.every((c) => ["pass", "fail", "pending", "na"].includes(c.state))).toBe(true);
+    expect(v?.turns.map((t) => t.turn)).toEqual([1, 2, 3]);
+  });
+
+  it("?verify=0 skips the recomputed evidence (verify: null)", async () => {
+    const id = await runOp("castle_splinter_gate", WOODEN_BREAK.slice(0, 1));
+    const res = await GET(new Request(`${BASE}/api/replay/${id}?verify=0`), { params: Promise.resolve({ id }) });
+    const data = (await res.json()) as ReplayWithVerify;
+    expect(res.status).toBe(200);
+    expect(data.verify).toBeNull();
+    expect(data.siege.id).toBe(id);
   });
 
   it("a held stone op: attempt receipt, no tool call, FLAG stamps", async () => {

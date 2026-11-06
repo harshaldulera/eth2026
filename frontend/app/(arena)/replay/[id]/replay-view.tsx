@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { GitFork, Radio, Share2 } from "lucide-react";
-import { ApiError, type ReplayResponse } from "@/lib/api/client";
+import { ApiError, type ReplayWithVerify } from "@/lib/api/client";
 import { toBeats, type Beat } from "@/lib/scene/beats";
 import { cuesForBeat } from "@/lib/scene/cues";
 import { usePlayer } from "@/lib/scene/usePlayer";
@@ -22,6 +22,7 @@ import { summarizeTurns, type TurnSummary } from "./turns";
 import { Scrubber } from "./scrubber";
 import { StepChips } from "./step-chips";
 import { ProofPanel } from "./proof-panel";
+import { providerOf } from "./verify-checks";
 import { OwnerLayer } from "./owner-layer";
 import { FORK_KEY, type ForkPayload } from "@/lib/hooks/useFork";
 
@@ -53,7 +54,7 @@ export function ReplayView() {
   return <ReplayDeck key={id} replay={data} autoplay={autoplay} />;
 }
 
-function ReplayDeck({ replay, autoplay }: { replay: ReplayResponse; autoplay: boolean }) {
+function ReplayDeck({ replay, autoplay }: { replay: ReplayWithVerify; autoplay: boolean }) {
   const { siege, castle, events } = replay;
   const calm = useCalmMotion();
   const owner = useOwnerFlag();
@@ -62,6 +63,12 @@ function ReplayDeck({ replay, autoplay }: { replay: ReplayResponse; autoplay: bo
   const turns = React.useMemo(() => summarizeTurns(beats), [beats]);
   // The vault as this op found and left it (not as it is today).
   const cash = React.useMemo(() => opMoney(siege, events, castle.fee), [siege, events, castle.fee]);
+  // Who answered each reply (the recorded provider), so the console agrees with the step chips and proof.
+  const guardProviders = React.useMemo(() => {
+    const out: Record<number, string> = {};
+    for (const t of replay.verify?.turns ?? []) if (t.guardian) out[t.turn] = providerOf(t);
+    return out;
+  }, [replay.verify]);
 
   // Cues: only while playing (scrubbing stays silent); delayed cues are cancelled on unmount.
   const timers = React.useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -214,6 +221,7 @@ function ReplayDeck({ replay, autoplay }: { replay: ReplayResponse; autoplay: bo
         potBefore={cash.potBefore}
         streak={cash.streakAfter}
         takeover={state.playing}
+        guardProviders={guardProviders}
         backHref={`/castle/${castle.id}`}
         empty={`${castle.guardianName} watches the road. Press ▶ or Space to play the tape.`}
         headerExtra={
@@ -249,7 +257,7 @@ function ReplayDeck({ replay, autoplay }: { replay: ReplayResponse; autoplay: bo
 
       <div className="mx-auto grid w-full max-w-6xl items-start gap-4 px-3 sm:px-6 lg:grid-cols-2">
         <PixelPanel title={`Steps · ${turns.length}`} bodyClassName="p-2.5">
-          <StepChips turns={turns} currentTurn={frame.turn} onPick={pick} />
+          <StepChips turns={turns} currentTurn={frame.turn} onPick={pick} verify={replay.verify} protectedTool={castle.protectedTool} />
         </PixelPanel>
         <ProofPanel replay={replay} className="hidden lg:block" />
         <details className="group lg:hidden">

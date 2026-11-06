@@ -4,7 +4,9 @@ import { CLASS_META } from "@/lib/scene/classes";
 import { threatWord } from "@/lib/vocab";
 import { Sprite } from "@/components/pixel/sprite";
 import { cn } from "@/lib/utils";
+import type { ReplayData } from "@/lib/replay/types";
 import type { TurnSummary } from "./turns";
+import { TurnEvidence, providerOf } from "./verify-checks";
 
 const RING = { hold: "[--frame:var(--color-stamp-hold)]", flag: "[--frame:var(--color-stamp-flag)]", lockdown: "[--frame:var(--color-stamp-lockdown)]", breach: "[--frame:var(--color-stamp-breach)]" } as const;
 
@@ -14,9 +16,25 @@ const shortReq = (id?: string) => (id ? (id.length > 14 ? `${id.slice(0, 12)}…
 
 /**
  * One chip per message: class icon · class name · the referee's exact label · the verdict stamp ·
- * 0G request id · threat. The chip under the playhead is lit; clicking a chip jumps to its message.
+ * model request id · threat, and under it the recomputed evidence (lib/replay): the message hash
+ * against the HCS audit log, the reply's tool calls and inference record. The chip under the
+ * playhead is lit; clicking a chip jumps to its message.
  */
-export function StepChips({ turns, currentTurn, onPick, className }: { turns: TurnSummary[]; currentTurn: number; onPick: (t: TurnSummary) => void; className?: string }) {
+export function StepChips({
+  turns,
+  currentTurn,
+  onPick,
+  verify,
+  protectedTool,
+  className,
+}: {
+  turns: TurnSummary[];
+  currentTurn: number;
+  onPick: (t: TurnSummary) => void;
+  verify?: ReplayData | null;
+  protectedTool: string;
+  className?: string;
+}) {
   if (!turns.length) {
     return <p className={cn("font-term text-lg text-ink-dim", className)}>&gt; no messages on this tape yet</p>;
   }
@@ -25,6 +43,7 @@ export function StepChips({ turns, currentTurn, onPick, className }: { turns: Tu
       {turns.map((t) => {
         const meta = CLASS_META[t.cls];
         const active = t.turn === currentTurn;
+        const ev = verify?.turns.find((v) => v.turn === t.turn);
         return (
           <li key={t.turn}>
             <button
@@ -57,8 +76,17 @@ export function StepChips({ turns, currentTurn, onPick, className }: { turns: Tu
                 <span className="font-term text-base leading-none text-ink-dim tabular-nums">
                   threat <span className={cn(t.threat >= 70 ? "text-threat" : t.threat >= 40 ? "text-warn" : "text-ink")}>{t.threat}</span> {threatWord(t.threat)}
                 </span>
-                {t.requestId ? <span className="truncate font-mono text-[11px] text-ink-dim">0G req {shortReq(t.requestId)}</span> : null}
+                {t.requestId ? (
+                  <span className="truncate font-mono text-[11px] text-ink-dim">
+                    {providerOf(ev)} req {shortReq(t.requestId)}
+                  </span>
+                ) : null}
               </span>
+              {ev ? (
+                <span className="col-start-2 min-w-0 border-t-2 border-line/50 pt-1.5">
+                  <TurnEvidence t={ev} protectedTool={protectedTool} />
+                </span>
+              ) : null}
             </button>
           </li>
         );

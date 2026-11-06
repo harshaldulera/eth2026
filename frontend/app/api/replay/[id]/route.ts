@@ -2,8 +2,9 @@ import { getCastle } from "@/lib/castles";
 import { auditTrail } from "@/lib/chain";
 import { eventsSince } from "@/lib/events/bus";
 import { record } from "@/lib/proxy";
+import { buildReplay } from "@/lib/replay/build";
 import { getSiege } from "@/lib/siege";
-import type { ReplayRequest, ReplayResponse } from "@/lib/api/client";
+import type { ReplayRequest, ReplayResponse, ReplayWithVerify } from "@/lib/api/client";
 import type { Castle, Siege, ToolCall } from "@/lib/types";
 import { atRequestTime, err, json } from "../../_lib/http";
 
@@ -16,7 +17,12 @@ import { atRequestTime, err, json } from "../../_lib/http";
  * `proof.requests` lists each guard reply's 0G request id with what the vault-scoped proxy recorded
  * for it (hashes and tool names only; nothing is recorded for stub replies). `toolCall` is the call
  * to the castle's protected tool that broke the vault, with its arguments, when there was one.
- * Read-only: no writes, no chain calls.
+ *
+ * `verify` is lib/replay's ReplayData: the same siege with every check recomputed (the transcript from
+ * Swarm against its stored hash, the hash on the castle's HCS topic, each raider message against its
+ * HCS hash, each guardian reply's inference record, the verifier's verdict and the payout tx), null
+ * if it could not be built. Read-only: no writes; the only network read is lib/replay's mirror-node
+ * check on testnet topics. `?verify=0` skips it (`verify: null`).
  */
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
@@ -38,7 +44,7 @@ function namesOf(raw: string | null | undefined): string[] | undefined {
   }
 }
 
-function buildReplay(siege: Siege, castle: Castle): ReplayResponse {
+function buildPixelReplay(siege: Siege, castle: Castle): ReplayResponse {
   const events = eventsSince(0, { siegeId: siege.id, limit: 1000 });
 
   // One request per guard reply, by turn (the latest decision event of a turn wins).
@@ -91,13 +97,22 @@ function buildReplay(siege: Siege, castle: Castle): ReplayResponse {
   };
 }
 
-/** GET /api/replay/[id] — the op, its castle, its event feed and its proof. */
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+/** GET /api/replay/[id] — the op, its castle, its event feed, its proof and the recomputed checks. Public. */
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   await atRequestTime();
   const { id } = await ctx.params;
   const siege = getSiege(id);
   if (!siege) return err(404, "siege_not_found");
   const castle = getCastle(siege.castleId);
   if (!castle) return err(404, "castle_not_found");
-  return json(buildReplay(siege, castle));
+  // ?verify=0: the scene only (pollers such as the wall); the checks read Swarm and the mirror node.
+  const skip = new URL(req.url).searchParams.get("verify") === "0";
+  const verify = skip
+    ? null
+    : await buildReplay(id).catch((e: unknown) => {
+        console.error("[replay] verify failed", id, e);
+        return null;
+      });
+  const body: ReplayWithVerify = { ...buildPixelReplay(siege, castle), verify };
+  return json(body);
 }

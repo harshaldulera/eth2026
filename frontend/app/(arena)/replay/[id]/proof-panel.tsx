@@ -3,13 +3,14 @@
 import * as React from "react";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
-import type { ReplayResponse } from "@/lib/api/client";
+import type { ReplayWithVerify } from "@/lib/api/client";
 import { formatAmount, shortAccount } from "@/lib/money/format";
 import { MONEY, STAMPS, TOASTS } from "@/lib/vocab";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { PixelPanel } from "@/components/pixel";
 import { playCue } from "@/components/pixel/sfx-link";
 import { cn } from "@/lib/utils";
+import { AuditEntries, TranscriptSource, VerifyChecklist } from "./verify-checks";
 
 const shortHash = (h: string) => (h.length > 20 ? `${h.slice(0, 10)}…${h.slice(-8)}` : h);
 
@@ -65,19 +66,34 @@ export function CopyHash({ value }: { value: string }) {
 }
 
 /**
- * PROOF: the transcript hash, the x402 receipt, the chain record (AttemptRecorded or Broken), the HCS
- * topic, each reply's 0G request, and for a breach the exact tool call that fired. Recon ops say
- * plainly that there is no receipt and no payout.
+ * PROOF: the recomputed checklist (lib/replay), the transcript hash and where it was read from, the
+ * x402 receipt, the chain record (AttemptRecorded or Broken), the HCS topic and this op's audit
+ * messages, each reply's model request, and for a breach the exact tool call that fired. Recon ops
+ * say plainly that there is no receipt and no payout.
  */
-export function ProofPanel({ replay, className }: { replay: ReplayResponse; className?: string }) {
-  const { siege, castle, proof } = replay;
+export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; className?: string }) {
+  const { siege, castle, proof, verify } = replay;
+  const turnOf = (n: number) => verify?.turns.find((t) => t.turn === n);
   const recon = siege.free;
   const receipt = proof.receipt && !proof.receipt.free ? proof.receipt : null;
   const settlement = siege.settlement;
   return (
     <PixelPanel title="Proof" tone="money" className={className} bodyClassName="px-4 pb-4 pt-1">
+      {verify ? <VerifyChecklist verify={verify} className="border-b-2 border-line/60 pt-2 pb-3" /> : null}
       <dl className="divide-y divide-line/60">
-        <Row k="Transcript">{proof.transcriptHash ? <CopyHash value={proof.transcriptHash} /> : <span className="font-term text-lg text-ink-dim">sealed when the op ends</span>}</Row>
+        <Row k="Operator">
+          <span className="inline-flex flex-wrap items-baseline gap-2">
+            <span className="font-mono text-[12px] text-ink" title={siege.raider}>
+              {siege.raider}
+            </span>
+            {siege.agentId ? <span className="font-ui text-[10px] tracking-[0.12em] text-ink-dim">AGENT</span> : null}
+            {siege.release ? <span className="text-money">won {formatAmount(siege.release.amount, castle.asset)}</span> : null}
+          </span>
+        </Row>
+        <Row k="Transcript">
+          {proof.transcriptHash ? <CopyHash value={proof.transcriptHash} /> : <span className="font-term text-lg text-ink-dim">sealed when the op ends</span>}
+          {verify ? <TranscriptSource transcript={verify.transcript} /> : null}
+        </Row>
         <Row k="x402 receipt">
           {recon ? (
             <span className="font-ui text-[11px] tracking-[0.06em] text-money">{STAMPS.recon} · no receipt</span>
@@ -127,6 +143,7 @@ export function ProofPanel({ replay, className }: { replay: ReplayResponse; clas
           ) : (
             <span className="text-ink-dim">no topic</span>
           )}
+          {verify ? <AuditEntries hcs={verify.hcs} /> : null}
         </Row>
         {proof.toolCall ? (
           <Row k="Tool call">
@@ -134,10 +151,12 @@ export function ProofPanel({ replay, className }: { replay: ReplayResponse; clas
             <span className="mt-1 block font-term text-base text-ink-dim">message {proof.toolCall.turn} · the call that opened the vault</span>
           </Row>
         ) : null}
-        <Row k="0G requests">
+        <Row k="Model requests">
           {proof.requests.length ? (
             <ol className="flex flex-col gap-0.5">
-              {proof.requests.map((q) => (
+              {proof.requests.map((q) => {
+                const rec = turnOf(q.turn)?.guardian;
+                return (
                 <li key={q.turn} className="flex min-w-0 flex-wrap items-baseline gap-x-2 font-mono text-[11px]">
                   <span className="text-ink-dim">#{q.turn}</span>
                   <span className="truncate text-ink" title={q.requestId}>
@@ -147,8 +166,19 @@ export function ProofPanel({ replay, className }: { replay: ReplayResponse; clas
                     {q.promptHash ? (q.mock ? "MOCK" : "PROXY ✓") : q.requestId.startsWith("0g-stub") ? "STUB" : "—"}
                   </span>
                   {q.toolCalls?.length ? <span className="text-money">{q.toolCalls.join(", ")}</span> : null}
+                  {rec?.record ? (
+                    <span className="text-ink-dim" title="The arena's model proxy recorded this reply (hashes only, never content)">
+                      {rec.record.provider} · {rec.record.model}
+                      {rec.record.mock ? " (offline mock)" : ""}
+                    </span>
+                  ) : rec?.stub ? (
+                    <span className="text-ink-dim">test guard, no model call</span>
+                  ) : rec ? (
+                    <span className="text-threat">no inference record</span>
+                  ) : null}
                 </li>
-              ))}
+                );
+              })}
             </ol>
           ) : (
             <span className="text-ink-dim">none yet</span>

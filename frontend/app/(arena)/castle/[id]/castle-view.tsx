@@ -507,6 +507,8 @@ function StickyRunBar({ castle: c, op, reason }: { castle: Castle; op: StartStat
 // ─── recent ops (log rows with stamps) ───────────────────────────────────────────────────
 
 const STATUS_STAMP: Partial<Record<SiegeStatus, StampKind>> = { held: "hold", broken: "breach", banished: "lockdown" };
+/** Ended ops open their replay (with the proof checklist); live ones open the op room. */
+const ENDED_SIEGE = new Set<SiegeStatus>(["held", "broken", "banished"]);
 
 function RecentOps({ castle: c, sieges, now, className }: { castle: Castle; sieges: Siege[]; now: number; className?: string }) {
   return (
@@ -520,7 +522,11 @@ function RecentOps({ castle: c, sieges, now, className }: { castle: Castle; sieg
             const moves = (s.messages ?? []).filter((m) => m.role === "guardian").map((m) => m.move);
             return (
               <li key={s.id}>
-                <Link href={`/siege/${s.id}`} className="grid grid-cols-[8.75rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-2.5 transition-colors hover:bg-raised focus-visible:bg-raised">
+                <Link
+                  href={ENDED_SIEGE.has(s.status) ? `/replay/${s.id}` : `/siege/${s.id}`}
+                  title={ENDED_SIEGE.has(s.status) ? "Replay and proof" : "Watch live"}
+                  className="grid grid-cols-[8.75rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-2.5 transition-colors hover:bg-raised focus-visible:bg-raised"
+                >
                   <span className="flex justify-start">
                     {kind ? (
                       <Stamp kind={kind} size="sm" slam={false} tilt={-3} className="px-1.5 text-[14px]">

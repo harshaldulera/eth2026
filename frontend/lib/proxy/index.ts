@@ -1,5 +1,6 @@
 /**
- * Vault-scoped 0G proxy (plan B8). Every 0G-backed guardian request goes through here — hosted now,
+ * Vault-scoped 0G proxy (plan B8). Every LLM-backed guardian request goes through here (to 0G, or to
+ * Claude when INFERENCE_PROVIDER=claude, see ./anthropic.ts) — hosted now,
  * external harnesses via /api/proxy/v1 later (B9) — so there is one verification path.
  *
  *   issueKey(castleId, protectedTool) → vk_… model key bound to one castle
@@ -16,6 +17,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { zgConfig } from "./config";
+import { claudeChat } from "./anthropic";
 import { mockChat } from "./mock";
 import { chat as zgChat, ZgError, type Billing, type ChatRequest, type ChatResult } from "./zg";
 
@@ -108,11 +110,13 @@ export async function chat(key: string, req: ChatRequest, ctx: { siegeId?: strin
 
   const billing = ctx.billing ?? { kind: "team" };
   const mock = zgConfig.mock && billing.kind === "team";
-  const base = { castleId: vk.castleId, siegeId: ctx.siegeId ?? null, turn: ctx.turn ?? null, model: req.model, promptHash: systemPromptHash(req.messages), mock, at: new Date().toISOString() };
+  // A signed-in user's key is a 0G key (their iAI credits), so it always goes to 0G.
+  const provider = mock ? "mock" : billing.kind === "user" ? "0g" : zgConfig.provider;
+  const base = { castleId: vk.castleId, siegeId: ctx.siegeId ?? null, turn: ctx.turn ?? null, model: req.model, promptHash: systemPromptHash(req.messages), mock, provider, at: new Date().toISOString() };
 
   let result: ChatResult;
   try {
-    result = mock ? mockChat(req, vk.protectedTool) : await zgChat(req, billing);
+    result = provider === "mock" ? mockChat(req, vk.protectedTool) : provider === "claude" ? await claudeChat(req) : await zgChat(req, billing);
   } catch (e) {
     const rid = rejectedRequestId(e);
     if (!rid) throw e;
@@ -120,11 +124,19 @@ export async function chat(key: string, req: ChatRequest, ctx: { siegeId?: strin
     db().insert(schema.proxyRecords).values(rec).onConflictDoNothing().run();
     return { ok: false, status: 422, error: "upstream_rejected", record: rec };
   }
-  if (!result.requestId) return { ok: false, status: 502, error: "0G response had no request id" };
+  if (!result.requestId) return { ok: false, status: 502, error: `${provider} response had no request id` };
+  if (result.refused) {
+    // The model declined to answer (e.g. a safety refusal): recorded, and the gate holds.
+    const rec: ProxyRecord = { ...base, model: result.raw && typeof result.raw === "object" && "model" in result.raw ? String((result.raw as { model: unknown }).model) : req.model, requestId: result.requestId, responseHash: sha256(JSON.stringify(canonical(result.raw))), protectedToolCalled: false, toolCalls: "[]", costUsdMicro: null };
+    db().insert(schema.proxyRecords).values(rec).onConflictDoNothing().run();
+    return { ok: false, status: 422, error: "upstream_rejected", record: rec };
+  }
 
   const toolNames = (result.message.tool_calls ?? []).map((c) => c.function.name);
   const rec: ProxyRecord = {
     ...base,
+    // The model that actually answered (Claude replaces 0G model ids with ANTHROPIC_MODEL).
+    model: result.raw && typeof result.raw === "object" && "model" in result.raw ? String((result.raw as { model: unknown }).model) : req.model,
     requestId: result.requestId,
     responseHash: sha256(JSON.stringify(canonical(result.raw))),
     protectedToolCalled: toolNames.includes(vk.protectedTool),

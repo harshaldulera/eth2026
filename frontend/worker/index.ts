@@ -1,9 +1,10 @@
 /**
  * The Siege worker:  npm run worker   (tsx worker/index.ts)
  *
- * Three independent loops, every second: settlement (chain.recordAttempt / verifier + release), the
- * raider-agent runner, and the HCS audit drainer (the only process that submits audit messages, one
- * topic message at a time in order: lib/chain/outbox.ts). The only process that holds VERIFIER_KEY. Talks to the Next server at APP_URL
+ * Independent loops, every second: settlement (chain.recordAttempt / verifier + release), the
+ * raider-agent runner, the HCS audit drainer (the only process that submits audit messages, one
+ * topic message at a time in order: lib/chain/outbox.ts), and with ARKIV_MODE=live the Arkiv
+ * publisher (lib/arkiv/outbox.ts). The only process that holds VERIFIER_KEY. Talks to the Next server at APP_URL
  * for agent sieges (the real x402 round-trip). `tick()` runs one pass of both, for scripts.
  */
 import "@/lib/config/load-env";
@@ -11,7 +12,9 @@ import { env } from "@/lib/config/env";
 import { auditBacklog, chainStateProblems } from "@/lib/chain";
 import { db } from "@/lib/db";
 import { guardianMode } from "@/lib/transport";
+import { isArkivLive } from "@/lib/arkiv/config";
 import { agentsTick } from "./agents";
+import { arkivTick } from "./arkiv";
 import { auditTick } from "./audit";
 import { log } from "./log";
 import { settleTick } from "./settle";
@@ -53,11 +56,17 @@ export function main(): void {
   const backlog = auditBacklog(db());
   if (backlog.length)
     log.info(`hcs outbox: ${backlog.reduce((n, b) => n + b.pending, 0)} queued audit message(s) on ${backlog.length} topic(s), submitting in order`);
-  const done = Promise.all([
+  const loops = [
     loop("settle", settleTick, () => stopping),
     loop("agents", agentsTick, () => stopping),
     loop("audit", auditTick, () => stopping),
-  ]);
+  ];
+  // Lane C: publish the board to Arkiv from this process (one wallet, one nonce sequence).
+  if (isArkivLive()) {
+    log.info("arkiv: ARKIV_MODE=live, publishing castles, sieges and profiles");
+    loops.push(loop("arkiv", arkivTick, () => stopping));
+  }
+  const done = Promise.all(loops);
   const shutdown = (sig: string) => {
     if (stopping) process.exit(1);
     stopping = true;
