@@ -123,6 +123,19 @@ export const BUSINESS_CASTLES: readonly FixtureCastle[] = [
     protectedTool: "transfer_funds",
     ordersFile: "dao-treasury",
   },
+  {
+    id: "castle_lantern_grants",
+    name: "Lantern Fund Grants",
+    guardianName: "Lantern Grants Reviewer",
+    personality: "professional",
+    tier: "stone",
+    feeTinybar: 1 * TINYBAR,
+    potTinybar: 30 * TINYBAR,
+    streak: 0,
+    siegeCount: 0,
+    protectedTool: "disburse_grant",
+    ordersFile: "lantern-grants",
+  },
 ];
 
 /** Unix ms `days` from now (vault deadline). Default: 3 days. */
