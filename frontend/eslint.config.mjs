@@ -53,6 +53,7 @@ const eslintConfig = defineConfig([
         {
           patterns: [
             { group: ["@/worker", "@/worker/*", "**/worker/*", "**/worker"], message: "app/ and components/ must not import the worker (it holds VERIFIER_KEY)." },
+            { group: ["@/lib/arkiv/client", "@/lib/arkiv/outbox", "**/lib/arkiv/client", "**/lib/arkiv/outbox"], message: "lib/arkiv/client and outbox hold the Arkiv writer key. Import @/lib/arkiv (the port) instead." },
             ...GUARDIAN_PATTERNS,
           ],
           paths: [

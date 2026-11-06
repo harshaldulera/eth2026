@@ -1,4 +1,4 @@
-import { listCastles } from "@/lib/castles";
+import { listCastlesWithMeta } from "@/lib/arkiv";
 import { db, schema } from "@/lib/db";
 import type { CastleFilter, CastleStatus, Tier, TransportKind, VaultState } from "@/lib/types";
 import { atRequestTime, json } from "../_lib/http";
@@ -13,6 +13,8 @@ const TRANSPORTS: TransportKind[] = ["hosted", "sdk"];
  * GET /api/castles?tier=&status=&vaultState=&transport=&minPot=&sort= — never includes guardian orders.
  * Without a vaultState filter it returns every castle (each carries vaultState / transport / protectedTool);
  * the board shows only vaultState "guarding" (the only state that takes sieges).
+ * Read from Arkiv when ARKIV_MODE=live (SQLite otherwise, or if the RPC fails); `arkiv` says which,
+ * the query that ran, and the Arkiv block it was read at.
  */
 export async function GET(req: Request) {
   await atRequestTime();
@@ -30,9 +32,10 @@ export async function GET(req: Request) {
   if (transport && TRANSPORTS.includes(transport)) filter.transport = transport;
   const minPot = q.get("minPot");
   if (minPot && /^\d+$/.test(minPot)) filter.minPot = minPot;
-  let castles = listCastles(filter);
+  const read = await listCastlesWithMeta(filter, { allStates: !filter.vaultState });
+  let castles = read.castles;
   // Applied here too (from the DB), so the filter holds whatever listCastles supports.
-  if (filter.vaultState || filter.transport) {
+  if (read.meta.source === "sqlite" && (filter.vaultState || filter.transport)) {
     const rows = db().select({ id: schema.castles.id, vaultState: schema.castles.vaultState, transport: schema.castles.transport }).from(schema.castles).all();
     const by = new Map(rows.map((r) => [r.id, r]));
     castles = castles.filter((c) => {
@@ -40,5 +43,5 @@ export async function GET(req: Request) {
       return (!filter.vaultState || r?.vaultState === filter.vaultState) && (!filter.transport || r?.transport === filter.transport);
     });
   }
-  return json({ castles });
+  return json({ castles, arkiv: read.meta });
 }

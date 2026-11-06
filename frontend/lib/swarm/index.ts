@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { SwarmPort, Transcript } from "@/lib/types";
+import { recordSwarmRef } from "./refs";
 
 /**
  * Content-addressed transcript store: ref = "swarm-stub:<sha256 of the JSON>". Kept in memory and,
@@ -22,6 +23,11 @@ export const swarm: SwarmPort = {
     const sha = createHash("sha256").update(json).digest("hex");
     const ref = PREFIX + sha;
     store.set(ref, transcript);
+    try {
+      recordSwarmRef(transcript.siegeId, ref);
+    } catch {
+      // the reference is a convenience for the Arkiv siege entity; never fail an upload over it
+    }
     if (persist()) {
       try {
         mkdirSync(dir(), { recursive: true });

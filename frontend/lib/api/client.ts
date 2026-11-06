@@ -123,6 +123,9 @@ export type ConfigResponse = {
   feeSplitBps: FeeSplitBps;
 };
 
+/** Where GET /api/castles read from: Arkiv (with the block number) or the server's SQLite copy. */
+export type ArkivReadMeta = { source: "arkiv" | "sqlite"; block?: string; query: string; error?: string };
+
 export type AuditMessage = { seq: number; type: string; siegeId?: string; txId?: string; at: string };
 
 export type CastleDetail = {
@@ -173,7 +176,7 @@ const enc = encodeURIComponent;
 export const api = {
   config: () => request<ConfigResponse>("/api/config"),
 
-  castles: () => request<{ castles: Castle[] }>("/api/castles"),
+  castles: () => request<{ castles: Castle[]; arkiv?: ArkivReadMeta }>("/api/castles"),
   castle: (id: string) => request<CastleDetail>(`/api/castles/${enc(id)}`),
 
   /**

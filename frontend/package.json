@@ -15,12 +15,16 @@
     "demo": "tsx scripts/demo.ts",
     "worker": "tsx worker/index.ts",
     "abi": "tsx scripts/compile-contracts.ts",
+    "arkiv": "tsx scripts/arkiv-worker.ts",
+    "arkiv:check": "tsx scripts/arkiv-check.ts",
+    "arkiv:smoke": "tsx scripts/arkiv-smoke.ts",
     "deploy:vault": "tsx scripts/deploy-vault.ts",
     "contracts:test": "vitest run contracts.test",
     "contracts:forge": "cd ../contracts && forge test -vv",
     "guardian:fixtures": "tsx scripts/guardian-fixtures.ts"
   },
   "dependencies": {
+    "@arkiv-network/sdk": "^1.0.1",
     "@hiero-ledger/sdk": "^2.90.1",
     "@x402/core": "^2.30.0",
     "@x402/fetch": "^2.30.0",
