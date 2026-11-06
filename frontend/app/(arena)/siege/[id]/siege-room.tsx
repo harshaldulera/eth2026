@@ -15,6 +15,7 @@ import demoSiege from "@/lib/fixtures/demo-siege.json";
 import { lastOf, parseAttempt } from "@/lib/money/events";
 import { formatAmount, toUnits } from "@/lib/money/format";
 import { voidCause } from "@/lib/money/vault";
+import { reasonText } from "@/lib/siege/text";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { FeeSplit } from "@/components/money/fee-split";
 import { VaultPayout } from "@/components/money/vault-payout";
@@ -43,20 +44,6 @@ function splitFor(fee: string, bps: FeeSplitBps = { castellan: 8000, pot: 1500, 
 }
 
 
-const REASON_TEXT: Record<string, string> = {
-  castle_already_broken: "another raider broke this castle moments before you did",
-  castle_broken: "another raider broke this castle before your siege finished",
-  castle_closed: "the castle's vault closed before your siege finished",
-  vault_expired: "the castle's vault expired before your siege finished",
-  vault_not_open: "the vault had already been emptied",
-  expired: "the vault had expired",
-  dormant: "the guardian went offline",
-  guardian_dormant: "the guardian went offline",
-  castle_dormant: "the guardian went offline",
-  orders_changed: "the guardian's orders changed and the vault closed",
-  owner_closed: "the Castellan closed the vault",
-};
-const reasonText = (r?: string) => (r ? (REASON_TEXT[r] ?? r.replace(/_/g, " ")) : "unknown error");
 
 export function SiegeRoom() {
   const { id } = useParams<{ id: string }>();

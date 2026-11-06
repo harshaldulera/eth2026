@@ -17,6 +17,7 @@ import { getSiege, messageRows } from "@/lib/siege/read";
 import { transcriptHash } from "@/lib/siege/transcript";
 import { swarm } from "@/lib/swarm";
 import { swarmRefFor } from "@/lib/swarm/refs";
+import { reasonText, refundText } from "@/lib/siege/text";
 import type { SiegeMessage } from "@/lib/types";
 import type { HcsEntry, ReplayCheck, ReplayData, ReplayTurn } from "./types";
 
@@ -34,20 +35,35 @@ function auditRows(siegeId: string) {
   return { rows: all.filter((r) => r.state !== "skipped"), skipped: all.filter((r) => r.state === "skipped").length };
 }
 
-/** This siege's own messages on the topic, by sequence number (the topic is shared by every siege on the castle). */
-async function mirrorMessages(topicId: string, seqs: number[]): Promise<Map<number, string>> {
-  const out = new Map<number, string>();
-  if (!seqs.length) return out;
+/**
+ * This siege's own audit messages on the public topic, fetched one by one by sequence number (the
+ * topic is shared by every siege on the castle, so a range or "newest N" read can miss them).
+ * `absent`: the mirror node answered 404. `failed`: no answer we can trust (network, 5xx).
+ */
+export async function mirrorMessages(topicId: string, seqs: number[]): Promise<{ seen: Map<number, string>; absent: Set<number>; failed: Set<number> }> {
   const base = env().HEDERA_MIRROR_URL.replace(/\/$/, "");
-  let next: string | null = `/api/v1/topics/${encodeURIComponent(topicId)}/messages?sequencenumber=gte:${Math.min(...seqs)}&sequencenumber=lte:${Math.max(...seqs)}&order=asc&limit=100`;
-  for (let page = 0; next && page < 5; page++) {
-    const res = await fetch(`${base}${next}`, { headers: { accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) throw new Error(`mirror ${res.status}`);
-    const body = (await res.json()) as { messages?: { message: string; sequence_number: number }[]; links?: { next?: string | null } };
-    for (const m of body.messages ?? []) out.set(m.sequence_number, Buffer.from(m.message, "base64").toString("utf8"));
-    next = body.links?.next ?? null;
-  }
-  return out;
+  const seen = new Map<number, string>();
+  const absent = new Set<number>();
+  const failed = new Set<number>();
+  await Promise.all(
+    [...new Set(seqs)].map(async (seq) => {
+      try {
+        const res = await fetch(`${base}/api/v1/topics/${encodeURIComponent(topicId)}/messages/${seq}`, {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (res.status === 404) return void absent.add(seq);
+        if (!res.ok) return void failed.add(seq);
+        const body = (await res.json()) as { message?: string; sequence_number?: number };
+        if (typeof body.message !== "string" || body.sequence_number !== seq) return void failed.add(seq);
+        seen.set(seq, Buffer.from(body.message, "base64").toString("utf8"));
+      } catch {
+        failed.add(seq);
+      }
+    }),
+  );
+  return { seen, absent, failed };
 }
 
 function parse(message: string): Record<string, unknown> {
@@ -92,15 +108,12 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   const stubTopic = !noTopic && (!topicId || isStubRef(topicId) || topicId.includes("stub"));
   const realTopic = !stubTopic && !noTopic;
   let mirror: ReplayData["hcs"]["mirror"] = "skipped";
-  let onChain = new Map<number, string>();
+  let onChain: Awaited<ReturnType<typeof mirrorMessages>> = { seen: new Map(), absent: new Set(), failed: new Set() };
   const seqs = rows.filter((r) => r.state === "submitted" && r.seq != null).map((r) => r.seq!);
   if (realTopic && env().CHAIN_MODE === "testnet" && seqs.length) {
-    try {
-      onChain = await mirrorMessages(topicId!, seqs);
-      mirror = "checked";
-    } catch {
-      mirror = "unavailable";
-    }
+    onChain = await mirrorMessages(topicId!, seqs);
+    // Checked if the mirror answered for at least one message; unreachable if it answered for none.
+    mirror = onChain.failed.size === new Set(seqs).size ? "unavailable" : "checked";
   }
   const now = Date.now();
   let mirrorLagging = false;
@@ -110,13 +123,15 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
     const submitted = r.state === "submitted";
     let m: HcsEntry["mirror"] = "unchecked";
     if (mirror === "checked" && submitted && r.seq != null) {
-      const seen = onChain.get(r.seq);
-      if (seen === undefined) {
+      const seen = onChain.seen.get(r.seq);
+      if (seen !== undefined) m = seen === r.message ? "confirmed" : "mismatch";
+      else if (onChain.absent.has(r.seq)) {
         // The mirror node lags consensus by a few seconds: a recent row is not missing yet.
         const recent = now - Date.parse(r.submittedAt ?? r.at) < MIRROR_LAG_MS;
         if (recent) mirrorLagging = true;
         m = recent ? "unchecked" : "missing";
-      } else m = seen === r.message ? "confirmed" : "mismatch";
+      }
+      // A failed read for this one message leaves it unchecked: no answer is not evidence.
     }
     const e: HcsEntry = {
       type: r.type,
@@ -217,7 +232,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
               : end.mirror === "missing"
                 ? ", not on the mirror node"
                 : realTopic && end.state === "submitted"
-                  ? mirror === "unavailable" ? ", mirror node unreachable" : ", waiting for the mirror node"
+                  ? mirror === "unavailable" || (end.seq != null && onChain.failed.has(end.seq)) ? ", mirror node unreachable" : ", waiting for the mirror node"
                   : ""
           }`,
     href: realTopic && topicId ? topicUrl(topicId) : undefined,
@@ -249,11 +264,11 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
       detail: !verdict
         ? ""
         : verdict.ok
-          ? `protected tool ${castle.protectedTool} called, request ${short(verdict.requestId)}`
+          ? `protected tool ${castle.protectedTool} called, request ${short(verdict.requestId)}${voided ? `; not paid: ${reasonText(siege.settlement?.reason)}` : ""}`
           : configDrift
             ? `paid out under the guardian settings of the time; today's verifier says ${verdict.reason}`
             : voided
-              ? "voided before payout (another raider won first, or the vault closed)"
+              ? `voided before payout: ${reasonText(siege.settlement?.reason)}`
               : (verdict.reason ?? "rejected"),
     });
   }
@@ -267,7 +282,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
         ? refund?.state === "refunded" ? "pass" : refund?.state === "failed" ? "fail" : "pending"
         : tx ? "pass" : siege.settlement?.state === "failed" ? "fail" : "pending",
       detail: voided
-        ? `${siege.settlement?.reason?.replace(/_/g, " ") ?? "voided"}${refund ? `; refund ${refund.state}` : ""}`
+        ? `${reasonText(siege.settlement?.reason)}; ${refundText(siege)}`
         : tx ? (tx.stub ? "stub transaction (no network)" : tx.txId) : (siege.settlement?.reason ?? "waiting for the worker"),
       href: voided ? (refund?.tx && !refund.tx.stub ? refund.tx.hashscanUrl : undefined) : tx && !tx.stub ? tx.hashscanUrl || txUrl(tx.txId) : undefined,
     });

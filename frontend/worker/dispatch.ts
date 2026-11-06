@@ -16,6 +16,9 @@ import * as playStart from "@/app/api/play/start/route";
 import * as siegeDetail from "@/app/api/siege/[id]/route";
 import * as siegeMessage from "@/app/api/siege/[id]/message/route";
 import * as siegeStart from "@/app/api/siege/start/route";
+import * as replay from "@/app/api/replay/[id]/route";
+import * as arkivLiveSieges from "@/app/api/arkiv/live-sieges/route";
+import * as arkivCastle from "@/app/api/arkiv/castle/[id]/route";
 
 /**
  * In-process fetch over the real route handlers (no Next server): used by scripts/demo.ts and any
@@ -46,6 +49,10 @@ const ROUTES: [string, RouteModule][] = [
   ["/api/approvals", approvals],
   ["/api/approvals/[id]", approvalDecide],
   ["/api/owner", owner],
+  // Lane C public reads
+  ["/api/replay/[id]", replay],
+  ["/api/arkiv/live-sieges", arkivLiveSieges],
+  ["/api/arkiv/castle/[id]", arkivCastle],
 ];
 
 function match(pattern: string, path: string): Record<string, string> | null {

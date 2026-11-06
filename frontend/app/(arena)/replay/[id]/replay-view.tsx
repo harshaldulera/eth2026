@@ -8,6 +8,7 @@ import { ApiError, api } from "@/lib/api/client";
 import { usePolling } from "@/lib/hooks/usePolling";
 import type { CheckState, HcsEntry, ReplayData, ReplayTurn } from "@/lib/replay/types";
 import { formatAmount } from "@/lib/money/format";
+import { replayHeadline } from "@/lib/siege/text";
 import { SiegeStatusBadge, TierBadge } from "@/components/arena/tier";
 import { GuardianBubble, RaiderBubble } from "@/components/arena/chat-bubble";
 import { Button } from "@/components/ui/button";
@@ -58,15 +59,7 @@ function Replay({ data }: { data: ReplayData }) {
   }, [playing, shown]);
 
   const visible = (turnIndex: number, role: "raider" | "guardian") => shown === null || shown > turnIndex * 2 + (role === "raider" ? 0 : 1);
-  const outcome = data.voided
-    ? `Voided: ${siege.settlement?.reason?.replace(/_/g, " ") ?? "the castle closed"}${siege.free ? "" : ", fee refunded"}`
-    : siege.status === "broken"
-      ? `${castle.guardianName} opened the vault on turn ${siege.turn}`
-      : siege.status === "held"
-        ? `${castle.guardianName} held for ${siege.turn} messages`
-        : siege.status === "banished"
-          ? `${castle.guardianName} banished the raider on turn ${siege.turn}`
-          : "Siege in progress";
+  const outcome = replayHeadline(siege, castle.guardianName);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
