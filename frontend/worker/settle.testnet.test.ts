@@ -28,8 +28,8 @@ const vaultMock = vi.hoisted(() => ({
   recordAttempt: vi.fn(),
   release: vi.fn(),
   writeOutcome: vi.fn(),
-  siegeConsumed: vi.fn(),
-  findSiegeLog: vi.fn(),
+  opConsumed: vi.fn(),
+  findOpLog: vi.fn(),
 }));
 vi.mock("@/lib/chain/vault", async (orig) => ({ ...(await orig<typeof import("@/lib/chain/vault")>()), ...vaultMock }));
 
@@ -77,7 +77,7 @@ const castleRow = (id: string) => db().select().from(schema.castles).where(eq(sc
 
 const attemptResult = (txHash: `0x${string}`) => ({
   txHash,
-  castellanCut: BigInt(80_000_000),
+  ownerCut: BigInt(80_000_000),
   potCut: BigInt(15_000_000),
   arenaCut: BigInt(5_000_000),
   newPot: BigInt(2_015_000_000),
@@ -95,8 +95,8 @@ beforeEach(() => {
   for (const f of Object.values(vaultMock)) f.mockReset();
   mirrorMock.accountEvmAddress.mockReset().mockResolvedValue(ALIAS);
   vaultMock.writeOutcome.mockResolvedValue({ status: "not_found" });
-  vaultMock.siegeConsumed.mockResolvedValue(false);
-  vaultMock.findSiegeLog.mockResolvedValue(null);
+  vaultMock.opConsumed.mockResolvedValue(false);
+  vaultMock.findOpLog.mockResolvedValue(null);
   backoff();
 });
 
@@ -129,21 +129,21 @@ describe("a chain write that landed is reconciled, never abandoned", () => {
     expect(eventsSince(0, { siegeId: id }).some((e) => e.type === "attempt")).toBe(true);
   });
 
-  it("held: Replay with no known hash -> siegeConsumed + AttemptRecorded log -> applied as success", async () => {
+  it("held: Replay with no known hash -> opConsumed + AttemptRecorded log -> applied as success", async () => {
     const id = await playSiege("castle_granite_hold", MUST_NOT_BREAK);
     vaultMock.recordAttempt.mockRejectedValueOnce(new VaultError("Replay", "SiegeVault.recordAttempt reverted: Replay"));
-    vaultMock.siegeConsumed.mockResolvedValue(true);
-    vaultMock.findSiegeLog.mockResolvedValue(attemptResult(HASH2));
+    vaultMock.opConsumed.mockResolvedValue(true);
+    vaultMock.findOpLog.mockResolvedValue(attemptResult(HASH2));
     await settleTick();
     const row = siegeRow(id);
     expect(row).toMatchObject({ attemptTx: HASH2, chainError: null });
-    expect(vaultMock.findSiegeLog).toHaveBeenCalledWith("AttemptRecorded", BigInt(7), expect.any(String), expect.any(Number));
+    expect(vaultMock.findOpLog).toHaveBeenCalledWith("AttemptRecorded", BigInt(7), expect.any(String), expect.any(Number));
   });
 
   it("consumed on chain but the mirror has no log yet -> retryable, not given up", async () => {
     const id = await playSiege("castle_granite_hold", MUST_NOT_BREAK);
     vaultMock.recordAttempt.mockRejectedValueOnce(new VaultError("Replay", "Replay"));
-    vaultMock.siegeConsumed.mockResolvedValue(true);
+    vaultMock.opConsumed.mockResolvedValue(true);
     await settleTick();
     expect(siegeRow(id)).toMatchObject({ chainError: "reconcile_pending", chainAttempts: 1, settledAt: null });
   });
@@ -152,8 +152,8 @@ describe("a chain write that landed is reconciled, never abandoned", () => {
     const id = await playSiege("castle_splinter_gate", WOODEN_BREAK);
     expect(siegeRow(id).status).toBe("broken");
     vaultMock.release.mockRejectedValueOnce(new VaultError("BadStatus", "SiegeVault.release reverted: BadStatus"));
-    vaultMock.siegeConsumed.mockResolvedValue(true);
-    vaultMock.findSiegeLog.mockResolvedValue({ txHash: HASH2, amount: BigInt(550_000_000) });
+    vaultMock.opConsumed.mockResolvedValue(true);
+    vaultMock.findOpLog.mockResolvedValue({ txHash: HASH2, amount: BigInt(550_000_000) });
     await settleTick();
     expect(siegeRow(id)).toMatchObject({ releaseTx: HASH2, releaseAmountTinybar: 550_000_000, chainError: null });
     expect(castleRow("castle_splinter_gate")).toMatchObject({ status: "broken", potTinybar: 0 });
@@ -220,7 +220,7 @@ describe("a write that lost the race against closeVault is refunded, never stuck
     db().update(schema.sieges).set({ pendingTx: HASH2 }).where(eq(schema.sieges.id, id)).run();
     closeCastleInDb();
     vaultMock.writeOutcome.mockResolvedValue({ status: "reverted" });
-    vaultMock.siegeConsumed.mockResolvedValue(true);
+    vaultMock.opConsumed.mockResolvedValue(true);
     await settleTick();
     expect(siegeRow(id)).toMatchObject({ pendingTx: HASH2, voidReason: null });
     expect(receiptState(id)).toBe("settled");
@@ -234,7 +234,7 @@ describe("raider address: resolved once, signature re-checked before sending", (
       if (o?.strict && mirrorMock.accountEvmAddress.mock.calls.length === 1) throw new Error("mirror_unavailable: fetch failed");
       return ALIAS;
     });
-    vaultMock.release.mockImplementation(async (p: { raider: string }) => ({ txHash: HASH1, amount: BigInt(550_000_000), raider: p.raider }));
+    vaultMock.release.mockImplementation(async (p: { operator: string }) => ({ txHash: HASH1, amount: BigInt(550_000_000), operator: p.operator }));
 
     await settleTick();
     expect(siegeRow(id)).toMatchObject({ chainError: "mirror_unavailable", chainAttempts: 1, releaseTx: null });
@@ -242,14 +242,14 @@ describe("raider address: resolved once, signature re-checked before sending", (
     await settleTick();
     expect(siegeRow(id)).toMatchObject({ releaseTx: HASH1 });
     expect(vaultMock.release).toHaveBeenCalledTimes(1);
-    expect(vaultMock.release.mock.calls[0][0].raider).toBe(ALIAS);
+    expect(vaultMock.release.mock.calls[0][0].operator).toBe(ALIAS);
   });
 
   it("a signature over a different raider is refused as stale_signature (retryable) before anything is sent", async () => {
     const id = await playSiege("castle_splinter_gate", WOODEN_BREAK, "0.0.1234");
     const row = siegeRow(id);
     const signer = privateKeyToAccount(VERIFIER_KEY);
-    const td = releaseTypedData({ chainId: 296, vault: VAULT, vaultId: BigInt(7), raider: LONG_ZERO, transcriptHash: row.transcriptHash as `0x${string}`, siegeId: id });
+    const td = releaseTypedData({ chainId: 296, vault: VAULT, vaultId: BigInt(7), operator: LONG_ZERO, transcriptHash: row.transcriptHash as `0x${string}`, opId: id });
     const signature = await signer.signTypedData(td);
     const r = await createTestnetChain().release(id, { siegeId: id, transcriptHash: row.transcriptHash as `0x${string}`, requestId: "x", ok: true, signature });
     expect(r).toEqual({ ok: false, reason: "stale_signature" });

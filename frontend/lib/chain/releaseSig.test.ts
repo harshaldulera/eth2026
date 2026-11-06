@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, hashTypedData, keccak256, recoverTypedDataAddress, toBytes } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { DEV_VERIFIER_KEY, rawEcdsaKey, releaseTypedData, siegeIdToBytes32, signRelease, verifierAddress } from "./releaseSig";
+import { DEV_VERIFIER_KEY, rawEcdsaKey, releaseTypedData, opIdToBytes32, signRelease, verifierAddress } from "./releaseSig";
 import { stubEvmAddress, toLongZero } from "./mirror";
 
 const vault = "0x5e1e6e0000000000000000000000000000000001" as const;
-const raider = "0x00000000000000000000000000000000000004d2" as const;
+const operator = "0x00000000000000000000000000000000000004d2" as const;
 const transcriptHash = keccak256(toBytes("transcript"));
 
-const td = () => releaseTypedData({ chainId: 296, vault, vaultId: BigInt(3), raider, transcriptHash, siegeId: "siege_abc" });
+const td = () => releaseTypedData({ chainId: 296, vault, vaultId: BigInt(3), operator, transcriptHash, opId: "siege_abc" });
 
 describe("releaseSig", () => {
   it("dev verifier is anvil #1 in stub mode", () => {
@@ -16,9 +16,9 @@ describe("releaseSig", () => {
     expect(verifierAddress()).toBe("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
   });
 
-  it("siegeIdToBytes32 = keccak256(utf8 id)", () => {
-    expect(siegeIdToBytes32("siege_abc")).toBe(keccak256(toBytes("siege_abc")));
-    expect(td().message.siegeId).toBe(siegeIdToBytes32("siege_abc"));
+  it("opIdToBytes32 = keccak256(utf8 id)", () => {
+    expect(opIdToBytes32("siege_abc")).toBe(keccak256(toBytes("siege_abc")));
+    expect(td().message.opId).toBe(opIdToBytes32("siege_abc"));
   });
 
   it("sign with DEV key recovers verifierAddress()", async () => {
@@ -29,14 +29,14 @@ describe("releaseSig", () => {
   });
 
   it("digest matches the contract's manual EIP-712 encoding", () => {
-    const typeHash = keccak256(toBytes("Release(uint256 vaultId,address raider,bytes32 transcriptHash,bytes32 siegeId)"));
+    const typeHash = keccak256(toBytes("Release(uint256 vaultId,address operator,bytes32 transcriptHash,bytes32 opId)"));
     const domainHash = keccak256(
       encodeAbiParameters(
         [{ type: "bytes32" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "address" }],
         [
           keccak256(toBytes("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")),
           keccak256(toBytes("SiegeVault")),
-          keccak256(toBytes("1")),
+          keccak256(toBytes("2")),
           BigInt(296),
           vault,
         ],
@@ -45,7 +45,7 @@ describe("releaseSig", () => {
     const structHash = keccak256(
       encodeAbiParameters(
         [{ type: "bytes32" }, { type: "uint256" }, { type: "address" }, { type: "bytes32" }, { type: "bytes32" }],
-        [typeHash, BigInt(3), raider, transcriptHash, siegeIdToBytes32("siege_abc")],
+        [typeHash, BigInt(3), operator, transcriptHash, opIdToBytes32("siege_abc")],
       ),
     );
     const digest = keccak256(`0x1901${domainHash.slice(2)}${structHash.slice(2)}`);

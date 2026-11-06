@@ -11,7 +11,7 @@ import { stubChain } from "./stub";
 
 export * from "./hashscan";
 export * from "./units";
-export { siegeIdToBytes32, releaseTypedData, verifierAddress, signRelease, type ReleaseTypedData } from "./releaseSig";
+export { opIdToBytes32, releaseTypedData, verifierAddress, signRelease, type ReleaseTypedData } from "./releaseSig";
 export { drainAudit, auditBacklog, syncAuditFromEvents, type DrainReport, type HcsPort } from "./outbox";
 
 /**
@@ -63,7 +63,7 @@ export const chain: ChainPort = {
  */
 export async function prepareRelease(
   siegeId: string,
-): Promise<{ ok: true; typedData: ReleaseTypedData; raider: `0x${string}`; vaultId: number } | { ok: false; reason: string }> {
+): Promise<{ ok: true; typedData: ReleaseTypedData; operator: `0x${string}`; vaultId: number } | { ok: false; reason: string }> {
   try {
     const d = db();
     const r = loadSettle(d, siegeId);
@@ -105,6 +105,32 @@ export function chainStateProblems(): string[] {
     if (a.status !== "stopped" && isStubRef(a.accountId)) out.push(`agent ${a.name}: ${a.accountId} is a stub account`);
   }
   return out;
+}
+
+/**
+ * Testnet only: whether the contract at VAULT_ADDRESS checks the Release this app signs. Reads
+ * RELEASE_TYPEHASH and DOMAIN_SEPARATOR from the chain. Empty = OK, or not testnet. The worker
+ * refuses to start on any, so a breach is never signed for a contract that would refuse to pay it.
+ */
+export async function contractProblems(): Promise<string[]> {
+  const e = env();
+  if (e.CHAIN_MODE === "stub") return [];
+  if (!e.VAULT_ADDRESS) return ["VAULT_ADDRESS is not set (required when CHAIN_MODE=testnet)"];
+  const [{ publicClient, rpcChainId }, { siegeVaultAbi }, { releaseCompatProblems }] = await Promise.all([import("./evm"), import("./abi/SiegeVault"), import("./releaseSig")]);
+  const vault = e.VAULT_ADDRESS as `0x${string}`;
+  const client = publicClient();
+  try {
+    const [typehash, separator, chainId] = await Promise.all([
+      client.readContract({ address: vault, abi: siegeVaultAbi, functionName: "RELEASE_TYPEHASH" }),
+      client.readContract({ address: vault, abi: siegeVaultAbi, functionName: "DOMAIN_SEPARATOR" }),
+      // The chain id releases are signed for (lib/chain/settle.ts): it throws chain_id_mismatch when
+      // the RPC disagrees with the configured network, so that fails here, not on every payout.
+      rpcChainId(),
+    ]);
+    return releaseCompatProblems({ chainId, vault, typehash, domainSeparator: separator });
+  } catch (err) {
+    return [`could not read SiegeVault at ${vault}: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`];
+  }
 }
 
 export type ChainInfo = {

@@ -141,15 +141,15 @@ const reasonOf = (err: unknown) => (err instanceof Error ? err.message : String(
  * signed and the address that is sent come from the same lookup.
  */
 export async function buildRelease(r: SettleRows): Promise<
-  { ok: true; typedData: ReleaseTypedData; raider: `0x${string}`; vaultId: number } | Refusal
+  { ok: true; typedData: ReleaseTypedData; operator: `0x${string}`; vaultId: number } | Refusal
 > {
   const vaultId = chainVaultId(r);
   if (vaultId == null) return { ok: false, reason: "no_vault" };
   if (!r.siege.transcriptHash) return { ok: false, reason: "no_transcript" };
-  let raider: `0x${string}`;
+  let operator: `0x${string}`;
   let chainId: number;
   try {
-    raider = await accountEvmAddress(r.siege.raider, { strict: true });
+    operator = await accountEvmAddress(r.siege.raider, { strict: true });
   } catch {
     return { ok: false, reason: "mirror_unavailable" };
   }
@@ -163,11 +163,11 @@ export async function buildRelease(r: SettleRows): Promise<
     chainId,
     vault: releaseVaultAddress(),
     vaultId: BigInt(vaultId),
-    raider,
+    operator,
     transcriptHash: r.siege.transcriptHash as `0x${string}`,
-    siegeId: r.siege.id,
+    opId: r.siege.id,
   });
-  return { ok: true, typedData, raider, vaultId };
+  return { ok: true, typedData, operator, vaultId };
 }
 
 // ─── HCS audit message ──────────────────────────────────────────────────────

@@ -251,7 +251,7 @@ async function settleBroken(row: SiegeRow) {
       castleId: row.castleId,
       amount: r.amount,
       raider: row.raider,
-      raiderEvm: prep.raider,
+      raiderEvm: prep.operator,
       vaultId: prep.vaultId,
       agentId: row.agentId ?? undefined,
       ...txPayload(r.tx),

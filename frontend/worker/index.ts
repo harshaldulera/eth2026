@@ -10,7 +10,7 @@
  */
 import "@/lib/config/load-env";
 import { env } from "@/lib/config/env";
-import { auditBacklog, chainStateProblems } from "@/lib/chain";
+import { auditBacklog, chainStateProblems, contractProblems } from "@/lib/chain";
 import { db } from "@/lib/db";
 import { guardianMode } from "@/lib/transport";
 import { isArkivLive } from "@/lib/arkiv/config";
@@ -42,7 +42,7 @@ function loop(name: string, fn: () => Promise<unknown>, stopped: () => boolean):
   })();
 }
 
-export function main(): void {
+export async function main(): Promise<void> {
   const e = env();
   // Never settle real money against a stub-seeded DB or vaults on an old deployment.
   const problems = chainStateProblems();
@@ -50,6 +50,12 @@ export function main(): void {
     log.fail(`CHAIN_MODE=${e.CHAIN_MODE} but ${e.DATABASE_URL} holds state from another chain:`);
     for (const p of problems) log.fail(`  ${p}`);
     log.fail("Run `npm run seed` (it recreates vaults/topics/agents for this env), then start the worker again.");
+    process.exit(1);
+  }
+  // Never sign a breach for a contract that would refuse to pay it (an older SiegeVault deployment).
+  const contract = await contractProblems();
+  if (contract.length) {
+    for (const p of contract) log.fail(p);
     process.exit(1);
   }
   let stopping = false;
@@ -91,4 +97,4 @@ export function main(): void {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
-if (/worker[\\/]index\.[cm]?[jt]s$/.test(process.argv[1] ?? "")) main();
+if (/worker[\\/]index\.[cm]?[jt]s$/.test(process.argv[1] ?? "")) void main();

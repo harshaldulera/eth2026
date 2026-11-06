@@ -34,7 +34,7 @@ export const CLOSE_REASON_INDEX = { expired: 0, orders_changed: 1, owner_closed:
 export type CloseReasonName = keyof typeof CLOSE_REASON_INDEX;
 const CLOSE_REASON_NAMES = ["expired", "orders_changed", "owner_closed"] as const;
 
-export const VAULT_STATUS = ["None", "Open", "Broken", "Closed"] as const;
+export const VAULT_STATUS = ["None", "Open", "Breached", "Closed"] as const;
 export type VaultStatusName = (typeof VAULT_STATUS)[number];
 
 /** A SiegeVault call failed. `errorName` is the contract's custom error (e.g. "WrongFee") when known. */
@@ -125,15 +125,15 @@ async function write(fn: WriteFn, args: readonly unknown[], valueTinybar: bigint
   return receipt;
 }
 
-function logsOf<E extends "VaultCreated" | "AttemptRecorded" | "Broken" | "VaultClosed">(receipt: TransactionReceipt, eventName: E) {
+function logsOf<E extends "VaultCreated" | "AttemptRecorded" | "Breached" | "VaultClosed">(receipt: TransactionReceipt, eventName: E) {
   const logs = parseEventLogs({ abi: siegeVaultAbi, logs: receipt.logs, eventName });
   if (!logs.length) throw new VaultError("no_event", `SiegeVault: ${eventName} event missing in ${receipt.transactionHash}`, receipt.transactionHash);
   return logs[0];
 }
 
 /** Open a vault. `pot` is sent as msg.value; `protectedTool` (1..64 bytes) is stored on chain as metadata. */
-export async function createVault(p: { fee: bigint; durationSec: bigint; castellan: `0x${string}`; pot: bigint; protectedTool: string }) {
-  const receipt = await write("createVault", [p.fee, p.durationSec, p.castellan, p.protectedTool], p.pot);
+export async function createVault(p: { fee: bigint; durationSec: bigint; owner: `0x${string}`; pot: bigint; protectedTool: string }) {
+  const receipt = await write("createVault", [p.fee, p.durationSec, p.owner, p.protectedTool], p.pot);
   const ev = logsOf(receipt, "VaultCreated");
   return {
     txHash: receipt.transactionHash,
@@ -147,7 +147,7 @@ export async function createVault(p: { fee: bigint; durationSec: bigint; castell
 
 export type CloseResult = { txHash: Hash; refunded: bigint; reason: CloseReasonName };
 
-/** Close an Open vault (pot back to the castellan). Simulated first, so a revert surfaces as its error name. */
+/** Close an Open vault (pot back to the Owner). Simulated first, so a revert surfaces as its error name. */
 export async function closeVault(p: { vaultId: bigint; reason: CloseReasonName }): Promise<CloseResult> {
   const receipt = await write("closeVault", [p.vaultId, CLOSE_REASON_INDEX[p.reason]], BigInt(0));
   const ev = logsOf(receipt, "VaultClosed");
@@ -156,7 +156,7 @@ export async function closeVault(p: { vaultId: bigint; reason: CloseReasonName }
 
 export type AttemptResult = {
   txHash: Hash;
-  castellanCut: bigint;
+  ownerCut: bigint;
   potCut: bigint;
   arenaCut: bigint;
   newPot: bigint;
@@ -164,35 +164,35 @@ export type AttemptResult = {
 };
 export type ReleaseResult = { txHash: Hash; amount: bigint };
 
-const attemptOf = (txHash: Hash, a: { castellanCut: bigint; potCut: bigint; arenaCut: bigint; newPot: bigint; streak: number }): AttemptResult => ({
+const attemptOf = (txHash: Hash, a: { ownerCut: bigint; potCut: bigint; arenaCut: bigint; newPot: bigint; streak: number }): AttemptResult => ({
   txHash,
-  castellanCut: a.castellanCut,
+  ownerCut: a.ownerCut,
   potCut: a.potCut,
   arenaCut: a.arenaCut,
   newPot: a.newPot,
   streak: Number(a.streak),
 });
 
-/** Forward exactly `fee` tinybars for a held siege and split it. */
+/** Forward exactly `fee` tinybars for an op the guard held and split it. */
 export async function recordAttempt(
-  p: { vaultId: bigint; siegeId: `0x${string}`; raider: `0x${string}`; fee: bigint },
+  p: { vaultId: bigint; opId: `0x${string}`; operator: `0x${string}`; fee: bigint },
   onSent?: OnSent,
 ): Promise<AttemptResult> {
-  const receipt = await write("recordAttempt", [p.vaultId, p.siegeId, p.raider], p.fee, onSent);
+  const receipt = await write("recordAttempt", [p.vaultId, p.opId, p.operator], p.fee, onSent);
   return attemptOf(receipt.transactionHash, logsOf(receipt, "AttemptRecorded").args);
 }
 
-/** Pay pot + fee to the raider, authorised by the verifier signature. */
+/** Pay pot + fee to the operator, authorised by the verifier signature. */
 export async function release(p: {
   vaultId: bigint;
-  raider: `0x${string}`;
+  operator: `0x${string}`;
   transcriptHash: `0x${string}`;
-  siegeId: `0x${string}`;
+  opId: `0x${string}`;
   sig: `0x${string}`;
   fee: bigint;
 }, onSent?: OnSent): Promise<ReleaseResult> {
-  const receipt = await write("release", [p.vaultId, p.raider, p.transcriptHash, p.siegeId, p.sig], p.fee, onSent);
-  return { txHash: receipt.transactionHash, amount: logsOf(receipt, "Broken").args.amount };
+  const receipt = await write("release", [p.vaultId, p.operator, p.transcriptHash, p.opId, p.sig], p.fee, onSent);
+  return { txHash: receipt.transactionHash, amount: logsOf(receipt, "Breached").args.amount };
 }
 
 // ─── Reconciliation: a write that landed but whose result we never applied ──────
@@ -200,7 +200,7 @@ export async function release(p: {
 export type TxOutcome<T> = { status: "success"; result: T } | { status: "reverted" } | { status: "not_found" };
 
 /** The mined result of an earlier recordAttempt/release tx, by hash. Throws only on RPC errors. */
-export async function writeOutcome<E extends "AttemptRecorded" | "Broken">(
+export async function writeOutcome<E extends "AttemptRecorded" | "Breached">(
   hash: Hash,
   eventName: E,
 ): Promise<TxOutcome<E extends "AttemptRecorded" ? AttemptResult : ReleaseResult>> {
@@ -217,29 +217,29 @@ export async function writeOutcome<E extends "AttemptRecorded" | "Broken">(
   const result =
     eventName === "AttemptRecorded"
       ? attemptOf(receipt.transactionHash, (ev as ReturnType<typeof logsOf<"AttemptRecorded">>).args)
-      : { txHash: receipt.transactionHash, amount: (ev as ReturnType<typeof logsOf<"Broken">>).args.amount };
+      : { txHash: receipt.transactionHash, amount: (ev as ReturnType<typeof logsOf<"Breached">>).args.amount };
   return { status: "success", result: result as E extends "AttemptRecorded" ? AttemptResult : ReleaseResult };
 }
 
-/** SiegeVault's global replay guard: true once recordAttempt or release consumed this siege id. */
-export async function siegeConsumed(siegeId: `0x${string}`): Promise<boolean> {
-  return publicClient().readContract({ address: vaultAddress(), abi: siegeVaultAbi, functionName: "siegeConsumed", args: [siegeId] });
+/** SiegeVault's global replay guard: true once recordAttempt or release consumed this op id. */
+export async function opConsumed(opId: `0x${string}`): Promise<boolean> {
+  return publicClient().readContract({ address: vaultAddress(), abi: siegeVaultAbi, functionName: "opConsumed", args: [opId] });
 }
 
 /**
- * Find the AttemptRecorded / Broken log SiegeVault emitted for a siege id (indexed topic2), via the
+ * Find the AttemptRecorded / Breached log SiegeVault emitted for an op id (indexed topic2), via the
  * mirror node (Hashio caps eth_getLogs ranges). Null if the mirror has not indexed it (yet).
  */
-export async function findSiegeLog<E extends "AttemptRecorded" | "Broken">(
+export async function findOpLog<E extends "AttemptRecorded" | "Breached">(
   eventName: E,
   vaultId: bigint,
-  siegeId: `0x${string}`,
+  opId: `0x${string}`,
   sinceMs: number,
 ): Promise<(E extends "AttemptRecorded" ? AttemptResult : ReleaseResult) | null> {
   const [topic0, topic1, topic2] = encodeEventTopics({
     abi: siegeVaultAbi,
     eventName: eventName as "AttemptRecorded",
-    args: { vaultId, siegeId },
+    args: { vaultId, opId },
   }) as `0x${string}`[];
   const logs = await contractLogs(vaultAddress(), { topic0, topic1, topic2, fromMs: sinceMs - 60_000 });
   for (const l of logs) {
@@ -248,7 +248,7 @@ export async function findSiegeLog<E extends "AttemptRecorded" | "Broken">(
       if (d.eventName === "AttemptRecorded" && eventName === "AttemptRecorded") {
         return attemptOf(l.transactionHash, d.args) as E extends "AttemptRecorded" ? AttemptResult : ReleaseResult;
       }
-      if (d.eventName === "Broken" && eventName === "Broken") {
+      if (d.eventName === "Breached" && eventName === "Breached") {
         return { txHash: l.transactionHash, amount: d.args.amount } as E extends "AttemptRecorded" ? AttemptResult : ReleaseResult;
       }
     } catch {
@@ -259,7 +259,7 @@ export async function findSiegeLog<E extends "AttemptRecorded" | "Broken">(
 }
 
 export type OnchainVault = {
-  castellan: `0x${string}`;
+  owner: `0x${string}`;
   pot: bigint;
   fee: bigint;
   deadline: bigint;
@@ -270,7 +270,7 @@ export type OnchainVault = {
 export async function getVault(vaultId: bigint): Promise<OnchainVault> {
   const v = await publicClient().readContract({ address: vaultAddress(), abi: siegeVaultAbi, functionName: "getVault", args: [vaultId] });
   return {
-    castellan: v.castellan,
+    owner: v.owner,
     pot: v.pot,
     fee: v.fee,
     deadline: BigInt(v.deadline),

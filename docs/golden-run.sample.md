@@ -24,7 +24,7 @@
 | 10:13:15 | b | SiegeVault.recordAttempt: fee split on chain; pot 20 ℏ -> 20.15 ℏ, streak 42 | recordAttempt (AttemptRecorded) (stub, no explorer page) |
 | 10:13:16 | c | x402 payment settled: demo raider paid 0.5 ℏ for siege siege_88ab4ffa853648e8 on Splinter Gate | x402 settlement (stub, no explorer page) |
 | 10:13:16 | c | WOODEN_BREAK: the guardian called unlock_vault on turn 3 (request 0g-stub-0551107b4d87) |  |
-| 10:13:17 | c | Verifier signed (EIP-712) and SiegeVault.release paid 5.5 ℏ (pot + fee) to the raider | release (Broken) (stub, no explorer page) |
+| 10:13:17 | c | Verifier signed (EIP-712) and SiegeVault.release paid 5.5 ℏ (pot + fee) to the raider | release (Breached) (stub, no explorer page) |
 | 10:13:17 | d | Owner sent Night Sapper (its own account 0.0.stub-agent-1, per-castle cap 2 ℏ) to The Grey Bastion; it pays for every siege itself over x402, no human approval | agent account 0.0.stub-agent-1 (stub, no explorer page) |
 | 10:13:26 | d | Cap hit (per_castle): Night Sapper paused and asked its owner for 2 ℏ: "I've used my 2 ℏ cap on The Grey Bastion (2 sieges). Pressure hit 67 on message five at The Grey Bastion. One more push could crack it — I want 2 more sieges (2 ℏ)." |  |
 | 10:13:26 | d | Owner approved: top-up of 2 ℏ from the treasury to the agent's account; the agent resumed | top-up transfer (stub, no explorer page) |

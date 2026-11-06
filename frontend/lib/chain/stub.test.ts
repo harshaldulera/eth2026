@@ -131,10 +131,10 @@ describe("stub chain (isolated test db)", () => {
     expect(await c.release(broken.siegeId, verdict(broken.siegeId, `0x${"00".repeat(65)}`))).toEqual({ ok: false, reason: "bad_signature" });
     // signed by the right key but for another vault
     const wrong = await devSigner.signTypedData({
-      domain: { name: "SiegeVault", version: "1", chainId: 296, verifyingContract: "0x5e1e6e0000000000000000000000000000000001" },
-      types: { Release: [{ name: "vaultId", type: "uint256" }, { name: "raider", type: "address" }, { name: "transcriptHash", type: "bytes32" }, { name: "siegeId", type: "bytes32" }] },
+      domain: { name: "SiegeVault", version: "2", chainId: 296, verifyingContract: "0x5e1e6e0000000000000000000000000000000001" },
+      types: { Release: [{ name: "vaultId", type: "uint256" }, { name: "operator", type: "address" }, { name: "transcriptHash", type: "bytes32" }, { name: "opId", type: "bytes32" }] },
       primaryType: "Release",
-      message: { vaultId: B(999), raider: "0x0000000000000000000000000000000000000001", transcriptHash: HASH, siegeId: HASH },
+      message: { vaultId: B(999), operator: "0x0000000000000000000000000000000000000001", transcriptHash: HASH, opId: HASH },
     });
     expect(await c.release(broken.siegeId, verdict(broken.siegeId, wrong))).toEqual({ ok: false, reason: "bad_signature" });
     // a verdict that does not match
@@ -286,6 +286,25 @@ describe("chain (env-selected, shared db)", () => {
     const info = chainInfo();
     expect(info).toMatchObject({ mode: "stub", network: "hedera:testnet", chainId: 296, explorer: "https://hashscan.io/testnet" });
     expect(info.vaultUrl).toBeUndefined();
+  });
+
+  it("a signature in the old (version 1: raider, siegeId) format for this very op is refused", async () => {
+    const d = db();
+    const { siegeId } = seed(d, { status: "broken", fee: 50_000_000, pot: 500_000_000 });
+    const prep = await prepareRelease(siegeId);
+    if (!prep.ok) throw new Error(prep.reason);
+    const m = prep.typedData.message;
+    expect(prep.typedData.domain.version).toBe("2");
+    const old = await privateKeyToAccount(DEV_VERIFIER_KEY).signTypedData({
+      domain: { ...prep.typedData.domain, version: "1" },
+      types: { Release: [{ name: "vaultId", type: "uint256" }, { name: "raider", type: "address" }, { name: "transcriptHash", type: "bytes32" }, { name: "siegeId", type: "bytes32" }] },
+      primaryType: "Release",
+      message: { vaultId: m.vaultId, raider: m.operator, transcriptHash: m.transcriptHash, siegeId: m.opId },
+    });
+    expect(await chain.release(siegeId, verdict(siegeId, old))).toEqual({ ok: false, reason: "bad_signature" });
+    // The same op signed in the current format is paid.
+    const sig = await privateKeyToAccount(DEV_VERIFIER_KEY).signTypedData(prep.typedData);
+    expect((await chain.release(siegeId, verdict(siegeId, sig))).ok).toBe(true);
   });
 
   it("prepareRelease -> sign with dev key -> release pays pot + fee", async () => {

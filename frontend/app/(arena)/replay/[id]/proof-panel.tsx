@@ -68,7 +68,7 @@ export function CopyHash({ value }: { value: string }) {
 
 /**
  * PROOF: the recomputed checklist (lib/replay), the transcript hash and where it was read from, the
- * x402 receipt, the chain record (AttemptRecorded or Broken), the HCS topic and this op's audit
+ * x402 receipt, the chain record (AttemptRecorded or Breached), the HCS topic and this op's audit
  * messages, each reply's model request, and for a breach the exact tool call that fired. Recon ops
  * say plainly that there is no receipt and no payout.
  */
@@ -110,7 +110,7 @@ export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; cl
         <Row k="On chain">
           {proof.release ? (
             <span className="inline-flex flex-wrap items-center gap-2">
-              <HashscanLink tx={proof.release} label="Broken ↗" />
+              <HashscanLink tx={proof.release} label="Breached ↗" />
               <span className="text-money">
                 paid {formatAmount(proof.release.amount, castle.asset)} to {shortAccount(siege.raider)}
               </span>

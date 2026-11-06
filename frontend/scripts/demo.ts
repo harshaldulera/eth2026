@@ -187,6 +187,12 @@ async function main() {
     ]);
   }
   if (!TESTNET_FLAG && (e.CHAIN_MODE !== "stub" || process.env.ARKIV_MODE !== "stub")) throw new Error("refusing to run: stub modes did not stick");
+  if (TESTNET_FLAG) {
+    // Same check as the worker: never spend HBAR against a SiegeVault whose payouts would be refused.
+    const { contractProblems } = await import("@/lib/chain");
+    const problems = await contractProblems();
+    if (problems.length) throw new Error(`refusing to run on testnet: ${problems.join("; ")}`);
+  }
   const file = e.DATABASE_URL.replace(/^file:/, "");
   if (file !== ":memory:") {
     const abs = path.isAbsolute(file) ? file : path.join(process.cwd(), file);

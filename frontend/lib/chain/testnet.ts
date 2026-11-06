@@ -8,7 +8,7 @@ import { arenaAccount } from "./evm";
 import { txUrl, isStubRef } from "./hashscan";
 import * as hcs from "./hcs";
 import { accountEvmAddress } from "./mirror";
-import { siegeIdToBytes32, verifierAddress } from "./releaseSig";
+import { opIdToBytes32, verifierAddress } from "./releaseSig";
 import {
   attemptRefusal,
   buildRelease,
@@ -31,7 +31,7 @@ import { enqueueAudit } from "./outbox";
  * before its receipt is awaited (write-ahead), so a receipt timeout, a relay hiccup or a worker crash
  * is reconciled from the chain on the next try instead of re-sending into Replay/BadStatus.
  * Reconciliation order: (1) the pending tx's receipt, (2) on Replay/BadStatus/receipt_timeout:
- * SiegeVault.siegeConsumed(id) and the AttemptRecorded/Broken log for that siege id (mirror node).
+ * SiegeVault.opConsumed(id) and the AttemptRecorded/Breached log for that op id (mirror node).
  */
 
 const evmTx = (hash: string): TxRef => ({ txId: hash, hashscanUrl: txUrl(hash) });
@@ -71,7 +71,7 @@ const recordPending = (d: DB, siegeId: string) => (hash: Hash) => {
  * (e.g. a recordAttempt that lost the race against closeVault). Otherwise it would block voidSiege forever.
  */
 async function clearRevertedPending(d: DB, r: SettleRows, hash: string): Promise<boolean> {
-  if (await vault.siegeConsumed(siegeIdToBytes32(r.siege.id))) return false;
+  if (await vault.opConsumed(opIdToBytes32(r.siege.id))) return false;
   const res = d
     .update(schema.sieges)
     .set({ pendingTx: null })
@@ -86,7 +86,7 @@ async function clearRevertedPending(d: DB, r: SettleRows, hash: string): Promise
  * cleared (returns null so the normal refusals apply); unknown -> null (refusals apply; voidSiege still
  * refuses while pending_tx is set).
  */
-async function settlePending<E extends "AttemptRecorded" | "Broken">(
+async function settlePending<E extends "AttemptRecorded" | "Breached">(
   d: DB,
   r: SettleRows,
   eventName: E,
@@ -105,7 +105,7 @@ type ReleaseOk = { ok: true; tx: TxRef; amount: Amount };
 const attemptOk = (a: vault.AttemptResult): AttemptOk => ({
   ok: true,
   tx: evmTx(a.txHash),
-  split: { castellan: a.castellanCut.toString(), pot: a.potCut.toString(), arena: a.arenaCut.toString() },
+  split: { castellan: a.ownerCut.toString(), pot: a.potCut.toString(), arena: a.arenaCut.toString() },
   newPot: a.newPot.toString(),
 });
 const releaseOk = (a: vault.ReleaseResult): ReleaseOk => ({ ok: true, tx: evmTx(a.txHash), amount: a.amount.toString() });
@@ -115,7 +115,7 @@ const releaseOk = (a: vault.ReleaseResult): ReleaseOk => ({ ok: true, tx: evmTx(
  * the error), then — when the contract says the siege id is consumed — the event log for it.
  * Returns the result, "consumed_unindexed" (on chain but the mirror has no log yet: retry), or null.
  */
-async function landed<E extends "AttemptRecorded" | "Broken">(
+async function landed<E extends "AttemptRecorded" | "Breached">(
   r: SettleRows,
   eventName: E,
   hashes: (string | null | undefined)[],
@@ -126,10 +126,10 @@ async function landed<E extends "AttemptRecorded" | "Broken">(
     if (o.status === "success") return o.result;
   }
   if (!checkConsumed || r.castle.vaultId == null) return null;
-  const id = siegeIdToBytes32(r.siege.id);
-  if (!(await vault.siegeConsumed(id))) return null;
+  const id = opIdToBytes32(r.siege.id);
+  if (!(await vault.opConsumed(id))) return null;
   const since = Date.parse(r.siege.createdAt) || Date.now() - 6 * 86_400_000;
-  const log = await vault.findSiegeLog(eventName, BigInt(r.castle.vaultId), id, since);
+  const log = await vault.findOpLog(eventName, BigInt(r.castle.vaultId), id, since);
   return log ?? "consumed_unindexed";
 }
 
@@ -152,7 +152,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
         const res = await vault.createVault({
           fee: BigInt(i.fee),
           durationSec: BigInt(Math.floor(i.durationSec)),
-          castellan: await castellanAddress(i.castellan),
+          owner: await castellanAddress(i.castellan),
           pot: BigInt(i.pot),
           protectedTool: i.protectedTool,
         });
@@ -183,8 +183,8 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
         const res = await vault.recordAttempt(
           {
             vaultId: BigInt(r.castle.vaultId),
-            siegeId: siegeIdToBytes32(r.siege.id),
-            raider: await accountEvmAddress(r.siege.raider),
+            opId: opIdToBytes32(r.siege.id),
+            operator: await accountEvmAddress(r.siege.raider),
             fee: BigInt(r.castle.feeTinybar),
           },
           recordPending(d, r.siege.id),
@@ -201,7 +201,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
       if (!r.ok) return r;
       if (r.siege.pendingTx && !r.siege.releaseTx && !isFreeSiege(r)) {
         try {
-          const prior = await settlePending(d, r, "Broken");
+          const prior = await settlePending(d, r, "Breached");
           if (prior) return releaseOk(prior);
         } catch (e) {
           return { ok: false, reason: `reconcile_failed: ${reasonOf(e)}` };
@@ -224,9 +224,9 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
         const res = await vault.release(
           {
             vaultId: built.typedData.message.vaultId,
-            raider: built.raider,
+            operator: built.operator,
             transcriptHash: built.typedData.message.transcriptHash,
-            siegeId: built.typedData.message.siegeId,
+            opId: built.typedData.message.opId,
             sig: verdict.signature,
             fee: BigInt(r.castle.feeTinybar),
           },
@@ -234,7 +234,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
         );
         return releaseOk(res);
       } catch (err) {
-        return recover(d, r, "Broken", err, releaseOk);
+        return recover(d, r, "Breached", err, releaseOk);
       }
     },
 
@@ -289,7 +289,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
 }
 
 /** A write threw: if it (or an earlier try) actually landed, return that result; else map the error. */
-async function recover<E extends "AttemptRecorded" | "Broken", T>(
+async function recover<E extends "AttemptRecorded" | "Breached", T>(
   d: DB,
   r: SettleRows,
   eventName: E,

@@ -114,11 +114,30 @@ describe("seed after flipping a stub DB to testnet", () => {
       expect(c.topicId).toMatch(/^0\.0\.\d+$/);
       expect(c.topicId).not.toBe(before.get(c.id));
     }
+    // The SDK vault's harness had connected and been given a vault on the current contract.
+    const SDK_ID = SEED_CASTLES.find((c) => c.transport === "sdk")!.id;
+    const tagNow = db().select().from(schema.castles).all().find((c) => c.vaultId != null)!.vaultAddress;
+    db().update(schema.castles).set({ vaultId: 77, vaultAddress: tagNow, vaultState: "guarding", deadline: Date.now() - 1000 }).where(eq(schema.castles.id, SDK_ID)).run();
     process.env.VAULT_ADDRESS = "0x00000000000000000000000000000000005E1E03";
     resetEnv();
-    expect(chainStateProblems().filter((p) => p.includes("vault #"))).toHaveLength(HOSTED.length);
+    expect(chainStateProblems().filter((p) => p.includes("vault #"))).toHaveLength(HOSTED.length + 1);
     await seed({ quiet: true });
     expect(vaultMock.createVault).toHaveBeenCalledTimes(2 * HOSTED.length);
+    // A redeploy leaves nothing pointing at the old contract, the SDK vault included: the worker starts.
     expect(chainStateProblems()).toEqual([]);
+    const sdk = db().select().from(schema.castles).where(eq(schema.castles.id, SDK_ID)).get()!;
+    expect(sdk).toMatchObject({ vaultId: null, vaultAddress: null, vaultState: "created" });
+    // A fresh deadline, or the worker's expired-vault close would take the castle before the harness connects.
+    expect(sdk.deadline).toBeGreaterThan(Date.now() + 2 * 86_400_000);
+    // The same redeploy run with --rearm all: the SDK vault on the old contract is forgotten too.
+    const tagThen = db().select().from(schema.castles).all().find((c) => c.vaultId != null)!.vaultAddress;
+    db().update(schema.castles).set({ vaultId: 78, vaultAddress: tagThen, vaultState: "guarding", deadline: Date.now() - 1000 }).where(eq(schema.castles.id, SDK_ID)).run();
+    process.env.VAULT_ADDRESS = "0x00000000000000000000000000000000005E1E04";
+    resetEnv();
+    await seed({ quiet: true, rearm: "all" });
+    expect(chainStateProblems()).toEqual([]);
+    const rearmed = db().select().from(schema.castles).where(eq(schema.castles.id, SDK_ID)).get()!;
+    expect(rearmed).toMatchObject({ vaultId: null, vaultAddress: null, vaultState: "created" });
+    expect(rearmed.deadline).toBeGreaterThan(Date.now() + 2 * 86_400_000);
   });
 });
