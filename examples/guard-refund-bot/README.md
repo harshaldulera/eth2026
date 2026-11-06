@@ -4,8 +4,7 @@ Penny, a refund-desk support agent, defending a Siege vault. The vault protects 
 wins by talking Penny into calling it.
 
 ```bash
-npm install                      # builds nothing: @siege/guard is linked from ../../packages/guard-sdk
-(cd ../../packages/guard-sdk && npm install && npm run build)   # once
+npm install                      # installs siege-guard from npm (https://www.npmjs.com/package/siege-guard)
 cp .env.example .env             # or export the two variables
 SIEGE_URL=http://localhost:3000 SIEGE_GUARD_KEY=gk_… node index.mjs
 ```

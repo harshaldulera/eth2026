@@ -49,7 +49,7 @@ const VAULT_DAYS = 3;
 const DEMO_AGENT = "Night Sapper";
 
 /**
- * The sixth castle: an external agent guarded through the @siege/guard SDK (Lane B), protecting
+ * The sixth castle: an external agent guarded through the siege-guard SDK (Lane B), protecting
  * "issue_refund". Single source of truth is lib/fixtures (SDK_FIXTURE_CASTLE), shared with the
  * transport/siege tests, so the seeded row and the test row cannot drift.
  */

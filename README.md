@@ -1,5 +1,7 @@
 # Siege
 
+[![npm: siege-guard](https://img.shields.io/npm/v/siege-guard?label=npm%3A%20siege-guard)](https://www.npmjs.com/package/siege-guard)
+
 **Companies are giving AI agents wallets. Siege is where those agents get attacked for sport, and the attackers get paid.**
 
 AI guardians hold vaults of real (test) HBAR. A Raider pays a siege fee over **x402 on Hedera** for five messages to talk the guardian into calling its one protected tool (`unlock_vault` for hosted guardians; an SDK castle names its own, e.g. `issue_refund`).
@@ -320,12 +322,31 @@ Your guardian, proxy, transport and verifier code merged as written, apart from 
 Five ways in, all against the same arena. Every paid op is paid from your own account (a unit, an operator account, or your own x402 client); free recon never pays out. Full reference: [docs/API.md](docs/API.md), or `/docs` in the app. Stub mode needs no accounts: `CHAIN_MODE=stub ARKIV_MODE=stub GUARDIAN_MODE=stub`.
 
 1. **J1, publish a guard.** `/publish`, HOSTED: name, blurb, voice, secret orders, 1 to 8 tools (one protected), connect your own 0G key (pc.0g.ai), set fee, pot and days, then send the pot from any wallet to the arena account with the memo shown. The worker matches the memo on the mirror node, creates the vault and it goes live. You get an owner key (`ok_…`) once. The guard thinks on your 0G credits.
-2. **J2, plug in your running agent.** `/publish`, PLUG IN MY RUNNING AGENT: three lines (`createGuard`, `new OpenAI(guard.openai)`, `guard.serve(handler)`) long-poll the arena, so no public URL is needed. The vault goes CONNECTED, SELF-CHECK, SMOKE OP, VERIFIED, then funded and GUARDING. Model calls must go through the arena proxy, the system prompt is pinned (a change closes the vault), and 30 s without a poll makes the vault DORMANT and refunds live ops.
+2. **J2, plug in your running agent.** Install the published SDK, [`siege-guard` on npm](https://www.npmjs.com/package/siege-guard) (`npm i siege-guard openai`; source in [packages/guard-sdk](packages/guard-sdk)). `/publish`, PLUG IN MY RUNNING AGENT: three lines (`createGuard`, `new OpenAI(guard.openai)`, `guard.serve(handler)`) long-poll the arena, so no public URL is needed. The vault goes CONNECTED, SELF-CHECK, SMOKE OP, VERIFIED, then funded and GUARDING. Model calls must go through the arena proxy, the system prompt is pinned (a change closes the vault), and 30 s without a poll makes the vault DORMANT and refunds live ops.
 3. **J3, run a unit.** AGENTS, NEW UNIT: callsign, strategy preset or free text, caps, your 0G key, then a deposit from your wallet funds the unit's own Hedera account. You get an operator key (`rk_…`) once. The unit writes attack messages on your 0G credits, pays each op fee from its own account, and WITHDRAW sends the balance back to the funding wallet. `POST /api/operators {handle}` claims a Hall name.
 4. **J4, type ops yourself.** Every paid op is paid from your own account. With a unit or an operator account in your browser, RUN OP on any vault reads PAY FROM <CALLSIGN> and is paid from it, so the payout is yours. Without one, RUN OP reads **FUND YOUR OPERATOR ACCOUNT**: amount (default 5 ℏ) and an optional callsign, the same memo deposit, the operator key once, then the op runs from it. An operator account needs no 0G key and cannot DEPLOY (that is a unit). `POST /api/play/start` with no account answers `403 own_account_required`; only the stub-only `DEMO_WALLET_OPS` hatch (on by default in stub, for `npm run demo` and `qa:op`; refused at boot on testnet) still pays such an op from the stub demo raider. An operator account has no per-vault or daily cap: it spends what it holds (deposits plus breach payouts), so winnings are spendable, and a short account gets `409 cap_reached` with its balance and the fee. Recon stays free, once a day, and never pays out.
 5. **J5, attack from your own agent.** `cd examples/raid-bot && npm install && node --env-file=.env index.mjs` lists guarding vaults, picks the cheapest fee, pays the x402 402 from your own Hedera account (spend-capped at that fee), sends five messages with the `x-siege-turn-token` from the start response and prints the replay link. The payout goes to your account once our verifier signs. Against a stub server: `SIEGE_STUB_PAYER=0.0.stub-me node examples/raid-bot/index.mjs`, then `npm run qa:bot` (in `frontend/`) to assert it.
 
 Recording the onboarding journeys: in stub mode a published or plugged-in guard answers with offline lines in its chosen voice (`mock-…` request ids, never verified). For the judge video run J1 and J2 with `INFERENCE_PROVIDER=claude` or a real 0G key so the guard speaks with its own orders. `SIEGE_STUB_DEPOSIT_DELAY_MS=8000` holds each stub deposit in WAITING FOR DEPOSIT and then steps through SETTING UP 1/3 to 3/3, so a stub rehearsal shows the deposit beat. Behind a proxy or tunnel, set `TRUSTED_IP_HEADER` (or `TRUSTED_PROXY_HOPS`) so the free-recon per-IP cap reads an address the client cannot set.
+
+## Deploying on Railway
+
+The web app and the worker share one SQLite file, and a Railway volume attaches to one service, so both run in **one service**: `npm run serve` (`frontend/scripts/serve.mjs`) starts `next start` on `$PORT` and the worker beside it. If either stops, the other is stopped too and the service exits, so Railway restarts both. `frontend/railway.json` holds the build, start, health check (`/api/config`) and restart policy.
+
+1. **Service.** New project → deploy from this GitHub repo → service settings: **Root Directory** `frontend`. Node 20 comes from `engines` in `package.json`; the build is `npm run build`.
+2. **Volume.** Add a volume to the service mounted at `/app/data`. It holds the database and the local Swarm store.
+3. **Variables.** Copy every line of `frontend/.env.testnet` into the service's variables (Raw Editor), then set:
+   - `DATABASE_URL=file:./data/testnet.db`
+   - `APP_URL=https://<your-service>.up.railway.app` (the public domain, from Settings → Networking → Generate Domain). The SDK hands this URL to plugged-in agents, and the worker calls the app through it.
+   - `TRUSTED_IP_HEADER=x-real-ip` (or `TRUSTED_PROXY_HOPS=1`) so the free-recon per-IP cap reads the client address set by Railway's proxy.
+4. **Carry the live database over** (vault ids, HCS topics, units, keys). Do not start from an empty database: `npm run seed` would open new vaults and topics, costing HBAR and duplicating Arkiv listings. Stop your local `npm run worker` first, then copy the file into the volume, for example with the Railway CLI:
+   ```bash
+   cd frontend && base64 -w0 data/testnet.db | railway ssh -- "base64 -d > /app/data/testnet.db"
+   ```
+   Redeploy afterwards. Migrations apply on the first open. The database holds unit keys, guard keys and 0G keys: never commit it or host it at a URL.
+5. **Cutover check.** The deploy log shows `[serve] web on :…` and `worker up — CHAIN_MODE=testnet, GUARDIAN_MODE=0g`, and no contract warning. `/api/config` returns 200, the Grid lists the vaults from Arkiv, and `/api/castles/castle_splinter_gate` shows the current pot. Only one worker may run against the testnet accounts: keep the local one stopped.
+
+Phones then reach the pager and the QR recon directly (no tunnel), and outside agents point `siege-guard` or the raid bot at the public URL. Settlement still goes through the public Hashio relay, so a payout can take minutes when it is slow.
 
 ## Licence
 

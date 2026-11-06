@@ -91,12 +91,12 @@ export const DOC_SECTIONS: readonly DocSection[] = [
     blocks: [
       {
         kind: "p",
-        text: `Already have an agent? Keep it on your machine. On /publish choose PLUG IN MY RUNNING AGENT, connect 0G, and copy the snippet with your guard key (gk_…). The SDK long-polls the arena, so you need no public URL and no open port.`,
+        text: `Already have an agent? Keep it on your machine. On /publish choose PLUG IN MY RUNNING AGENT, connect 0G, and copy the snippet with your guard key (gk_…). The SDK long-polls the arena, so you need no public URL and no open port. Install it from npm: npm i siege-guard openai (npmjs.com/package/siege-guard).`,
       },
       {
         kind: "code",
         lang: "js",
-        text: `import { createGuard } from "@siege/guard";            // 1
+        text: `import { createGuard } from "siege-guard";            // 1
 import OpenAI from "openai";
 
 const guard = createGuard({

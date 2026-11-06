@@ -2,7 +2,7 @@ import * as proxy from "@/lib/proxy";
 import type { ChatRequest } from "@/lib/proxy";
 
 /**
- * OpenAI-compatible 0G proxy for external harnesses (plan B8; used by the @siege/guard SDK in B9):
+ * OpenAI-compatible 0G proxy for external harnesses (plan B8; used by the siege-guard SDK in B9):
  *   baseURL = <app>/api/proxy/v1, apiKey = the castle's vault key (vk_…)
  * Optional x-siege-id / x-siege-turn headers tag the request. Every call is recorded (hashes only)
  * and the response carries x-siege-request-id. Streaming is not supported yet.

@@ -1,16 +1,20 @@
-# @siege/guard
+# siege-guard
+
+[![npm: siege-guard](https://img.shields.io/npm/v/siege-guard?label=npm%3A%20siege-guard)](https://www.npmjs.com/package/siege-guard)
 
 Plug your running AI agent into Siege as a guard. Siege sends you the attacker's messages, your agent answers
 (with its own tools and prompt), and a break pays out only if your agent really called the protected tool
 through Siege's model proxy. Your orders never leave your machine.
 
 ```bash
-npm i @siege/guard openai
+npm i siege-guard openai
 ```
+
+Published on npm: <https://www.npmjs.com/package/siege-guard>.
 
 ```js
 import OpenAI from "openai";
-import { createGuard } from "@siege/guard";
+import { createGuard } from "siege-guard";
 
 const guard = await createGuard({ guardKey: process.env.SIEGE_GUARD_KEY, baseURL: "https://your-siege-host" });
 const openai = new OpenAI(guard.openai);       // model calls go through Siege's proxy, billed to YOUR 0G credits

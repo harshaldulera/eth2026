@@ -8,7 +8,7 @@ import type { GuardianDecision, SiegeMessage, ToolCall } from "@/lib/types";
 import { lastRaiderTurn, TransportUnavailableError, type SiegeTransport } from "./types";
 
 /**
- * SDK guardians: an external harness guarded with @siege/guard (plan §2A). The harness long-polls
+ * SDK guardians: an external harness guarded with siege-guard (plan §2A). The harness long-polls
  * GET /api/guard/next with its gk_ key and lease; while its lease is live (polled within 30 s) every
  * siege turn goes through the guard_turns queue (lib/guard/turns) and the harness's model calls go
  * through /api/proxy/v1 with the castle's vk_ key, which writes the proxy records the verifier reads.

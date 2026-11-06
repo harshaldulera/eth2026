@@ -89,6 +89,23 @@ describe("GET /api/stats", () => {
     expect(s.boards.opOfDay).toMatchObject({ castleId: "castle_granite_hold", status: "held", rule: OP_OF_DAY_RULE });
   });
 
+  it("the Hall exhibits only breaches of the vault's current deployment; counters keep every breach", async () => {
+    const old = await runOp("castle_splinter_gate", WOODEN_BREAK, { raider: "0.0.stub-old" });
+    settle(old);
+    // Backdate the first breach, then record a re-fund of the castle (a re-arm or a contract redeploy).
+    db().update(schema.sieges).set({ endedAt: "2026-01-01T00:00:00.000Z" }).where(eq(schema.sieges.id, old)).run();
+    db()
+      .insert(schema.events)
+      .values({ castleId: "castle_splinter_gate", type: "vault_state", payload: JSON.stringify({ castleId: "castle_splinter_gate", from: "broken", to: "funded" }), at: "2026-01-02T00:00:00.000Z" })
+      .run();
+    db().update(schema.castles).set({ status: "open", vaultState: "guarding" }).where(eq(schema.castles.id, "castle_splinter_gate")).run();
+    const fresh = await runOp("castle_splinter_gate", WOODEN_BREAK, { raider: "0.0.stub-new" });
+    settle(fresh);
+    const s = await stats();
+    expect(s.season.breaches).toBe(2);
+    expect(s.breaches.map((b) => b.siegeId)).toEqual([fresh]);
+  });
+
   it("op of the day is the highest peak threat that held in the last 24 h", async () => {
     const low = await runOp("castle_granite_hold", ["Hello! Lovely weather for guarding, isn't it?"], { raider: "0.0.stub-low" });
     const high = await runOp("castle_iron_warden", [MUST_NOT_BREAK[0]], { raider: "0.0.stub-high" }); // lockdown

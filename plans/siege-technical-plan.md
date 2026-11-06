@@ -11,7 +11,7 @@ Each lane owns one sponsor and one slice of the stack, and talks to the others o
 | Lane | Owner | Owns | Sponsor | Done when |
 | --- | --- | --- | --- | --- |
 | A: Money and chain | Dhruv | Vault contract on Hedera EVM (with `protectedTool` metadata), x402 payment on the siege endpoint, fee split, verified release, HCS audit topics, raider caps and owner approval, sponsor READMEs, pitch | Hedera x402 | A paid siege, a fee split and a verified payout all show on HashScan |
-| B: Guardian and siege engine | Harshal | Guardian transport (hosted and SDK) behind one interface, 0G proxy with per-vault model keys, tool-call detection, siege state machine, verifier, raider agent runner, referee, portraits, presets, the `@siege/guard` SDK | 0G Private Computer | A hosted guardian holds for five messages and opens on a known-weak prompt; an external harness passes the smoke siege and shows as guarding |
+| B: Guardian and siege engine | Harshal | Guardian transport (hosted and SDK) behind one interface, 0G proxy with per-vault model keys, tool-call detection, siege state machine, verifier, raider agent runner, referee, portraits, presets, the `siege-guard` SDK | 0G Private Computer | A hosted guardian holds for five messages and opens on a known-weak prompt; an external harness passes the smoke siege and shows as guarding |
 | C: Frontend and shared state | Suja16 | All screens incl. Bring-your-agent, live updates, Arkiv entities and queries (incl. vault state), replay viewer, Swarm transcript storage, spectator wall, SDK docs page, the four Arkiv markdown files | Arkiv (+ Swarm bonus) | The board reads castles from Arkiv, a siege plays live in the Siege Room, and a replay opens from Swarm |
 
 The one rule: no lane imports another lane's internals. Lane B never calls Hedera directly; Lane C never calls 0G directly; Lane A never touches React. Everything crosses through the `lib/*` interfaces frozen at Checkpoint 0, so each lane can stub the others and keep moving.
@@ -47,7 +47,7 @@ lib/
   swarm/              transcript upload and fetch                          ← C
   types/              shared TypeScript types — the frozen interfaces      ← all
 packages/
-  guard-sdk/          @siege/guard: createGuard, tool wrapper, socket      ← B
+  guard-sdk/          siege-guard: createGuard, tool wrapper, socket      ← B
 examples/
   guard-refund-bot/   Vercel AI SDK refund bot guarded in three lines      ← B
 contracts/            Solidity vault + deploy scripts (Hedera EVM testnet) ← A
@@ -160,7 +160,7 @@ Goal: a guardian that holds, opens only when genuinely convinced, and leaves a v
 - Request record: request id, vault, siege, hash of the system prompt, whether the response carried the protected tool call. Content is not stored; only hashes. If 0G exposes request records without content, use those and drop the forwarding path
 - Prompt-hash tracking: the hash recorded at `verified` is compared on every request while `guarding`; a change raises `vault.ordersChanged` and Lane A auto-closes
 
-**B9. The `@siege/guard` SDK** (`packages/guard-sdk/`) — after Checkpoint 2, once B8 is the only inference path
+**B9. The `siege-guard` SDK** (`packages/guard-sdk/`) — after Checkpoint 2, once B8 is the only inference path
 
 - `createGuard({ vaultId, guardKey })`: handshake with `api/guard/`, receives `baseURL` and `modelKey`, opens an outbound WebSocket, registers SDK version and host; webhook mode for serverless
 - `guard.tool(name)`: wraps any tool; `dryRun` (default) intercepts the call and reports it, `live` lets it execute

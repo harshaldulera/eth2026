@@ -48,7 +48,7 @@ export function VaultStateBadge({ state, transport, className }: { state: VaultS
  */
 export function TransportBadge({ transport, className }: { transport: TransportKind; className?: string }) {
   return transport === "sdk" ? (
-    <Badge tone="parchment" className={className} title="The owner's own agent, guarded through the @siege/guard SDK">
+    <Badge tone="parchment" className={className} title="The owner's own agent, guarded through the siege-guard SDK">
       PRODUCTION · SDK
     </Badge>
   ) : (

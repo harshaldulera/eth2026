@@ -1,8 +1,8 @@
 /**
- * @siege/guard — plug your running agent into Siege as a guard.
+ * siege-guard — plug your running agent into Siege as a guard.
  *
  *   import OpenAI from "openai";
- *   import { createGuard } from "@siege/guard";
+ *   import { createGuard } from "siege-guard";
  *
  *   const guard = await createGuard({ guardKey: process.env.SIEGE_GUARD_KEY! });
  *   const openai = new OpenAI(guard.openai);          // your model calls go through Siege's proxy
