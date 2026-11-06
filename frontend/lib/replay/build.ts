@@ -399,7 +399,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
     castle,
     transcript: { source, ref, recomputedHash, storedHash, matches: transcriptMatches },
     turns,
-    hcs: { topicId: noTopic ? null : topicId, topicUrl: realTopic && topicId ? topicUrl(topicId) : undefined, stub: stubTopic, noTopic, entries, endHash: end?.hash, mirror },
+    hcs: { topicId: noTopic ? null : topicId, topicUrl: realTopic && topicId ? topicUrl(topicId) : undefined, stub: stubTopic, noTopic, entries, endHash: end?.hash, mirror, retrying },
     verdict,
     checks,
     voided,

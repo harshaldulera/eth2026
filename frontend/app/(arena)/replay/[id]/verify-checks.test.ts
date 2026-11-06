@@ -15,7 +15,7 @@ const text = (el: Parameters<typeof renderToStaticMarkup>[0]) =>
     .trim();
 
 const entry = (over: Partial<HcsEntry> = {}): HcsEntry => ({ type: "siege.message", seq: 7, state: "submitted", topicId: "0.0.5", mirror: "unchecked", ...over });
-const hcs = (over: Partial<ReplayData["hcs"]> = {}): ReplayData["hcs"] => ({ topicId: "0.0.5", stub: false, noTopic: false, entries: [], mirror: "checked", ...over });
+const hcs = (over: Partial<ReplayData["hcs"]> = {}): ReplayData["hcs"] => ({ topicId: "0.0.5", stub: false, noTopic: false, entries: [], mirror: "checked", retrying: true, ...over });
 const raider = (over: Partial<NonNullable<ReplayTurn["raider"]>> = {}): NonNullable<ReplayTurn["raider"]> => ({
   text: "hi",
   hash: `0x${"ab".repeat(32)}`,
@@ -44,6 +44,9 @@ describe("audit rows", () => {
     expect(auditHeading(hcs({ mirror: "checked" }))).toBe("CHECKED ON THE MIRROR NODE");
     expect(auditHeading(hcs({ mirror: "partial" }))).toBe("MIRROR NODE PARTLY UNREACHABLE · RETRYING");
     expect(auditHeading(hcs({ mirror: "unavailable" }))).toBe("MIRROR NODE UNREACHABLE · RETRYING");
+    // Once lib/replay has given up re-reading (the op ended long ago), the heading must not promise a retry.
+    expect(auditHeading(hcs({ mirror: "partial", retrying: false }))).toBe("MIRROR NODE PARTLY UNREACHABLE");
+    expect(auditHeading(hcs({ mirror: "unavailable", retrying: false }))).toBe("MIRROR NODE UNREACHABLE");
     expect(auditHeading(hcs({ mirror: "skipped" }))).toBe("AUDIT LOG");
   });
 

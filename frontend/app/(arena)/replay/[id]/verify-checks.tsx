@@ -102,8 +102,10 @@ export function auditHeading(hcs: ReplayData["hcs"]): string {
   if (hcs.noTopic) return "NOT AUDITED · THIS VAULT HAD NO HCS TOPIC";
   if (hcs.stub) return "STUB TOPIC · THIS SERVER ONLY";
   if (hcs.mirror === "checked") return "CHECKED ON THE MIRROR NODE";
-  if (hcs.mirror === "partial") return "MIRROR NODE PARTLY UNREACHABLE · RETRYING";
-  if (hcs.mirror === "unavailable") return "MIRROR NODE UNREACHABLE · RETRYING";
+  // "RETRYING" only while lib/replay really re-reads: it gives up a while after the op ended.
+  const retry = hcs.retrying ? " · RETRYING" : "";
+  if (hcs.mirror === "partial") return `MIRROR NODE PARTLY UNREACHABLE${retry}`;
+  if (hcs.mirror === "unavailable") return `MIRROR NODE UNREACHABLE${retry}`;
   return "AUDIT LOG";
 }
 

@@ -85,6 +85,8 @@ export type ReplayData = {
     endHash?: string;
     /** checked: every read answered; partial: some reads failed; unavailable: none answered; skipped: not testnet. */
     mirror: "checked" | "partial" | "unavailable" | "skipped";
+    /** Failed reads are tried again on the next load: the op is live, or something happened recently. */
+    retrying: boolean;
   };
   verdict: (Verification & { applicable: boolean }) | null;
   checks: ReplayCheck[];

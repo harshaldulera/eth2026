@@ -689,6 +689,7 @@ describe("testnet: the mirror node (mocked)", () => {
     answer = () => new Response("bad gateway", { status: 502 });
     const r = await buildReplay(id);
     expect(r!.hcs.mirror).toBe("unavailable");
+    expect(r!.hcs.retrying).toBe(true);
     expect(check(r, "hcs-end")!.state).toBe("pending");
     expect(check(r, "hcs-end")!.detail).toMatch(/mirror node unreachable, retrying$/);
     expect(r!.checks.some((c) => c.state === "fail")).toBe(false);
@@ -704,6 +705,7 @@ describe("testnet: the mirror node (mocked)", () => {
     answer = () => new Response("bad gateway", { status: 502 });
     const r = await buildReplay(id);
     expect(r!.hcs.mirror).toBe("unavailable");
+    expect(r!.hcs.retrying).toBe(false); // the audit-log heading must not say RETRYING either
     expect(check(r, "hcs-end")!.state).toBe("pending");
     expect(check(r, "hcs-end")!.detail).toMatch(/mirror node unreachable$/);
     expect(r!.checks.some((c) => c.state === "fail")).toBe(false);
