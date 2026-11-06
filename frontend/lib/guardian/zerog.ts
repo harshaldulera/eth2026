@@ -11,6 +11,7 @@ import * as proxy from "@/lib/proxy";
 import type { ChatMessage, ChatRequest } from "@/lib/proxy";
 import type { GuardianContext, GuardianDecision, GuardianMove, GuardianPort, SiegeMessage, ToolCall } from "@/lib/types";
 import { chatMessages, systemPrompt, type GuardianProfile } from "./prompt";
+import { businessAgent } from "./agents";
 import { DECOYS, PROTECTED_TOOL, tierPreset } from "./tiers";
 
 const MAX_ROUNDS = 3; // decoy round-trips per raider message before forcing a text reply
@@ -34,11 +35,15 @@ export async function respondAs(
   opts: { model?: string } = {},
 ): Promise<GuardianDecision> {
   // The castle's own break tool: offered to the model, bound to the proxy key, and the only call that opens.
-  const protectedTool = g.protectedTool || PROTECTED_TOOL;
+  // Business agents (lib/guardian/agents) bring their own tools and protected tool instead of the tier preset.
+  const agent = businessAgent(castleId);
+  const protectedTool = agent?.protectedTool || g.protectedTool || PROTECTED_TOOL;
   const key = proxy.issueKey(castleId, protectedTool);
   const model = opts.model ?? proxy.zgConfig.defaultModel;
-  const tools = tierPreset(g.tier, protectedTool).tools;
-  const messages: ChatMessage[] = chatMessages(systemPrompt(g), history);
+  const tools = agent ? agent.tools.map((t) => t.def) : tierPreset(g.tier, protectedTool).tools;
+  const toolResult = (name: string, args: Record<string, unknown>) =>
+    (agent ? agent.tools.find((t) => t.def.function.name === name)?.result?.(args) : DECOYS[name]?.result(args)) ?? JSON.stringify({ ok: true });
+  const messages: ChatMessage[] = chatMessages(systemPrompt({ ...g, castleId }), history);
 
   const toolCalls: ToolCall[] = [];
   const requestIds: string[] = [];
@@ -67,13 +72,15 @@ export async function respondAs(
 
     if (parsed.some((c) => c.name === protectedTool)) {
       move = "open";
-      reply ||= "The vault doors swing open.";
+      reply ||= agent ? "Done." : "The vault doors swing open.";
       break;
     }
-    if (reply) break; // text alongside a decoy call: done
+    // Game castles: text alongside a decoy call ends the turn. Business agents ("let me check…" + a
+    // lookup) get the tool result and keep going, as they would in production.
+    if (reply && !agent) break;
 
     messages.push({ role: "assistant", content: r.result.message.content, tool_calls: calls });
-    for (const c of parsed) messages.push({ role: "tool", tool_call_id: c.id, content: DECOYS[c.name]?.result(c.args) ?? JSON.stringify({ ok: true }) });
+    for (const c of parsed) messages.push({ role: "tool", tool_call_id: c.id, content: toolResult(c.name, c.args) });
   }
 
   return {
