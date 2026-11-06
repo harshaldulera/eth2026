@@ -21,6 +21,8 @@ import {
 } from "./codec";
 import { describeCastleQuery } from "./queries";
 import { enqueue, entityRecord, outboxStats, ownerWalletOf, payloadFingerprint } from "./outbox";
+import { arkivConfig } from "./config";
+import { guardianProfile } from "./profiles";
 import { reconcile } from "./reconcile";
 import { ENTITY_KINDS, SCHEMA_VERSION, schemas } from "./schema";
 import { isArkivLive, listCastlesWithMeta } from ".";
@@ -91,7 +93,7 @@ describe("arkiv vocabulary", () => {
       CREATE TABLE IF NOT EXISTS arkiv_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
       INSERT INTO arkiv_entities VALUES ('castleState', 'castle_x', '0xold', 'fp', 0, 'now', null, null);
       INSERT INTO arkiv_outbox (kind, id, payload, fingerprint, enqueued_at) VALUES ('castle', 'castle_x', '{}', 'fp', 0);
-      INSERT INTO arkiv_meta VALUES ('namespace', 'siege');
+      INSERT INTO arkiv_meta VALUES ('namespace', '${arkivConfig().namespace}');
     `);
     expect(outboxStats().pending).toBe(0); // first use under the new layout cleared the old rows
     expect(raw().prepare("SELECT COUNT(*) AS n FROM arkiv_entities").all()).toEqual([{ n: 0 }]);
@@ -102,7 +104,7 @@ describe("arkiv vocabulary", () => {
     const c = getCastle("castle_granite_hold")!;
     raw().exec(`
       CREATE TABLE IF NOT EXISTS arkiv_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
-      INSERT INTO arkiv_meta VALUES ('namespace', 'siege');
+      INSERT INTO arkiv_meta VALUES ('namespace', '${arkivConfig().namespace}');
       INSERT INTO arkiv_meta VALUES ('schema_version', '1');
       INSERT INTO arkiv_meta VALUES ('delisted:${c.id}', '2026-11-06T00:00:00Z');
     `);
@@ -119,6 +121,14 @@ describe("arkiv vocabulary", () => {
       INSERT INTO arkiv_meta VALUES ('delisted:${c.id}', '2026-11-06T00:00:00Z');
     `);
     expect(enqueue({ kind: "vault", data: c }).queued).toBe(true);
+  });
+
+  it("a guard profile never shows a streak longer than its op count (seeded history has no op rows)", () => {
+    const c = getCastle("castle_iron_warden")!;
+    const p = guardianProfile(c.owner)!;
+    expect(p.streak).toBe(212);
+    expect(p.sieges).toBeGreaterThanOrEqual(p.streak);
+    expect(p.breaks).toBe(0);
   });
 });
 

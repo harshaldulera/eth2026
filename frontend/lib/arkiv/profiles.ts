@@ -33,7 +33,10 @@ export function guardianProfile(wallet: string): Profile | null {
   return {
     wallet,
     kind: "guardian",
-    sieges: sieges.filter((s) => s.status !== "created").length,
+    // Ops per castle: its paid, non-voided siege rows, but never fewer than its streak. A seeded castle
+    // carries a history (streak 212) with no siege rows behind it, and a streak of N held sieges means
+    // at least N were fought: a profile must never show a streak longer than its op count.
+    sieges: owned.reduce((n, c) => n + Math.max(sieges.filter((s) => s.castleId === c.id && s.status !== "created").length, c.streak), 0),
     breaks: sieges.filter((s) => s.status === "broken").length,
     // The castle's own record (seeded history included): consecutive paid sieges held.
     streak: Math.max(...owned.map((c) => c.streak)),
