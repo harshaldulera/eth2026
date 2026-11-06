@@ -8,23 +8,22 @@ Bonus claimed: **yes**, with the public gateway's stamps (see "Postage" below).
 
 | | Where | Why |
 |---|---|---|
-| The op entity: op id, vault, status, turns, operator, `transcriptHash`, `swarmRef` | Arkiv (`siege` schema, [schema.md](schema.md)) | Small, queryable, expires minutes after the op ends |
+| The op entity (`siege.op`): op id, vault, status, turns, operator, `transcriptHash`, `swarmRef` | Arkiv ([schema.md](schema.md)) | Small, queryable, expires 10 minutes after the op ends |
 | The transcript: every message, turn by turn, sealed | Swarm | Too big for an entity attribute; must outlive our server |
 | Guard orders, payments, approvals, keys | Neither | Secrets and money never go on a public store |
 
-The field is `swarmRef` on the `siege` entity: the bare 64-hex Swarm reference. It is written only after the upload succeeded (`lib/siege/stub.ts` calls `swarm.put` and then `arkiv.writeSiege`; the Arkiv outbox reads the reference from `swarm_refs`).
+The field is `swarmRef` on the `op` entity: the bare 64-hex Swarm reference. It is written only after the upload succeeded (`lib/siege/stub.ts` calls `swarm.put` and then `arkiv.writeSiege`; the Arkiv outbox reads the reference from `swarm_refs`). If the upload lands later, the worker re-queues the op so the entity gets it then.
 
 ## An entity and its transcript
 
-_Filled at the freeze with a live op: the entity key on the Rabdi explorer and the `swarmRef` it carries, openable at `https://api.gateway.ethswarm.org/bytes/<ref>` and `https://bzz.limo/bytes/<ref>`._
+A live op, played on 7 Nov 2026 at 20:34 UTC through the running app (`npm run dev` + `npm run worker`, `ARKIV_MODE=live`, `SWARM_MODE=live`; stub chain and stub guard): op `siege_d5c191e71ccb439e` on Granite Hold, five messages, **held**.
 
-Until then, a transcript uploaded by `npm run swarm:smoke` on 7 Nov 2026, 20:31 UTC (a fixture op, sealed exactly as a real one):
+- Arkiv entity `0xfb0502479273ce511250a1d6eebbc4584cf385f1b336f3f8ffd8bd63f6f0aceb`: https://rabdi.explorer.arkiv.network/entity/0xfb0502479273ce511250a1d6eebbc4584cf385f1b336f3f8ffd8bd63f6f0aceb (tx https://rabdi.explorer.arkiv.network/tx/0xf61bd665d4c8df14b7fc39e8b9ab89125f6b7f28beb3156e1f1dedf26c31b08b)
+- read back from the chain: `arkiv.schema = siege.op`, `opId = siege_d5c191e71ccb439e`, `status = held`, `turn = 5`, `transcriptHash = 0xf75947bfff842a45f869c3b9c90f676a7e1c809b71366d731c7092458d44f82c`, `swarmRef = 1907b1c219d15cb938cd72434a226453db16bd6b5694d7ce581e330ecf5e10a9`
+- the transcript on Swarm: https://api.gateway.ethswarm.org/bytes/1907b1c219d15cb938cd72434a226453db16bd6b5694d7ce581e330ecf5e10a9 (also https://bzz.limo/bytes/1907b1c219d15cb938cd72434a226453db16bd6b5694d7ce581e330ecf5e10a9)
+- the app's replay of this op (`GET /api/replay/siege_d5c191e71ccb439e`): source **swarm**, "Transcript read from Swarm" **pass**, "Transcript hash recomputed here matches the op's" **pass**
 
-- reference `186fea9a04704df0acfdedf7280b24109be00d5a9208aa343d94e20b53d3f415`
-- https://api.gateway.ethswarm.org/bytes/186fea9a04704df0acfdedf7280b24109be00d5a9208aa343d94e20b53d3f415
-- https://bzz.limo/bytes/186fea9a04704df0acfdedf7280b24109be00d5a9208aa343d94e20b53d3f415
-
-What you see at either link is the sealed envelope, not the text (the next section). It stays up as long as the gateway's stamp lasts, about a day; the worker re-uploads real transcripts twice a day, the smoke one is left to lapse.
+What you see at the Swarm links is the sealed envelope, not the text (the next section). Op entities are short-lived by design (10 minutes after the op ends), so the entity link above is a record of what was on chain, not something that stays openable. For judging, play an op and open its entity within those ten minutes. The transcript stays on Swarm as long as the worker keeps it alive (re-uploads twice a day for a week).
 
 ## What is uploaded
 
