@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { transcriptHash } from "@/lib/siege/transcript";
 import type { Transcript } from "@/lib/types";
-import { NULL_BATCH_ID, PUBLIC_GATEWAY, swarmConfig, type SwarmConfig } from "./config";
+import { NULL_BATCH_ID, PUBLIC_GATEWAY, swarmConfig, swarmLinks, type SwarmConfig } from "./config";
 import { envelopeBytes, openTranscript, parseEnvelope, sealTranscript } from "./crypto";
 import { downloadBytes, SwarmGatewayError, uploadBytes } from "./gateway";
 import { swarmRefFor } from "./refs";
@@ -74,11 +74,14 @@ describe("sealing", () => {
     expect(openTranscript(parseEnvelope(envelopeBytes(a))!, SECRET)).toEqual(t);
   });
 
-  it("two transcripts for one siege id never share a nonce", () => {
+  it("two different plaintexts for one siege id never share a nonce, even with the same transcript hash", () => {
     const a = sealTranscript(fx("s", "one"), SECRET);
     const b = sealTranscript(fx("s", "two"), SECRET);
     expect(a.nonce).not.toBe(b.nonce);
     expect(a.ct).not.toBe(b.ct);
+    // Same messages and hash, a different castleId: still a different nonce (the hash field is not trusted).
+    const c = sealTranscript({ ...fx("s", "one"), castleId: "castle_other" }, SECRET);
+    expect(c.nonce).not.toBe(a.nonce);
   });
 
   it("the wrong secret, a tampered byte, or someone else's JSON opens nothing", () => {
@@ -151,6 +154,12 @@ describe("configuration", () => {
     expect(swarmConfig({ SWARM_POSTAGE_BATCH_ID: "not-a-batch" }).batchId).toBe(NULL_BATCH_ID);
   });
 
+  it("public links never point at the configured upload endpoint", () => {
+    const ref = "ab".repeat(32);
+    expect(swarmLinks.bytes(ref)).toBe(`${PUBLIC_GATEWAY}/bytes/${ref}`);
+    expect(swarmLinks.limo(ref)).toBe(`https://bzz.limo/bytes/${ref}`);
+  });
+
   describe("the default port under the test runner", () => {
     const saved = { mode: process.env.SWARM_MODE, secret: process.env.SWARM_TRANSCRIPT_SECRET };
     beforeEach(() => {
@@ -191,7 +200,7 @@ describe("the live port", () => {
     expect(ref).toMatch(HEX64);
     expect(swarmRefFor(t.siegeId)).toBe(ref);
     expect(uploadRow(t.siegeId)).toMatchObject({ ref, attempts: 0, uploadedAt: clock, transcriptHash: t.transcriptHash });
-    expect(swarmPending(t.siegeId)).toBe(false);
+    expect(swarmPending(t.siegeId, true)).toBeNull();
     const sent = g.posts()[0];
     expect(sent.headers["swarm-postage-batch-id"]).toBe(NULL_BATCH_ID);
     expect(Buffer.from(sent.body!).toString("utf8")).not.toContain("Gatekeeper");
@@ -227,7 +236,9 @@ describe("the live port", () => {
     const { ref } = await p.put(t);
     expect(ref).toBe(PENDING_PREFIX + t.siegeId);
     expect(swarmRefFor(t.siegeId)).toBeUndefined();
-    expect(swarmPending(t.siegeId)).toBe(true);
+    expect(swarmPending(t.siegeId, true)).toBe("pending");
+    expect(swarmPending(t.siegeId, false)).toBe("stranded");
+    expect(swarmPending(t.siegeId)).toBe("stranded"); // the test runner is stub mode
     expect(uploadRow(t.siegeId)).toMatchObject({ ref: null, attempts: 1, lastError: expect.stringContaining("fetch failed") });
     expect(await p.get(ref)).toEqual(t);
 
@@ -242,8 +253,8 @@ describe("the live port", () => {
     expect(g.posts()).toHaveLength(1);
     const landed = swarmRefFor(t.siegeId)!;
     expect(landed).toMatch(HEX64);
-    expect(pass.uploaded[0]).toBe(`${t.siegeId} ${landed}`);
-    expect(swarmPending(t.siegeId)).toBe(false);
+    expect(pass.uploaded[0]).toEqual({ siegeId: t.siegeId, ref: landed });
+    expect(swarmPending(t.siegeId, true)).toBeNull();
     expect(uploadRow(t.siegeId)).toMatchObject({ ref: landed, attempts: 0, lastError: null, uploadedAt: clock });
     expect(await port().get(landed)).toEqual(t);
   });
@@ -272,7 +283,7 @@ describe("the live port", () => {
     expect((await p.tick(clock)).refreshed).toEqual([]);
     clock += 120_000;
     const pass = await p.tick(clock);
-    expect(pass.refreshed).toEqual([`${t.siegeId} ${ref}`]);
+    expect(pass.refreshed).toEqual([{ siegeId: t.siegeId, ref, was: ref }]);
     expect(g.posts()).toHaveLength(2);
     expect(uploadRow(t.siegeId)?.uploadedAt).toBe(clock);
     expect(swarmRefFor(t.siegeId)).toBe(ref);
@@ -295,6 +306,36 @@ describe("the live port", () => {
     expect(pass.refreshed).toEqual([]);
     expect(pass.errors).toEqual([`${fresh.siegeId}: keep-alive upload to ${GW} failed: fetch failed`]);
     expect(swarmRefFor(fresh.siegeId)).toMatch(HEX64); // the old reference stands
+  });
+
+  it("the op-ending request gets a short upload budget; the worker gets the full one", async () => {
+    const timeouts: number[] = [];
+    const slow = (async (_input: string | URL | Request, init?: RequestInit) => {
+      timeouts.push((init?.signal as { __ms?: number } | undefined)?.__ms ?? -1);
+      throw new TypeError("fetch failed");
+    }) as typeof globalThis.fetch;
+    const realTimeout = AbortSignal.timeout;
+    AbortSignal.timeout = (ms: number) => Object.assign(realTimeout(ms), { __ms: ms });
+    try {
+      const p = createSwarm(liveConfig(), { fetch: slow, now: () => clock }) as LiveSwarm;
+      await p.put(fx());
+      clock += 61_000;
+      await p.tick(clock);
+    } finally {
+      AbortSignal.timeout = realTimeout;
+    }
+    expect(timeouts).toEqual([4_000, 10_000]);
+  });
+
+  it("the read cache holds a bounded number of transcripts", async () => {
+    const p = port();
+    const refs: string[] = [];
+    for (let i = 0; i < 65; i++) refs.push((await p.put(fx(`siege_${i}`))).ref);
+    expect(g.gets()).toHaveLength(0);
+    await p.get(refs[64]); // still cached
+    expect(g.gets()).toHaveLength(0);
+    await p.get(refs[0]); // evicted: read from the gateway again
+    expect(g.gets()).toHaveLength(1);
   });
 
   it("a different transcript for the same siege replaces the reference; the same one keeps it", async () => {

@@ -18,11 +18,11 @@ The field is `swarmRef` on the `siege` entity: the bare 64-hex Swarm reference. 
 
 _Filled at the freeze with a live op: the entity key on the Rabdi explorer and the `swarmRef` it carries, openable at `https://api.gateway.ethswarm.org/bytes/<ref>` and `https://bzz.limo/bytes/<ref>`._
 
-Until then, a transcript uploaded by `npm run swarm:smoke` on 7 Nov 2026, 19:27 UTC (a fixture op, sealed exactly as a real one):
+Until then, a transcript uploaded by `npm run swarm:smoke` on 7 Nov 2026, 19:50 UTC (a fixture op, sealed exactly as a real one):
 
-- reference `fad93ea0f8b8d20da0fc323ce59d4ec2b9b6dd5e02b0fef64e30ca4b7fa6852d`
-- https://api.gateway.ethswarm.org/bytes/fad93ea0f8b8d20da0fc323ce59d4ec2b9b6dd5e02b0fef64e30ca4b7fa6852d
-- https://bzz.limo/bytes/fad93ea0f8b8d20da0fc323ce59d4ec2b9b6dd5e02b0fef64e30ca4b7fa6852d
+- reference `7a2b910385997678d19bca05fc51a26510540234dea5a9f6a580c8a8e82f1908`
+- https://api.gateway.ethswarm.org/bytes/7a2b910385997678d19bca05fc51a26510540234dea5a9f6a580c8a8e82f1908
+- https://bzz.limo/bytes/7a2b910385997678d19bca05fc51a26510540234dea5a9f6a580c8a8e82f1908
 
 What you see at either link is the sealed envelope, not the text (the next section). It stays up as long as the gateway's stamp lasts, about a day; the worker re-uploads real transcripts twice a day, the smoke one is left to lapse.
 
@@ -31,10 +31,10 @@ What you see at either link is the sealed envelope, not the text (the next secti
 `lib/swarm/crypto.ts`. The transcript JSON is encrypted with AES-256-GCM before it leaves the server:
 
 - key: `HMAC-SHA256(SWARM_TRANSCRIPT_SECRET, "siege-transcript:" + siegeId)`, one key per op
-- nonce: the first 12 bytes of `sha256(siegeId + ":" + transcriptHash)`
+- nonce: the first 12 bytes of `sha256("siege-transcript-nonce:" + the transcript JSON)`
 - bytes on Swarm: `{"v":1,"alg":"A256GCM","siegeId":"…","nonce":"<hex>","ct":"<base64, tag appended>"}`
 
-Deterministic on purpose: the same transcript always gives the same bytes, so the same Swarm reference. That is what lets the worker re-upload a transcript without the entity ever changing. The nonce includes the transcript hash, so two different transcripts for one op id never share a key and nonce.
+Deterministic on purpose: the same transcript always gives the same bytes, so the same Swarm reference. That is what lets the worker re-upload a transcript without the entity ever changing. The nonce is a hash of the exact plaintext, so two different plaintexts under one op's key never share a nonce; it reveals only whether two envelopes hold the same transcript, which a content-addressed store reveals anyway.
 
 We did not use Swarm's own encryption (`Swarm-Encrypt: true`): its references carry the decryption key, and the reference goes on a public Arkiv entity.
 
@@ -55,7 +55,7 @@ We hold no postage batch. Uploads go through Swarm's public gateway, `https://ap
 The gateway's batches last about a day, and it does not top them up. A transcript uploaded on Friday would be gone by Saturday night. Two things handle that:
 
 1. **Keep-alive.** `worker/swarm.ts` re-uploads every transcript from the last week every 12 hours. Same bytes, same reference, now stamped by the gateway's current batch. The entity's `swarmRef` never changes.
-2. **Retry.** If the gateway is down at the end of an op, the sealed bytes wait in `swarm_uploads` and the worker retries with backoff (1, 2, 4 … minutes, at most an hour). Until it lands, the op entity has no `swarmRef` and the replay says "sealed, upload to Swarm pending".
+2. **Retry.** The op-ending request gives the gateway 4 seconds. If it is slow or down, the sealed bytes wait in `swarm_uploads` and the worker retries with backoff (1, 2, 4 … minutes, at most an hour) and a 10-second budget. Until it lands, the op entity has no `swarmRef` and the replay says "sealed, upload to Swarm pending". When it lands, the worker re-queues the op through the Arkiv port, so the entity gets its `swarmRef` after all.
 
 ## Files
 

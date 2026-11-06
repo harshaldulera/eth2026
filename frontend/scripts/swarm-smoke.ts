@@ -36,7 +36,7 @@ function fixture(siegeId: string): Transcript {
 
 async function read(ref: string, secret: string, gatewayUrl: string, label: string): Promise<Transcript> {
   const bytes = await downloadBytes(ref, { gatewayUrl });
-  if (!bytes) throw new Error(`${label}: nothing at ${swarmLinks.bytes(ref, gatewayUrl)}`);
+  if (!bytes) throw new Error(`${label}: nothing at ${gatewayUrl}/bytes/${ref}`);
   const env = parseEnvelope(bytes);
   if (!env) throw new Error(`${label}: the bytes are not a sealed transcript`);
   const t = openTranscript(env, secret);
@@ -64,7 +64,7 @@ async function main() {
     const t0 = Date.now();
     ref = await uploadBytes(body, { gatewayUrl: c.gatewayUrl, batchId: c.batchId });
     log(`reference ${ref} (${Date.now() - t0} ms)`);
-    log(`open     ${swarmLinks.bytes(ref, c.gatewayUrl)}`);
+    log(`open     ${swarmLinks.bytes(ref)}`);
     log(`also     ${swarmLinks.limo(ref)}`);
     const again = await uploadBytes(body, { gatewayUrl: c.gatewayUrl, batchId: c.batchId });
     log(`re-upload of the same bytes: ${again === ref ? "same reference (keep-alive works)" : `DIFFERENT reference ${again}`}`);

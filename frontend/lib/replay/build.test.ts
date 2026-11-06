@@ -25,7 +25,7 @@ import { createInProcessFetch } from "@/worker/dispatch";
 import { setFetch } from "@/worker/fetch";
 import { settleTick } from "@/worker/settle";
 import { setWorkerQuiet } from "@/worker/log";
-import { buildReplay } from "./build";
+import { buildReplay, transcriptCheck } from "./build";
 import type { ReplayData } from "./types";
 import type { ReplayWithVerify } from "@/lib/api/client";
 
@@ -274,13 +274,20 @@ describe("tampering and odd shapes", () => {
     expect(check(r, "transcript")?.href).toBeUndefined();
   });
 
-  it("a sealed transcript whose upload has not landed is a pending transcript check, not N/A", async () => {
+  it("a sealed transcript whose upload never landed: pending while live retries it, stranded once the mode is stub", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     db().run("DELETE FROM swarm_refs");
     rememberUpload(id, new Uint8Array([1, 2, 3]), "0xabc");
+    // The test runner is always stub mode: nothing will retry this row, and the page must not promise it.
     const r = await buildReplay(id);
     expect(r!.transcript.source).toBe("database");
-    expect(check(r, "transcript")).toMatchObject({ state: "pending", detail: "sealed, upload to Swarm pending (the worker retries it)" });
+    expect(check(r, "transcript")).toMatchObject({ state: "na", detail: "sealed for Swarm but never uploaded, and SWARM_MODE is stub now (nothing retries it)" });
+    // Live mode, same row: the worker is on it.
+    expect(transcriptCheck({ source: "database", ended: true, sealed: "pending" })).toMatchObject({ state: "pending", detail: "sealed, upload to Swarm pending (the worker retries it)" });
+    expect(transcriptCheck({ source: "database", ended: false, sealed: null })).toMatchObject({ state: "pending", detail: "uploaded when the op ends" });
+    expect(transcriptCheck({ source: "database", ended: true, sealed: null })).toMatchObject({ state: "na", detail: "no Swarm reference recorded for this op" });
+    const ref = "ab".repeat(32);
+    expect(transcriptCheck({ ref, source: "swarm", ended: true, sealed: null, refUrl: `https://x/${ref}` })).toMatchObject({ state: "pass", label: "Transcript read from Swarm", href: `https://x/${ref}` });
   });
 
   it("held siege: five turns, no tool call, no verifier", async () => {

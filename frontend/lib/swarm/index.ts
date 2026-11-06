@@ -11,16 +11,16 @@
  * The replay (lib/replay/build.ts) reads through `swarm.get` and says where the transcript came from.
  */
 import type { SwarmPort } from "@/lib/types";
-import { swarmConfig, type SwarmConfig } from "./config";
+import { isSwarmLive, swarmConfig, type SwarmConfig } from "./config";
 import { createLiveSwarm, type LiveDeps, type LiveSwarm } from "./live";
 import { uploadRow, uploadStats } from "./store";
 import { swarmStub } from "./stub";
 
 export { isSwarmLive, swarmConfig, swarmLinks, NULL_BATCH_ID, PUBLIC_GATEWAY } from "./config";
 export { REFERENCE_RE } from "./gateway";
-export { KEEP_ALIVE_MS, PENDING_PREFIX } from "./live";
+export { INLINE_TIMEOUT_MS, KEEP_ALIVE_MS, PENDING_PREFIX } from "./live";
 export { STUB_PREFIX } from "./stub";
-export type { UploadPass } from "./live";
+export type { Landed, UploadPass } from "./live";
 
 /** A port for a given configuration. Tests pass a fake fetch; the app uses `swarm` below. */
 export function createSwarm(config: SwarmConfig = swarmConfig(), deps: LiveDeps = {}): SwarmPort | LiveSwarm {
@@ -44,10 +44,16 @@ export const swarm: SwarmPort = {
   get: (ref) => (liveSwarm() ?? swarmStub).get(ref),
 };
 
-/** True while a siege's transcript is sealed locally but its upload has not landed (live mode writes these rows). */
-export function swarmPending(siegeId: string): boolean {
+/**
+ * A siege whose transcript was sealed but never landed on Swarm: "pending" while the worker is
+ * retrying it (live mode), "stranded" if the mode has since gone back to stub (nothing retries),
+ * null otherwise. Live mode writes these rows; stub mode never does.
+ */
+export type SealedState = "pending" | "stranded" | null;
+export function swarmPending(siegeId: string, live = isSwarmLive()): SealedState {
   const row = uploadRow(siegeId);
-  return Boolean(row && !row.ref);
+  if (!row || row.ref) return null;
+  return live ? "pending" : "stranded";
 }
 
 /** The startup line and the docs: what this process will do with transcripts. */

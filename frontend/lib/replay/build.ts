@@ -17,7 +17,7 @@ import { verifier } from "@/lib/siege";
 import { getSiege, messageRows } from "@/lib/siege/read";
 import { reasonText, refundText, verifyText } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
-import { REFERENCE_RE, swarm, swarmLinks, swarmPending } from "@/lib/swarm";
+import { REFERENCE_RE, swarm, swarmLinks, swarmPending, type SealedState } from "@/lib/swarm";
 import { swarmRefFor } from "@/lib/swarm/refs";
 import type { SiegeMessage } from "@/lib/types";
 import type { HcsEntry, ReplayCheck, ReplayData, ReplayTurn } from "./types";
@@ -28,6 +28,26 @@ const outcomeWord = (s?: string) => (s ? (OUTCOME_WORD[s] ?? s.replace(/_/g, " "
 
 const ENDED = new Set(["held", "broken", "banished"]);
 const short = (h?: string | null) => (h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "");
+
+/** The "transcript on Swarm" line of the checklist. Pure, so every wording is testable without a gateway. */
+export function transcriptCheck(i: { ref?: string; source: ReplayData["transcript"]["source"]; ended: boolean; sealed: SealedState; refUrl?: string }): ReplayCheck {
+  const { ref, source, ended, sealed, refUrl } = i;
+  return {
+    key: "transcript",
+    label: source === "swarm" ? "Transcript read from Swarm" : source === "swarm-stub" ? "Transcript read from the Swarm store (local stand-in)" : "Transcript read from the arena database",
+    state: ref ? (source === "database" ? "fail" : "pass") : sealed === "pending" || !ended ? "pending" : "na",
+    detail: ref
+      ? `reference ${short(ref.replace(/^swarm-stub:/, ""))}${source === "database" ? ", but the transcript could not be read from it" : ""}`
+      : sealed === "pending"
+        ? "sealed, upload to Swarm pending (the worker retries it)"
+        : sealed === "stranded"
+          ? "sealed for Swarm but never uploaded, and SWARM_MODE is stub now (nothing retries it)"
+          : ended
+            ? "no Swarm reference recorded for this op"
+            : "uploaded when the op ends",
+    ...(refUrl && source === "swarm" ? { href: refUrl } : {}),
+  };
+}
 /** Replies with no model call behind them: the stub guardian, and the SDK transport's test harness. */
 const STUB_REPLY = /^(0g|sdk)-stub-/;
 /** A voided siege's refund normally lands within minutes; after this the page stops waiting for it. */
@@ -114,8 +134,8 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   }
   /** A live reference is openable on the gateway (the bytes are the sealed envelope, not the text). */
   const refUrl = ref && REFERENCE_RE.test(ref) ? swarmLinks.bytes(ref) : undefined;
-  /** Sealed at siege end, but the upload has not landed yet: the worker is retrying it. */
-  const uploadPending = !ref && swarmPending(siegeId);
+  /** Sealed at siege end but never landed: the worker is retrying it, or nothing is (stub mode now). */
+  const sealed = ref ? null : swarmPending(siegeId);
   const recomputedHash = transcriptHash(messages);
   const storedHash = siege.transcriptHash;
   const transcriptMatches = storedHash ? storedHash.toLowerCase() === recomputedHash.toLowerCase() : null;
@@ -245,19 +265,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
 
   // ── The checklist ──────────────────────────────────────────────────────────────────────────────
   const checks: ReplayCheck[] = [];
-  checks.push({
-    key: "transcript",
-    label: source === "swarm" ? "Transcript read from Swarm" : source === "swarm-stub" ? "Transcript read from the Swarm store (local stand-in)" : "Transcript read from the arena database",
-    state: ref ? (source === "database" ? "fail" : "pass") : uploadPending || !ended ? "pending" : "na",
-    detail: ref
-      ? `reference ${short(ref.replace(/^swarm-stub:/, ""))}${source === "database" ? ", but the transcript could not be read from it" : ""}`
-      : uploadPending
-        ? "sealed, upload to Swarm pending (the worker retries it)"
-        : ended
-          ? "no Swarm reference recorded for this op"
-          : "uploaded when the op ends",
-    ...(refUrl && source === "swarm" ? { href: refUrl } : {}),
-  });
+  checks.push(transcriptCheck({ ref, source, ended, sealed, refUrl }));
   checks.push({
     key: "hash",
     label: "Transcript hash recomputed here matches the op's",

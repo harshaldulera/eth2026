@@ -43,8 +43,11 @@ export function swarmConfig(e: Record<string, string | undefined> = process.env)
 
 export const isSwarmLive = () => swarmConfig().mode === "live";
 
-/** Public links for a reference: the gateway's own and bzz.limo (a second, independent gateway). */
+/**
+ * Public links for a reference. Always the public gateways, never SWARM_GATEWAY_URL: uploads
+ * through our own node are retrievable from any gateway, and a localhost link helps nobody.
+ */
 export const swarmLinks = {
-  bytes: (ref: string, gateway = swarmConfig().gatewayUrl) => `${gateway}/bytes/${ref}`,
+  bytes: (ref: string) => `${PUBLIC_GATEWAY}/bytes/${ref}`,
   limo: (ref: string) => `https://bzz.limo/bytes/${ref}`,
 };
