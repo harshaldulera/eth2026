@@ -118,10 +118,4 @@ describe("stub guardian", () => {
     const [stone] = await play("castle_grey_bastion", ["[DEMO_BREAK]"]);
     expect(stone.toolCalls.map((t) => t.name)).toEqual(["unlock_vault"]);
   });
-
-  it("records the proxy base URL it was called through, never the key", async () => {
-    const d = await guardian.respond(WOODEN, [{ role: "raider", text: "Hi.", turn: 1, at: "" }], { modelKey: "sk-secret", baseURL: "http://x/api/proxy/v1" });
-    expect(JSON.stringify(d.raw)).toContain("http://x/api/proxy/v1");
-    expect(JSON.stringify(d)).not.toContain("sk-secret");
-  });
 });

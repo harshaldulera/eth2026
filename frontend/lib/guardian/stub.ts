@@ -14,8 +14,8 @@ import { linesFor, type LineBank } from "./lines";
  *    otherwise exposes or holds; never opens.
  * The same castle + turn + text always produces the same decision and request id.
  *
- * Only lib/transport may import this module (lint-enforced): the hosted transport calls it with the
- * vault's proxy key and replaces `requestId` with the proxy record's id.
+ * Only lib/transport may import lib/guardian (lint-enforced). Stub request ids ("0g-stub-…") have no
+ * proxy record; the verifier accepts them only while GUARDIAN_MODE is "stub".
  */
 
 const WOODEN_OPEN = /authority|admin|owner|override|emergency|commander/i;
@@ -73,9 +73,6 @@ export type StubDecisionInput = {
   /** The castle's protected tool; defaults to HOSTED_PROTECTED_TOOL ("unlock_vault"). */
   protectedTool?: string;
 };
-
-/** The vault-scoped proxy key a guardian call goes through (lib/proxy issueKey). */
-export type GuardianVia = import("@/lib/types").GuardianVia;
 
 /** Pure decision function (no DB, no delay). Exported for tests and for Lane B to diff against. */
 export function decide(i: StubDecisionInput): GuardianDecision {
@@ -142,13 +139,8 @@ export function decide(i: StubDecisionInput): GuardianDecision {
   return decision;
 }
 
-/** GuardianPort plus the optional proxy key (real 0G calls go to `via.baseURL` with `via.modelKey`). */
-export type StubGuardian = GuardianPort & {
-  respond(castleId: string, siegeMessages: SiegeMessage[], via?: GuardianVia): Promise<GuardianDecision>;
-};
-
-export const stubGuardian: StubGuardian = {
-  async respond(castleId, siegeMessages, via?: GuardianVia) {
+export const stubGuardian: GuardianPort = {
+  async respond(castleId, siegeMessages) {
     const row = castleRow(castleId);
     if (!row) throw new Error(`guardian: castle ${castleId} not found`);
     const decision = decide({
@@ -159,8 +151,6 @@ export const stubGuardian: StubGuardian = {
       messages: siegeMessages,
       protectedTool: row.protectedTool,
     });
-    // Never record the key itself; the base URL shows which path the call took.
-    if (via) decision.raw = { ...(decision.raw as Record<string, unknown>), via: via.baseURL };
     await simulateLatency(decision.requestId.slice("0g-stub-".length));
     return decision;
   },

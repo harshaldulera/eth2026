@@ -269,16 +269,30 @@ export const agentRuns = sqliteTable(
   (t) => [index("agent_runs_agent_idx").on(t.agentId), index("agent_runs_status_idx").on(t.status)],
 );
 
-/** Lane B stub storage for the 0G proxy's request records (hashes only, never content). */
+/**
+ * Lane B: one row per request through the vault-scoped 0G proxy (lib/proxy). Hashes only — never
+ * prompt or reply content. The verifier (run by the worker) reads these to confirm a break came from
+ * a real 0G response on this castle's key, inside this siege, with the protected tool call.
+ */
 export const proxyRecords = sqliteTable(
   "proxy_records",
   {
+    /** 0G's own request id (x_0g_trace.request_id) — also what the guardian reports as requestId. */
     requestId: text("request_id").primaryKey(),
-    vaultId: text("vault_id").notNull(),
+    castleId: text("castle_id").notNull(),
     siegeId: text("siege_id"),
     turn: integer("turn"),
+    model: text("model").notNull(),
+    /** sha256 of the system prompt that was sent. */
     promptHash: text("prompt_hash").notNull(),
-    protectedToolCalled: integer("protected_tool_called", { mode: "boolean" }).notNull().default(false),
+    /** sha256 of 0G's canonical response body. */
+    responseHash: text("response_hash").notNull(),
+    protectedToolCalled: integer("protected_tool_called", { mode: "boolean" }).notNull(),
+    /** JSON array of tool names the model called. */
+    toolCalls: text("tool_calls").notNull(),
+    costUsdMicro: text("cost_usd_micro"),
+    /** Offline mock response (no 0G call happened). Never accepted by the verifier unless allowed. */
+    mock: integer("mock", { mode: "boolean" }).notNull().default(false),
     at: text("at").notNull(),
   },
   (t) => [index("proxy_records_siege_idx").on(t.siegeId)],

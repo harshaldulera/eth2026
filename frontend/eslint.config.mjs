@@ -14,8 +14,13 @@ const VERIFIER_MSG = "The verifier key is worker-only (worker/signer.ts). Never 
  * to GuardianTransport. Only lib/transport/** may import lib/guardian; app/, components/, every other
  * lib/ directory and worker/ go through @/lib/transport — static imports, re-exports and dynamic
  * import() alike. (Test files are exempt: they may poke stubs.)
- * Rule two: lib/guardian/** gets its model key only as the `via` argument (the vault-scoped proxy key):
- * it may not read any *KEY / *SECRET / *TOKEN env var (only lib/proxy holds the team key).
+ * Exception: scripts/guardian-fixtures.ts (Lane B's offline fixture runner) calls the 0G guardian
+ * directly with explicit profiles (respondAs), not castles, so it never plays a siege.
+ * Rule two: lib/guardian/** reaches the model only through lib/proxy with the castle's vault-scoped
+ * key (proxy.issueKey); it may not read any *KEY / *SECRET / *TOKEN env var (only lib/proxy holds the
+ * team key and its config).
+ * Raw 0G client (lib/proxy/zg, lib/proxy/mock): only lib/proxy may call it, so every guardian request
+ * goes through the vault-scoped key and leaves a proxy record.
  */
 const GUARDIAN_MSG = "Guardian replies go through @/lib/transport (GuardianTransport). Only lib/transport/** may import lib/guardian.";
 const GUARDIAN_PATTERNS = [
@@ -28,7 +33,14 @@ const GUARDIAN_DYNAMIC_IMPORT = {
   selector: "ImportExpression[source.value=/(^|\\/)(lib\\/)?guardian(\\/|$)/]",
   message: GUARDIAN_MSG,
 };
-const GUARDIAN_KEY_MSG = "lib/guardian must use the vault-scoped proxy key passed as `via` (GuardianPort); never read a key/secret env var (only lib/proxy may).";
+const GUARDIAN_KEY_MSG = "lib/guardian reaches the model only through lib/proxy (vault-scoped key from proxy.issueKey); never read a key/secret env var (only lib/proxy may).";
+const RAW_ZG_PATTERNS = [
+  {
+    group: ["@/lib/proxy/zg", "@/lib/proxy/mock", "**/proxy/zg", "**/proxy/mock"],
+    message: "Only lib/proxy may call the raw 0G client: go through lib/proxy (vault-scoped key) so every request leaves a proxy record.",
+  },
+];
+const GUARDIAN_FIXTURE_RUNNER = "scripts/guardian-fixtures.ts";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -59,9 +71,9 @@ const eslintConfig = defineConfig([
   },
   {
     files: ["lib/**/*.{ts,tsx}", "worker/**/*.{ts,tsx}", "scripts/**/*.{ts,tsx}"],
-    ignores: ["**/*.test.{ts,tsx}", "lib/transport/**", "lib/guardian/**"],
+    ignores: ["**/*.test.{ts,tsx}", "lib/transport/**", "lib/guardian/**", "lib/proxy/**", GUARDIAN_FIXTURE_RUNNER],
     rules: {
-      "no-restricted-imports": ["error", { patterns: GUARDIAN_PATTERNS }],
+      "no-restricted-imports": ["error", { patterns: [...GUARDIAN_PATTERNS, ...RAW_ZG_PATTERNS] }],
       "no-restricted-syntax": ["error", GUARDIAN_DYNAMIC_IMPORT],
     },
   },
@@ -75,6 +87,34 @@ const eslintConfig = defineConfig([
         { selector: "MemberExpression[object.callee.name='env'][property.name=/KEY|SECRET|TOKEN/]", message: GUARDIAN_KEY_MSG },
         { selector: "ImportDeclaration[source.value=/lib\\/config\\/env$/]", message: GUARDIAN_KEY_MSG },
       ],
+    },
+  },
+  // Lane B boundaries (tech plan). Flat config replaces a rule's options per file rather than merging
+  // them, so each block below carries every pattern its files need (Lane A's guardian seam included).
+  // lib/siege reaches guardians only through lib/transport, with its own message.
+  {
+    files: ["lib/siege/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { patterns: [{ ...GUARDIAN_PATTERNS[0], message: "lib/siege must call guardians through lib/transport (GuardianTransport)." }, ...RAW_ZG_PATTERNS] },
+      ],
+    },
+  },
+  // lib/guardian, lib/transport and the fixture runner may touch the guardian, never the raw 0G client.
+  {
+    files: ["lib/guardian/**/*.{ts,tsx}", "lib/transport/**/*.{ts,tsx}", GUARDIAN_FIXTURE_RUNNER],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: RAW_ZG_PATTERNS }],
+    },
+  },
+  // Tests in worker/ and scripts/ are exempt from the guardian seam (block above) but, as on lane-b,
+  // still may not call the raw 0G client.
+  {
+    files: ["worker/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: RAW_ZG_PATTERNS }],
     },
   },
   // Override default ignores of eslint-config-next.

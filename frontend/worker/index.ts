@@ -8,6 +8,7 @@
 import "@/lib/config/load-env";
 import { env } from "@/lib/config/env";
 import { chainStateProblems } from "@/lib/chain";
+import { guardianMode } from "@/lib/transport";
 import { agentsTick } from "./agents";
 import { log } from "./log";
 import { settleTick } from "./settle";
@@ -41,7 +42,11 @@ export function main(): void {
     process.exit(1);
   }
   let stopping = false;
-  log.info(`worker up — CHAIN_MODE=${e.CHAIN_MODE}, db ${e.DATABASE_URL}, api ${e.APP_URL}`);
+  // The verifier accepts stub ("0g-stub-…") replies only in stub mode and mock 0G replies only with
+  // ZG_ALLOW_MOCK_VERIFY=1, so say which guardian this process verifies against.
+  const gm = guardianMode();
+  const mock = gm === "0g" && (process.env.ZG_MOCK === "1" || !process.env.ZG_API_KEY);
+  log.info(`worker up — CHAIN_MODE=${e.CHAIN_MODE}, GUARDIAN_MODE=${gm}${mock ? " (offline 0G mock)" : ""}, db ${e.DATABASE_URL}, api ${e.APP_URL}`);
   const done = Promise.all([loop("settle", settleTick, () => stopping), loop("agents", agentsTick, () => stopping)]);
   const shutdown = (sig: string) => {
     if (stopping) process.exit(1);

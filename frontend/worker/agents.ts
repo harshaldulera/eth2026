@@ -4,7 +4,7 @@ import { getCastle } from "@/lib/castles";
 import { formatHbar } from "@/lib/chain/units";
 import { db, schema } from "@/lib/db";
 import { STRATEGIES, type StrategyKey } from "@/lib/fixtures/raids";
-import { checkCaps, createPayerFetch, holdSpend, isSpendControlRefusal, recordOutcome, requestApproval, settleSpend, voidSpend } from "@/lib/pay";
+import { checkCaps, createPayerFetch, holdSpend, isSpendControlRefusal, recordOutcome, requestApproval, settleSpend, voidSiege, voidSpend } from "@/lib/pay";
 import { STUB_PAYMENT_HEADER } from "@/lib/pay/stub";
 import { getSiege } from "@/lib/siege";
 import type { CapReason, Castle, Siege } from "@/lib/types";
@@ -19,7 +19,8 @@ import { log } from "./log";
  *             -> ok: pay x402 from the agent's own account (spend-capped at the castle fee) via
  *                POST /api/siege/start, then the strategy's 5 messages via /api/siege/[id]/message
  *   settleSpend / voidSpend, recordOutcome.
- * Agents are interleaved (one siege each per tick, in parallel); a denial stops the agent.
+ * Agents are interleaved (one siege each per tick, in parallel); a denial stops the agent, and so
+ * does a guardian that stops answering (502 guardian_unavailable): no further sieges are bought.
  */
 
 const MAX_FAILURES = 3;
@@ -103,16 +104,22 @@ const neverSent = (e: unknown) => {
   return code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN";
 };
 
-/** Send the strategy's messages until the siege ends. Returns the final siege. */
-async function raid(siegeId: string, messages: string[]): Promise<Siege | null> {
+/**
+ * Send the strategy's messages until the siege ends. Returns the final siege, and whether the raid
+ * stopped because the guardian did not answer (502 guardian_unavailable, after one retry).
+ */
+async function raid(siegeId: string, messages: string[]): Promise<{ siege: Siege | null; guardianUnavailable: boolean }> {
   for (const text of messages) {
     let res = await postJson(`/api/siege/${encodeURIComponent(siegeId)}/message`, { text });
     if (res.status === 502) res = await postJson(`/api/siege/${encodeURIComponent(siegeId)}/message`, { text }); // guardian hiccup: retry once
-    if (!res.ok) break;
+    if (!res.ok) {
+      const err = res.status === 502 ? ((await res.json().catch(() => null)) as { error?: string } | null)?.error : undefined;
+      return { siege: getSiege(siegeId), guardianUnavailable: err === "guardian_unavailable" };
+    }
     const data = (await res.json()) as { siege?: Siege };
-    if (data.siege && data.siege.status !== "in_progress") return data.siege;
+    if (data.siege && data.siege.status !== "in_progress") return { siege: data.siege, guardianUnavailable: false };
   }
-  return getSiege(siegeId);
+  return { siege: getSiege(siegeId), guardianUnavailable: false };
 }
 
 async function stepRun(run: AgentRunRow): Promise<void> {
@@ -215,7 +222,7 @@ async function stepRun(run: AgentRunRow): Promise<void> {
   const bumped = bumpRun(run.id);
 
   const strategy = STRATEGIES[agent.strategy as StrategyKey] ?? STRATEGIES.authority;
-  const final = await raid(siegeId, strategy.messages(castle.tier, run.siegesRun));
+  const { siege: final, guardianUnavailable } = await raid(siegeId, strategy.messages(castle.tier, run.siegesRun));
   const row = db().select({ maxPressure: schema.sieges.maxPressure }).from(schema.sieges).where(eq(schema.sieges.id, siegeId)).get();
   const pressure = row?.maxPressure ?? 0;
   const status = final?.status;
@@ -226,6 +233,16 @@ async function stepRun(run: AgentRunRow): Promise<void> {
       finish(run, "done", "castle_broken");
       return;
     }
+  } else if (guardianUnavailable) {
+    // The guardian is down: buying the next siege would only strand another fee. A siege it never
+    // answered (turn 0) bought nothing, so it is voided and its fee refunded now; one it answered
+    // part-way stays as it is.
+    const refunded = final?.status === "in_progress" && final.turn === 0 && voidSiege(siegeId, "guardian_unavailable");
+    finish(run, "stopped", "guardian_unavailable");
+    log.fail(
+      `agent ${agent.name} siege ${siegeId} @ ${castle.name}: the guardian is unavailable${refunded ? " — siege void, fee queued for refund" : ""}; run ended`,
+    );
+    return;
   } else {
     log.fail(`agent ${agent.name} siege ${siegeId} @ ${castle.name} did not finish (status ${status ?? "missing"})`);
   }

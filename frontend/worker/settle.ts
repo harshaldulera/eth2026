@@ -5,7 +5,7 @@ import { getCastle, titleFor } from "@/lib/castles";
 import { db, schema } from "@/lib/db";
 import { MAX_CHAIN_ATTEMPTS } from "@/lib/db/schema";
 import { emit } from "@/lib/events/bus";
-import { reconcileReceipts, voidSiege, voidStrandedSieges } from "@/lib/pay/refunds";
+import { ABANDONED_SIEGE_MS, reconcileReceipts, voidAbandonedSieges, voidSiege, voidStrandedSieges } from "@/lib/pay/refunds";
 import { verifier } from "@/lib/siege";
 import type { TransportKind, TxRef } from "@/lib/types";
 import { nowIso } from "@/lib/util/ids";
@@ -44,6 +44,13 @@ export { MAX_CHAIN_ATTEMPTS };
 /** Refusals after which the castle can no longer pay this siege: void it and refund the fee. */
 const VOIDABLE = new Set(["vault_not_open", "expired"]);
 
+/**
+ * Verifier refusals that say the guardian ran in a mode this worker cannot pay out on (offline 0G
+ * mock, or a stub reply while the worker now runs the 0G guardian). The raider is not at fault and
+ * the break can never verify here: void the siege and refund the fee instead of failing it silently.
+ */
+const VOID_ON_VERIFY = new Set(["mock_response", "stub_reply_while_0g"]);
+
 /** Refusals that retrying cannot fix. */
 const PERMANENT = new Set([
   "free_siege",
@@ -78,6 +85,7 @@ type SiegeRow = typeof schema.sieges.$inferSelect;
 const g = globalThis as unknown as { __siegeSettleBackoff?: Map<string, number> };
 const nextTry = (g.__siegeSettleBackoff ??= new Map<string, number>());
 
+const ABANDONED_MIN = ABANDONED_SIEGE_MS / 60_000;
 const short = (id: string) => id.replace(/^siege_/, "").slice(0, 8);
 
 function castleName(id: string): string {
@@ -185,7 +193,10 @@ async function settleBroken(row: SiegeRow) {
     return;
   }
   const v = await verifier.verify(row.id);
-  if (!v.ok) return fail(row, `verify:${v.reason ?? "failed"}`, true);
+  if (!v.ok) {
+    if (v.reason && VOID_ON_VERIFY.has(v.reason)) return voidOrFail(row, `verify:${v.reason}`);
+    return fail(row, `verify:${v.reason ?? "failed"}`, true);
+  }
   const prep = await prepareRelease(row.id);
   if (!prep.ok) {
     if (VOIDABLE.has(prep.reason)) return voidOrFail(row, prep.reason);
@@ -286,6 +297,10 @@ export async function settleTick(): Promise<number> {
   for (const id of voidStrandedSieges()) {
     n++;
     log.info(`siege ${short(id)} void — its castle closed under it, fee queued for refund`);
+  }
+  for (const id of voidAbandonedSieges()) {
+    n++;
+    log.info(`siege ${short(id)} void — paid but no guardian reply for ${ABANDONED_MIN} min, fee queued for refund`);
   }
   for (const row of pending()) {
     const due = nextTry.get(row.id);

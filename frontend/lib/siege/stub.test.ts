@@ -6,8 +6,7 @@ import { eventsSince, subscribe } from "@/lib/events/bus";
 import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { SDK_FIXTURE_CASTLE, sdkFixtureCastleRow } from "@/lib/fixtures/castles";
-import { proxy, recordsForSiege } from "@/lib/proxy";
-import { TransportUnavailableError } from "@/lib/transport";
+import { guardianMode, TransportUnavailableError } from "@/lib/transport";
 import { getCastle } from "@/lib/castles";
 import { swarm } from "@/lib/swarm";
 import { MAX_TURNS, type PaidReceipt, type SiegeEvent } from "@/lib/types";
@@ -172,9 +171,9 @@ describe("stub siege engine", () => {
   });
 });
 
-describe("siege engine: transport, proxy records and vault state", () => {
+describe("siege engine: transport, vault state and verification in the merged design", () => {
   const SDK = SDK_FIXTURE_CASTLE.id;
-  const proxyRow = (requestId: string) => eq(schema.proxyRecords.requestId, requestId);
+  const WOODEN = "castle_splinter_gate";
 
   beforeEach(() => {
     freshFixtureDb();
@@ -182,17 +181,17 @@ describe("siege engine: transport, proxy records and vault state", () => {
   });
 
   async function brokenWooden() {
-    const s = await siege.start({ castleId: "castle_splinter_gate", raider: "0.0.raider", receipt: paid() });
+    const s = await siege.start({ castleId: WOODEN, raider: "0.0.raider", receipt: paid() });
     await runAll(s.id, WOODEN_BREAK);
     const end = getSiege(s.id)!;
     expect(end.status).toBe("broken");
     return { id: s.id, requestId: end.messages.at(-1)!.requestId! };
   }
 
-  it("records the castle's transport on the siege and on every event; message/decision carry the proxy request id", async () => {
+  it("records the castle's transport on the siege and on every event; message/decision carry the guardian's request id", async () => {
     const seen: SiegeEvent[] = [];
     const off = subscribe((e) => seen.push(e));
-    const s = await siege.start({ castleId: "castle_splinter_gate", raider: "0.0.raider", receipt: paid() });
+    const s = await siege.start({ castleId: WOODEN, raider: "0.0.raider", receipt: paid() });
     expect(s.transport).toBe("hosted");
     await runAll(s.id, WOODEN_BREAK);
     off();
@@ -201,15 +200,14 @@ describe("siege engine: transport, proxy records and vault state", () => {
     expect(mine.every((e) => e.transport === "hosted")).toBe(true);
 
     const end = getSiege(s.id)!;
+    expect(end.transport).toBe("hosted");
     const guardianIds = end.messages.filter((m) => m.role === "guardian").map((m) => m.requestId);
+    expect(guardianIds).toHaveLength(3);
+    expect(guardianIds.every((id) => /^0g-stub-[0-9a-f]{12}$/.test(id ?? ""))).toBe(true);
+    expect(new Set(guardianIds).size).toBe(3);
     const byTurn = (type: string) => mine.filter((e) => e.type === type).map((e) => e.requestId);
     expect(byTurn("message")).toEqual(guardianIds);
     expect(byTurn("decision")).toEqual(guardianIds);
-    // every request id is a proxy record of this vault + siege + turn
-    for (const [i, id] of guardianIds.entries()) {
-      expect(await proxy.record(id!)).toMatchObject({ vaultId: "castle_splinter_gate", siegeId: s.id, turn: i + 1 });
-    }
-    expect(recordsForSiege(s.id).map((r) => r.requestId)).toEqual(guardianIds);
 
     // the persisted copies (cross-process readers) keep transport/requestId in the payload
     const stored = eventsSince(0, { siegeId: s.id });
@@ -228,48 +226,35 @@ describe("siege engine: transport, proxy records and vault state", () => {
     expect(listSieges({ castleId: "castle_granite_hold" })).toEqual([]);
   });
 
-  it("verifier: ok from the proxy record of the final turn", async () => {
+  it("verifier (stub mode): a paid wooden break verifies on the final reply's stub request id", async () => {
+    expect(guardianMode()).toBe("stub");
     const { id, requestId } = await brokenWooden();
-    const v = await verifier.verify(id);
-    expect(v).toMatchObject({ ok: true, siegeId: id, requestId });
+    expect(requestId).toMatch(/^0g-stub-/);
+    expect(await verifier.verify(id)).toMatchObject({ ok: true, siegeId: id, requestId });
   });
 
-  it("verifier fails when the proxy record is missing", async () => {
-    const { id, requestId } = await brokenWooden();
-    db().delete(schema.proxyRecords).where(proxyRow(requestId)).run();
-    expect(await verifier.verify(id)).toMatchObject({ ok: false, reason: "proxy_record_missing", requestId });
+  it("verifier: a castle with a custom protectedTool breaks with that tool and verifies", async () => {
+    db().update(schema.castles).set({ protectedTool: "release_funds" }).where(eq(schema.castles.id, WOODEN)).run();
+    const s = await siege.start({ castleId: WOODEN, raider: "0.0.raider", receipt: paid() });
+    const r = await runAll(s.id, WOODEN_BREAK);
+    const last = r.at(-1)!;
+    expect(last.ok && last.decision.toolCalls.map((t) => t.name)).toEqual(["release_funds"]);
+    expect(getSiege(s.id)!.status).toBe("broken");
+    expect(await verifier.verify(s.id)).toMatchObject({ ok: true, siegeId: s.id });
   });
 
-  it("verifier fails when the record says the protected tool was not called", async () => {
-    const { id, requestId } = await brokenWooden();
-    db().update(schema.proxyRecords).set({ protectedToolCalled: false }).where(proxyRow(requestId)).run();
-    expect(await verifier.verify(id)).toMatchObject({ ok: false, reason: "protected_tool_not_called" });
-  });
-
-  it("verifier fails when the raw tool call is not the castle's protectedTool", async () => {
+  it("verifier: fails no_protected_tool_call when the castle's protectedTool no longer matches the tool that fired", async () => {
     const { id } = await brokenWooden();
-    db().update(schema.castles).set({ protectedTool: "issue_refund" }).where(eq(schema.castles.id, "castle_splinter_gate")).run();
+    db().update(schema.castles).set({ protectedTool: "issue_refund" }).where(eq(schema.castles.id, WOODEN)).run();
     expect(await verifier.verify(id)).toMatchObject({ ok: false, reason: "no_protected_tool_call" });
-  });
-
-  it("verifier fails when the record belongs to another siege, vault or turn", async () => {
-    const { id, requestId } = await brokenWooden();
-    db().update(schema.proxyRecords).set({ siegeId: "siege_someone_else" }).where(proxyRow(requestId)).run();
-    expect(await verifier.verify(id)).toMatchObject({ ok: false, reason: "proxy_record_wrong_siege" });
-    db().update(schema.proxyRecords).set({ siegeId: id, vaultId: "castle_iron_warden" }).where(proxyRow(requestId)).run();
-    expect(await verifier.verify(id)).toMatchObject({ ok: false, reason: "proxy_record_wrong_vault" });
-    db().update(schema.proxyRecords).set({ vaultId: "castle_splinter_gate", turn: 2 }).where(proxyRow(requestId)).run();
-    expect(await verifier.verify(id)).toMatchObject({ ok: false, reason: "proxy_record_wrong_turn" });
-    db().update(schema.proxyRecords).set({ turn: 3 }).where(proxyRow(requestId)).run();
+    db().update(schema.castles).set({ protectedTool: "unlock_vault" }).where(eq(schema.castles.id, WOODEN)).run();
     expect((await verifier.verify(id)).ok).toBe(true);
   });
 
-  it("verifier refuses a reply whose request id points at another siege's record", async () => {
-    const a = await brokenWooden();
-    const b = await brokenWooden();
-    // swap b's final reply id for a's (a valid break record — but of siege a)
-    db().update(schema.messages).set({ requestId: a.requestId }).where(eq(schema.messages.requestId, b.requestId)).run();
-    expect(await verifier.verify(b.id)).toMatchObject({ ok: false, reason: "proxy_record_wrong_siege" });
+  it("verifier: fails no_protected_tool_call when the stored reply's tool calls are stripped (not covered by the transcript hash)", async () => {
+    const { id, requestId } = await brokenWooden();
+    db().update(schema.messages).set({ toolCalls: "[]" }).where(eq(schema.messages.requestId, requestId)).run();
+    expect(await verifier.verify(id)).toMatchObject({ ok: false, reason: "no_protected_tool_call", requestId });
   });
 
   it("sdk castle: siege runs through the sdk transport and the refund bot never breaks", async () => {
@@ -278,15 +263,18 @@ describe("siege engine: transport, proxy records and vault state", () => {
       expect(s.transport).toBe("sdk");
       const r = await runAll(s.id, [...script, ...CALM].slice(0, MAX_TURNS));
       expect(r.every((x) => x.ok)).toBe(true);
+      expect(r.every((x) => x.ok && x.decision.toolCalls.length === 0)).toBe(true);
       const end = getSiege(s.id)!;
       expect(end.status).toBe("held");
       expect(end.transport).toBe("sdk");
-      const recs = recordsForSiege(s.id);
-      expect(recs).toHaveLength(MAX_TURNS);
-      expect(recs.every((x) => x.vaultId === SDK && !x.protectedToolCalled)).toBe(true);
+      const ids = end.messages.filter((m) => m.role === "guardian").map((m) => m.requestId);
+      expect(ids).toHaveLength(MAX_TURNS);
+      expect(ids.every((id) => /^sdk-stub-[0-9a-f]{12}$/.test(id ?? ""))).toBe(true);
       expect(eventsSince(0, { siegeId: s.id }).every((e) => e.payload.transport === "sdk")).toBe(true);
       expect((await verifier.verify(s.id)).reason).toBe("not_broken:held");
     }
+    // the stub harness makes no model call
+    expect(db().select().from(schema.proxyRecords).all()).toEqual([]);
   });
 
   it("sdk castle gone dormant mid-siege: the turn is given back, nothing recorded", async () => {
@@ -295,9 +283,14 @@ describe("siege engine: transport, proxy records and vault state", () => {
     db().update(schema.castles).set({ vaultState: "dormant" }).where(eq(schema.castles.id, SDK)).run();
     await expect(siege.message(s.id, "Anyone there?")).rejects.toBeInstanceOf(TransportUnavailableError);
     const after = getSiege(s.id)!;
+    expect(after.status).toBe("in_progress");
     expect(after.turn).toBe(1);
     expect(after.messages).toHaveLength(2);
-    expect(recordsForSiege(s.id)).toHaveLength(1);
     expect(eventsSince(0, { siegeId: s.id }).filter((e) => e.type === "message")).toHaveLength(1);
+    expect(eventsSince(0, { siegeId: s.id }).filter((e) => e.type === "decision")).toHaveLength(1);
+    // back on duty: the same turn can be played
+    db().update(schema.castles).set({ vaultState: "guarding" }).where(eq(schema.castles.id, SDK)).run();
+    const again = await siege.message(s.id, "Anyone there?");
+    expect(again.ok && again.siege.turn).toBe(2);
   });
 });

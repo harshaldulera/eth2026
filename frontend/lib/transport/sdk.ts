@@ -1,15 +1,15 @@
 // STUB — Lane B replaces with the @siege/guard socket relay (api/guard handshake, heartbeat, external harness replies); keep the signature.
 import { createHash } from "node:crypto";
 import { castleRow } from "@/lib/castles";
-import { proxy } from "@/lib/proxy";
 import type { GuardianDecision } from "@/lib/types";
 import { lastRaiderTurn, TransportUnavailableError, type SiegeTransport } from "./types";
 
 /**
  * SDK guardians: an external harness guarded with @siege/guard. The stub plays the
  * examples/guard-refund-bot harness: a polite support bot that refuses every refund and NEVER calls
- * the castle's protected tool (whatever it is, e.g. "issue_refund"). Like the real harness, its
- * inference goes through the vault's proxy key, so every reply leaves a proxy record.
+ * the castle's protected tool (whatever it is, e.g. "issue_refund"). The real harness (B9) calls the
+ * model through /api/proxy/v1 with the vault key, which writes proxy records; this stub makes no model
+ * call, so it reports "sdk-stub-…" request ids with no record (a stub reply can never be verified as a break).
  *
  * A dormant harness (three missed heartbeats) does not answer: respond throws
  * TransportUnavailableError and the siege engine gives the raider their turn back.
@@ -59,17 +59,9 @@ export const sdkTransport: SiegeTransport = {
     if (!row) throw new Error(`transport(sdk): castle ${castleId} not found`);
     if (row.vaultState === "dormant") throw new TransportUnavailableError("sdk", castleId, "harness dormant (missed heartbeats)");
     const d = refundBotDecide(castleId, siegeMessages);
-    // The harness calls the model with the vault key; the proxy records the request.
-    await proxy.issueKey(castleId);
-    const rec = await proxy.recordRequest({
-      vaultId: castleId,
-      siegeId: ctx?.siegeId,
-      turn: ctx?.turn ?? lastRaiderTurn(siegeMessages),
-      systemPrompt: REFUND_BOT_SYSTEM_PROMPT,
-      toolCalls: d.toolCalls,
-      protectedTool: row.protectedTool,
-    });
-    return { ...d, requestId: rec.requestId, raw: { ...(d.raw as Record<string, unknown>), transport: "sdk" } };
+    const turn = ctx?.turn ?? lastRaiderTurn(siegeMessages);
+    const requestId = "sdk-stub-" + createHash("sha256").update(`${castleId}:${ctx?.siegeId ?? ""}:${turn}`).digest("hex").slice(0, 12);
+    return { ...d, requestId, raw: { ...(d.raw as Record<string, unknown>), transport: "sdk" } };
   },
 
   async status(castleId) {

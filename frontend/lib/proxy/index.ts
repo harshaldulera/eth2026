@@ -1,106 +1,136 @@
-// STUB — Lane B replaces with the 0G proxy (app/api/proxy, per-vault scoped model keys, real request records); keep the signature.
+/**
+ * Vault-scoped 0G proxy (plan B8). Every 0G-backed guardian request goes through here — hosted now,
+ * external harnesses via /api/proxy/v1 later (B9) — so there is one verification path.
+ *
+ *   issueKey(castleId, protectedTool) → vk_… model key bound to one castle
+ *   chat(key, req, ctx)               → forwards to 0G (team key, or the user's for iAI) and records it
+ *   record(requestId)                 → the stored ProxyRecord (read by the verifier in the worker)
+ *
+ * Records are written to SQLite (proxy_records) with hashes only — never prompt or reply content.
+ * Keys are per process; the record, not the key, is what the verifier trusts.
+ *
+ * TODO(B8): streaming pass-through for external harnesses; prompt-hash pinning + auto-close once
+ * castles carry a vault state.
+ */
 import { createHash, randomBytes } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
-import { keccak256, toBytes } from "viem";
+import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { env } from "@/lib/config/env";
-import { nowIso } from "@/lib/util/ids";
-import type { ProxyPort, ProxyRecord, ToolCall } from "@/lib/types";
+import { zgConfig } from "./config";
+import { mockChat } from "./mock";
+import { chat as zgChat, ZgError, type Billing, type ChatRequest, type ChatResult } from "./zg";
 
-/**
- * The vault-scoped inference proxy (plan B8). Every guardian inference — hosted or an external
- * harness through @siege/guard — goes through a model key issued for ONE vault, and the proxy keeps a
- * request record per call. The verifier (lib/siege/verifier.ts) trusts these records, not whatever a
- * transport reported.
- *
- * Privacy rule: a record holds HASHES and flags only — never the system prompt, the raider's text or
- * the reply. `recordRequest` takes the system prompt only to hash it, and drops it.
- *
- * Stub: keys are deterministic strings (nothing is enforced), records live in `proxy_records`.
- */
+export { zgConfig } from "./config";
+export type { Billing, ChatMessage, ChatRequest, ChatResult, ToolDef } from "./zg";
 
-export type ProxyKey = { modelKey: string; baseURL: string };
+export type ProxyRecord = typeof schema.proxyRecords.$inferSelect;
 
-export type RecordRequestInput = {
-  /** Vault scope of the model key (the castle id). */
-  vaultId: string;
-  siegeId?: string;
-  turn?: number;
-  /** Hashed (keccak256) and discarded. Never stored. */
-  systemPrompt: string;
-  /** Tool calls carried by the response. Only the names are inspected; nothing is stored. */
-  toolCalls: Pick<ToolCall, "name">[];
-  /** The castle's protected tool: a call to it is the only thing that marks the response as a break. */
-  protectedTool: string;
-};
+type VaultKey = { castleId: string; protectedTool: string };
 
-/** keccak256 of the system prompt (UTF-8). The B8 orders-changed check compares these. */
-export function promptHash(systemPrompt: string): `0x${string}` {
-  return keccak256(toBytes(systemPrompt));
+const g = globalThis as unknown as { __siegeProxyKeys?: { keys: Map<string, VaultKey>; byCastle: Map<string, string> } };
+const keys = (g.__siegeProxyKeys ??= { keys: new Map(), byCastle: new Map() });
+
+export function sha256(s: string): string {
+  return createHash("sha256").update(s).digest("hex");
 }
 
-/** Deterministic stub key for a vault: "sk-siege-stub-<vaultId>-<16 hex>". */
-export function stubModelKey(vaultId: string): string {
-  const h = createHash("sha256").update(`siege-proxy-stub:${vaultId}`).digest("hex").slice(0, 16);
-  return `sk-siege-stub-${vaultId}-${h}`;
+/** Deterministic JSON (sorted keys, undefined dropped) for hashing 0G responses. */
+function canonical(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canonical);
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v).sort()) if ((v as Record<string, unknown>)[k] !== undefined) out[k] = canonical((v as Record<string, unknown>)[k]);
+    return out;
+  }
+  return v;
 }
 
-/** OpenAI-compatible base URL of the proxy (Lane B's app/api/proxy/v1). */
-export function proxyBaseURL(): string {
-  return `${env().APP_URL.replace(/\/+$/, "")}/api/proxy/v1`;
-}
-
-function toRecord(r: typeof schema.proxyRecords.$inferSelect): ProxyRecord {
-  const out: ProxyRecord = {
-    requestId: r.requestId,
-    vaultId: r.vaultId,
-    promptHash: r.promptHash as `0x${string}`,
-    protectedToolCalled: r.protectedToolCalled,
-    at: r.at,
-  };
-  if (r.siegeId != null) out.siegeId = r.siegeId;
-  if (r.turn != null) out.turn = r.turn;
-  return out;
-}
-
-async function issueKey(vaultId: string): Promise<ProxyKey> {
-  return { modelKey: stubModelKey(vaultId), baseURL: proxyBaseURL() };
+/** sha256 over the system message(s) — what the verifier compares against the castle's prompt. */
+export function systemPromptHash(messages: ChatRequest["messages"]): string {
+  return sha256(
+    messages
+      .filter((m) => m.role === "system")
+      .map((m) => ("content" in m ? m.content : ""))
+      .join("\n\n"),
+  );
 }
 
 /**
- * Record one inference request through `vaultId`'s key. Returns the stored record; its `requestId`
- * is what transports put on the GuardianDecision. Ids look like 0G request ids ("0g-stub-<12 hex>")
- * and are unique per call (the proxy sees every request, including retries of the same turn).
+ * The model key for a castle (created on first use in this process). The key is bound to the
+ * protected tool the caller passes NOW: if the castle's tool changed since the key was issued (a
+ * castle edit, or a dev server / worker that hot-reloaded across a rename), the binding is updated so
+ * protectedToolCalled is never computed against a stale tool name.
  */
-export async function recordRequest(i: RecordRequestInput): Promise<ProxyRecord> {
-  const requestId = "0g-stub-" + randomBytes(6).toString("hex");
-  const row = {
-    requestId,
-    vaultId: i.vaultId,
-    siegeId: i.siegeId ?? null,
-    turn: i.turn ?? null,
-    promptHash: promptHash(i.systemPrompt),
-    protectedToolCalled: i.toolCalls.some((t) => t.name === i.protectedTool),
-    at: nowIso(),
+export function issueKey(castleId: string, protectedTool: string): string {
+  const existing = keys.byCastle.get(castleId);
+  if (existing) {
+    const vk = keys.keys.get(existing);
+    if (vk && vk.protectedTool !== protectedTool) keys.keys.set(existing, { castleId, protectedTool });
+    return existing;
+  }
+  const key = `vk_${randomBytes(18).toString("base64url")}`;
+  keys.keys.set(key, { castleId, protectedTool });
+  keys.byCastle.set(castleId, key);
+  return key;
+}
+
+export function vaultForKey(key: string): VaultKey | undefined {
+  return keys.keys.get(key);
+}
+
+export function record(requestId: string): ProxyRecord | null {
+  return db().select().from(schema.proxyRecords).where(eq(schema.proxyRecords.requestId, requestId)).get() ?? null;
+}
+
+export type ProxyResult =
+  | { ok: true; result: ChatResult; record: ProxyRecord }
+  /** The upstream model refused the request (e.g. a provider content filter). Recorded; counts as no tool call. */
+  | { ok: false; status: 422; error: "upstream_rejected"; record: ProxyRecord }
+  | { ok: false; status: number; error: string };
+
+/** 0G returns a request id even when the upstream provider rejects the prompt. */
+function rejectedRequestId(e: unknown): string | null {
+  if (!(e instanceof ZgError) || e.status !== 400 || !e.body) return null;
+  try {
+    const j = JSON.parse(e.body) as { error?: { code?: string }; x_0g_trace?: { request_id?: string } };
+    return j.error?.code === "bad_response_status_code" ? (j.x_0g_trace?.request_id ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Forward one chat completion for a castle's key. ctx tags it with siege + turn. Billing picks whose
+ * 0G credits pay (team key by default; a signed-in user's key for iAI). Upstream errors throw.
+ */
+export async function chat(key: string, req: ChatRequest, ctx: { siegeId?: string; turn?: number; billing?: Billing } = {}): Promise<ProxyResult> {
+  const vk = keys.keys.get(key);
+  if (!vk) return { ok: false, status: 401, error: "unknown vault key" };
+
+  const billing = ctx.billing ?? { kind: "team" };
+  const mock = zgConfig.mock && billing.kind === "team";
+  const base = { castleId: vk.castleId, siegeId: ctx.siegeId ?? null, turn: ctx.turn ?? null, model: req.model, promptHash: systemPromptHash(req.messages), mock, at: new Date().toISOString() };
+
+  let result: ChatResult;
+  try {
+    result = mock ? mockChat(req, vk.protectedTool) : await zgChat(req, billing);
+  } catch (e) {
+    const rid = rejectedRequestId(e);
+    if (!rid) throw e;
+    const rec: ProxyRecord = { ...base, requestId: rid, responseHash: sha256((e as ZgError).body ?? ""), protectedToolCalled: false, toolCalls: "[]", costUsdMicro: null };
+    db().insert(schema.proxyRecords).values(rec).onConflictDoNothing().run();
+    return { ok: false, status: 422, error: "upstream_rejected", record: rec };
+  }
+  if (!result.requestId) return { ok: false, status: 502, error: "0G response had no request id" };
+
+  const toolNames = (result.message.tool_calls ?? []).map((c) => c.function.name);
+  const rec: ProxyRecord = {
+    ...base,
+    requestId: result.requestId,
+    responseHash: sha256(JSON.stringify(canonical(result.raw))),
+    protectedToolCalled: toolNames.includes(vk.protectedTool),
+    toolCalls: JSON.stringify(toolNames),
+    costUsdMicro: result.costUsdMicro ?? null,
   };
-  db().insert(schema.proxyRecords).values(row).run();
-  return toRecord(row);
+  db().insert(schema.proxyRecords).values(rec).onConflictDoNothing().run();
+  return { ok: true, result, record: rec };
 }
-
-async function record(requestId: string): Promise<ProxyRecord | null> {
-  const r = db().select().from(schema.proxyRecords).where(eq(schema.proxyRecords.requestId, requestId)).get();
-  return r ? toRecord(r) : null;
-}
-
-/** Every record of one siege, in insertion order (tests / replay). */
-export function recordsForSiege(siegeId: string): ProxyRecord[] {
-  return db()
-    .select()
-    .from(schema.proxyRecords)
-    .where(eq(schema.proxyRecords.siegeId, siegeId))
-    .orderBy(sql`rowid`)
-    .all()
-    .map(toRecord);
-}
-
-export const proxy: ProxyPort & { recordRequest: typeof recordRequest } = { issueKey, record, recordRequest };

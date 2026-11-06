@@ -22,7 +22,7 @@ export {
   DuplicatePaymentError,
   type ReceiptInput,
 } from "./receipts";
-export { voidSiege, voidStrandedSieges, voidInFlightSieges, reconcileReceipts, type InFlightVoid } from "./refunds";
+export { voidSiege, voidStrandedSieges, voidAbandonedSieges, voidInFlightSieges, reconcileReceipts, type InFlightVoid } from "./refunds";
 export { createPayerFetch, SpendControlError, isSpendControlRefusal, type PayerCreds } from "./client";
 export { STUB_PAYMENT_HEADER, stubPaymentRequired } from "./stub";
 export { asset, payNetwork } from "./asset";

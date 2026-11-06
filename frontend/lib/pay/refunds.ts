@@ -121,6 +121,26 @@ export function voidStrandedSieges(now = Date.now()): string[] {
   return voided;
 }
 
+/** A paid siege with no guardian reply this long after it started was abandoned. */
+export const ABANDONED_SIEGE_MS = 30 * 60_000;
+
+/**
+ * Paid sieges that started but never got a single guardian reply (turn 0) for ABANDONED_SIEGE_MS:
+ * the guardian was unavailable (a 502 gives the turn back, so the siege stays at turn 0) or the raider
+ * left before playing. The fee bought nothing: void the siege and refund it. Sieges with at least one
+ * guardian reply are left alone (a raider walking away mid-siege is not refunded); free sieges have
+ * nothing to refund.
+ */
+export function voidAbandonedSieges(now = Date.now(), idleMs = ABANDONED_SIEGE_MS): string[] {
+  const cutoff = new Date(now - idleMs).toISOString();
+  const rows = db()
+    .select({ id: S.id })
+    .from(S)
+    .where(and(inArray(S.status, ["created", "in_progress"]), eq(S.turn, 0), eq(S.free, false), isNull(S.voidReason), lt(S.createdAt, cutoff)))
+    .all();
+  return rows.map((r) => r.id).filter((id) => voidSiege(id, "no_guardian_reply"));
+}
+
 /** Agent spend that waited on (or was paid by) this receipt no longer counts once the money is back / never moved. */
 function releaseSpend(receipt: typeof R.$inferSelect): void {
   db().transaction((tx) => {

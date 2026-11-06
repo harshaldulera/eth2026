@@ -345,6 +345,61 @@ describe("agent spend follows the money", () => {
   });
 });
 
+describe("a guardian that cannot pay out or does not answer strands no fee", () => {
+  it("an agent whose guardian is unavailable stops after one siege, and that siege is void and refunded", async () => {
+    const agent = await createAgent({ name: "Night Sapper" });
+    startRun(agent.id, "castle_granite_hold", 3);
+    let messages = 0;
+    setFetch((async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (/\/message$/.test(new URL(req.url).pathname)) {
+        messages++;
+        return Response.json({ error: "guardian_unavailable", message: "Your turn was not used; try again." }, { status: 502 });
+      }
+      return f(input, init);
+    }) as typeof fetch);
+    await agentsTick();
+    await agentsTick();
+    setFetch(f);
+    expect(messages).toBe(2); // one message, retried once
+    const run = db().select().from(schema.agentRuns).where(eq(schema.agentRuns.agentId, agent.id)).get()!;
+    expect(run).toMatchObject({ status: "stopped", stopReason: "guardian_unavailable" });
+    const sieges = db().select().from(schema.sieges).where(eq(schema.sieges.agentId, agent.id)).all();
+    expect(sieges).toHaveLength(1); // no second siege bought
+    expect(sieges[0]).toMatchObject({ status: "in_progress", turn: 0, voidReason: "guardian_unavailable" });
+    await settleTick();
+    expect(receiptOf(sieges[0].id).state).toBe("refunded");
+  });
+
+  it("a paid siege with no guardian reply for 30 min is void and refunded; one with a reply is not", async () => {
+    const idle = await paidSiege("castle_granite_hold", "0.0.stub-idle");
+    const played = await paidSiege("castle_granite_hold", "0.0.stub-played");
+    await say(played, MUST_NOT_BREAK[0]);
+    const old = new Date(Date.now() - 31 * 60_000).toISOString();
+    db().update(schema.sieges).set({ createdAt: old }).run();
+    await settleTick();
+    expect(getSiege(idle)!.settlement).toMatchObject({ state: "void", reason: "no_guardian_reply", refund: { state: "refunded" } });
+    expect(getSiege(played)!.status).toBe("in_progress");
+    expect(receiptOf(played).state).toBe("settled");
+  });
+
+  it("a stub break the worker can no longer verify (it now runs the 0G guardian) is void and refunded, not silently failed", async () => {
+    const id = await paidSiege(WOOD);
+    for (const t of WOODEN_BREAK) await say(id, t);
+    expect(getSiege(id)!.status).toBe("broken");
+    process.env.GUARDIAN_MODE = "0g";
+    process.env.ZG_MOCK = "1";
+    try {
+      await settleTick();
+    } finally {
+      delete process.env.GUARDIAN_MODE;
+      delete process.env.ZG_MOCK;
+    }
+    expect(getSiege(id)!.settlement).toMatchObject({ state: "void", reason: "verify:stub_reply_while_0g", refund: { state: "refunded" } });
+    expect(castleClosedReason(WOOD)).toBeNull(); // nothing was paid out: the castle is still open
+  });
+});
+
 describe("small things", () => {
   it("free sieges never move the castle streak", async () => {
     const before = db().select().from(schema.castles).where(eq(schema.castles.id, "castle_granite_hold")).get()!.streak;

@@ -17,7 +17,8 @@
     "abi": "tsx scripts/compile-contracts.ts",
     "deploy:vault": "tsx scripts/deploy-vault.ts",
     "contracts:test": "vitest run contracts.test",
-    "contracts:forge": "cd ../contracts && forge test -vv"
+    "contracts:forge": "cd ../contracts && forge test -vv",
+    "guardian:fixtures": "tsx scripts/guardian-fixtures.ts"
   },
   "dependencies": {
     "@hiero-ledger/sdk": "^2.90.1",

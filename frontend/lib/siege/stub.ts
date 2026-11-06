@@ -1,5 +1,4 @@
-// STUB — Lane B replaces with the 0G-backed siege engine; keep the signature (SiegePort).
-// Guardian replies come ONLY through @/lib/transport (never @/lib/guardian: lint-enforced).
+// Siege engine (Lane B): turns, transcript, status and events. Guardians are reached only through lib/transport.
 import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { emit } from "@/lib/events/bus";

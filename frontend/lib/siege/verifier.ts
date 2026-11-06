@@ -1,29 +1,31 @@
-// STUB — Lane B replaces with a verifier that also checks the 0G response signature/attestation; keep the signature.
 import { castleRow } from "@/lib/castles";
-import { proxy } from "@/lib/proxy";
+import * as proxy from "@/lib/proxy";
+import { guardianMode, PROTECTED_TOOL, systemPrompt } from "@/lib/transport";
 import type { Verification, VerifierPort } from "@/lib/types";
 import { messageRows, siegeRow } from "./read";
 import { transcriptHash } from "./transcript";
 
 /**
- * Break check before the worker signs a Release (plan B4). It verifies from the PROXY's request
- * record, not from whatever the transport reported, and runs the same code for hosted and SDK
- * guardians. This is a consistency check over our own database, NOT a proof. It checks exactly:
- *  1. the siege exists and is not free (free sieges can never pay out);
- *  2. its status is "broken";
- *  3. keccak256(canonical transcript of the stored messages) equals the stored sieges.transcriptHash
+ * Check before the worker signs a Release. A consistency check over our own records, NOT a proof.
+ * It checks exactly:
+ *  1. the siege exists;
+ *  2. it is not a free siege (free sieges can never pay out);
+ *  3. its status is "broken";
+ *  4. keccak256(canonical transcript of the stored messages) equals sieges.transcriptHash
  *     (no message was edited, added or removed after the siege ended);
- *  4. the last guardian message carries a request id, and the proxy holds a record for it that was
- *     issued on this vault's model key (record.vaultId == castle id), inside this siege
- *     (record.siegeId), on the last turn (record.turn == siege turn), and whose response carried the
- *     protected tool call (record.protectedToolCalled);
- *  5. the stored raw tool calls of that reply include a call named exactly castle.protectedTool.
- * It does not re-query 0G for the request or check any provider signature or attestation.
+ *  5. the last guardian message has a request id and a call to the castle's protected tool
+ *     (castles.protectedTool; "unlock_vault" for hosted guardians);
+ *  6. for a 0G-backed guardian, the 0G proxy's record for that request id
+ *     a. exists, b. was made on this castle's key, c. inside this siege on that turn,
+ *     d. saw a real protected-tool call in 0G's response, e. sent this castle's system prompt (hash),
+ *     f. was a real 0G call, not the offline mock (unless ZG_ALLOW_MOCK_VERIFY=1);
+ *     stub request ids ("0g-stub-…") are accepted only while the stub guardian is in use.
+ * It does not check a 0G TEE attestation: the router offers none for chat models yet.
  */
 
 const ZERO = "0x" as `0x${string}`;
 
-export const stubVerifier: VerifierPort = {
+export const zeroGVerifier: VerifierPort = {
   async verify(siegeId: string): Promise<Verification> {
     const row = siegeRow(siegeId);
     if (!row) return { siegeId, transcriptHash: ZERO, requestId: "", ok: false, reason: "not_found" };
@@ -40,16 +42,6 @@ export const stubVerifier: VerifierPort = {
     if (row.transcriptHash.toLowerCase() !== recomputed.toLowerCase()) return fail("transcript_mismatch");
     if (!lastGuardian) return fail("no_guardian_reply");
     if (!lastGuardian.requestId) return fail("missing_request_id");
-    const castle = castleRow(row.castleId);
-    if (!castle) return fail("castle_not_found");
-
-    const rec = await proxy.record(lastGuardian.requestId);
-    if (!rec) return fail("proxy_record_missing");
-    if (rec.vaultId !== castle.id) return fail("proxy_record_wrong_vault");
-    if (rec.siegeId !== siegeId) return fail("proxy_record_wrong_siege");
-    if (rec.turn !== row.turn || lastGuardian.turn !== row.turn) return fail("proxy_record_wrong_turn");
-    if (!rec.protectedToolCalled) return fail("protected_tool_not_called");
-
     let calls: { name?: unknown }[] = [];
     try {
       const parsed: unknown = JSON.parse(lastGuardian.toolCalls ?? "[]");
@@ -57,7 +49,22 @@ export const stubVerifier: VerifierPort = {
     } catch {
       return fail("bad_tool_calls");
     }
-    if (!calls.some((c) => c?.name === castle.protectedTool)) return fail("no_protected_tool_call");
+    const castle = castleRow(row.castleId);
+    if (!castle) return fail("castle_not_found");
+    // The castle's own protected tool: "unlock_vault" for hosted guardians, e.g. "issue_refund" for SDK ones.
+    const protectedTool = castle.protectedTool || PROTECTED_TOOL;
+    if (!calls.some((c) => c?.name === protectedTool)) return fail("no_protected_tool_call");
+
+    if (requestId.startsWith("0g-stub-")) return guardianMode() === "stub" ? { ...base, ok: true } : fail("stub_reply_while_0g");
+
+    const rec = proxy.record(requestId);
+    if (!rec) return fail("no_proxy_record");
+    if (rec.castleId !== row.castleId) return fail("proxy_record_wrong_castle");
+    if (rec.siegeId !== siegeId || rec.turn !== lastGuardian.turn) return fail("proxy_record_wrong_siege_or_turn");
+    if (!rec.protectedToolCalled) return fail("proxy_saw_no_open_vault");
+    const expected = proxy.sha256(systemPrompt({ tier: castle.tier, personality: castle.personality, guardianName: castle.guardianName, orders: castle.orders, protectedTool }));
+    if (rec.promptHash !== expected) return fail("prompt_hash_mismatch");
+    if (rec.mock && process.env.ZG_ALLOW_MOCK_VERIFY !== "1") return fail("mock_response");
     return { ...base, ok: true };
   },
 };

@@ -375,54 +375,63 @@ export interface ChainPort {
 
 export type FeeSplit = { castellan: Amount; pot: Amount; arena: Amount };
 
-/** The vault-scoped model key every hosted inference uses (from ProxyPort.issueKey; never the team key). */
-export type GuardianVia = { modelKey: string; baseURL: string };
+/**
+ * Lane B: optional context the siege engine passes so the 0G proxy can tag each request with its
+ * siege and turn (the verifier checks the proxy record against both). Implementations may ignore it.
+ */
+export type GuardianContext = { siegeId?: string; turn?: number };
+/** Alias kept for Lane A code written before the merge. */
+export type GuardianRespondContext = GuardianContext;
 
 /**
- * Lane B — lib/guardian. Only lib/transport may call it (lint-enforced), and it must pass the vault's
- * proxy key: every 0G call goes to `via.baseURL` with `via.modelKey` (plan rule two). lib/guardian never
- * reads the team 0G key; only lib/proxy does.
+ * Lane B — lib/guardian. Only lib/transport may call it (lint-enforced). The 0G guardian reaches the
+ * model only through lib/proxy with the castle's vault-scoped key (plan rule two); lib/guardian never
+ * reads the team 0G key.
  */
 export interface GuardianPort {
-  respond(castleId: string, siegeMessages: SiegeMessage[], via: GuardianVia): Promise<GuardianDecision>;
+  respond(castleId: string, siegeMessages: SiegeMessage[], ctx?: GuardianContext): Promise<GuardianDecision>;
 }
 
 /**
  * Lane B — lib/transport. The siege state machine talks ONLY to this (lint-enforced):
- * `hosted` wraps our 0G guardian, `sdk` relays to an external harness over the @siege/guard socket.
+ * `hosted` wraps our 0G guardian, `sdk` relays to an external harness over the @siege/guard socket (B9).
  */
-/** Where a guardian reply is asked for: the proxy tags its request record with these (turn defaults to the last raider turn). */
-export type GuardianRespondContext = { siegeId?: string; turn?: number };
-
 export interface GuardianTransport {
   readonly kind: TransportKind;
-  respond(castleId: string, siegeMessages: SiegeMessage[], ctx?: GuardianRespondContext): Promise<GuardianDecision>;
+  respond(castleId: string, siegeMessages: SiegeMessage[], ctx?: GuardianContext): Promise<GuardianDecision>;
   /** Current vault state as this transport sees it (e.g. sdk: dormant after three missed heartbeats). */
   status(castleId: string): Promise<VaultState>;
 }
 
 /**
- * Lane B — lib/proxy: one record per inference request through the vault-scoped model key. Hashes only, never content.
- *
- * NAMING (frozen): in the proxy, `vaultId` is the vault SCOPE = the CASTLE id (Castle.id, e.g.
- * "castle_splinter_gate"), NOT the on-chain SiegeVault number (Castle.vaultId). The verifier requires
- * `record.vaultId === castle.id`. A per-vault key is therefore issued per castle.
+ * Lane B — lib/proxy: one row per request through the castle's vault-scoped model key. Hashes only,
+ * never prompt or reply content. Same shape as the proxy_records table (lib/proxy exports the row type).
  */
 export type ProxyRecord = {
+  /** 0G's own request id (x_0g_trace.request_id); also the guardian's reported requestId. */
   requestId: string;
-  /** The CASTLE id (vault scope), not Castle.vaultId (the on-chain number). */
-  vaultId: string;
-  siegeId?: string;
-  turn?: number;
-  promptHash: `0x${string}`;
+  castleId: string;
+  siegeId: string | null;
+  turn: number | null;
+  model: string;
+  /** sha256 of the system prompt sent. */
+  promptHash: string;
+  /** sha256 of 0G's canonical response body. */
+  responseHash: string;
   protectedToolCalled: boolean;
+  /** JSON array of tool names the model called. */
+  toolCalls: string;
+  costUsdMicro: string | null;
+  /** Offline mock response; the verifier refuses it unless ZG_ALLOW_MOCK_VERIFY=1. */
+  mock: boolean;
   at: string;
 };
 
+/** Lane B — lib/proxy (module functions, not an object). */
 export interface ProxyPort {
-  /** `vaultId` = the CASTLE id (vault scope), not Castle.vaultId. */
-  issueKey(vaultId: string): Promise<GuardianVia>;
-  record(requestId: string): Promise<ProxyRecord | null>;
+  /** The vault-scoped model key for a castle (`vk_…`), bound to its protected tool. */
+  issueKey(castleId: string, protectedTool: string): string;
+  record(requestId: string): ProxyRecord | null;
 }
 
 /**

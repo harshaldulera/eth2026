@@ -141,6 +141,19 @@ Lane A laid down Checkpoint 0 while Harshal and Suja16 built from the original t
 - **Vault lifecycle API (Lane B).** Use `vaultState.transition` from `lib/vault` for connected / verified / guarding / dormant. It refuses `funded` and `broken`, and `closed` needs a close reason (`orders_changed`, `owner_closed`, `expired`) and routes through `closeCastle`, which closes the vault on chain first. Never call `chain.closeVault` directly: it does not take the castle off the board.
 - **Storage.** SQLite through Drizzle lives at `frontend/data/siege.db`. Migrations are in `frontend/drizzle/` and apply automatically on first open. The schema stays portable to Postgres.
 
+### Lane B merge (`lane-b/checkpoint-0`): notes for Harshal
+
+Your guardian, proxy, transport and verifier code merged as written, apart from the changes below. Each one keeps its signature.
+
+- **Protected tool is `unlock_vault`.** `PROTECTED_TOOL` in `lib/guardian/tiers.ts` was `open_vault`, but the plan, `castles.protectedTool`, the on-chain vault metadata and the guardian orders all say `unlock_vault`, so the model was being told one name and offered the other.
+- **Per-castle tools.** `respondAs` and the verifier use the castle's own `protectedTool`. `tierPreset(tier, tool)` builds the break tool for it, and `TIERS` is kept as the default. Prompts for `unlock_vault` castles are byte-identical, so prompt hashes don't change.
+- **`issueKey` rebinding.** It rebinds a cached `vk_` key when the castle's protected tool changes.
+- **`GUARDIAN_MODE=0g` with no key.** It falls back to the stub with a warning, unless `ZG_MOCK=1` asks for the mock. The worker voids and refunds a paid break that fails verification as `mock_response` or `stub_reply_while_0g`, so it never sits unpaid.
+- **Guardian outage.** A raider agent stops instead of buying more sieges. Paid sieges with no guardian reply after 30 minutes are voided and refunded.
+- **Transport.** `GuardianTransport` keeps `status(castleId)`, which the plan requires. `transportFor` takes a castle id, a row or a kind, and the SDK transport is a refund-bot stub with `sdk-stub-…` ids until B9 lands.
+- **Migrations.** `main`'s `0003_vault_state_transport` is unchanged, and `0004_lane_b_proxy_records` recreates `proxy_records` in your shape. A database migrated from `main` upgrades in place. One migrated with your branch's old `0003` can't, so the app tells you to run `npm run db:reset`.
+- **Lint.** The import boundary is one combined config. `@/lib/guardian` is importable only from `lib/transport`, its tests and `scripts/guardian-fixtures.ts`, and the raw 0G client only from `lib/proxy`.
+
 ## Sponsor claims (Hedera x402)
 
 Each of these is true as built:
