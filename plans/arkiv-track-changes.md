@@ -74,3 +74,10 @@ Guardian orders, payment receipts, approval requests, owner secrets, proxy recor
 2. Board UI (section 2).
 3. Raider page filters and the under-siege marker (section 3).
 4. C2 live-update hooks, then the rest of the C3 screens.
+
+## Decisions (Dhruv, Fri 6 Nov)
+
+- **Licence and AI-usage note: done on `main`.** `LICENSE` (MIT) is at the repo root, and the AI-usage note is a section of the root `README.md`. Add the Arkiv writer wallet and the runnable query to that README in your own section, next to the Hedera one.
+- **Ownership (section 4): agreed.** The arena wallet owns every entity, and every read filters `.ownedBy(arena)`. Use your reasoning in `how-you-use-arkiv.md`.
+- **Discovery (section 3): agreed as rewritten.** The owner picks the target from an Arkiv query; agents don't auto-target.
+- **Deploy (section 1): host still to be chosen.** Plan for one deployment: a single container on a host with a persistent disk (Railway, Render, Fly or a VPS, not serverless), running two processes. One is `next start`. The other is the worker, with the Arkiv drainer folded into it as you offered; adding that loop to `worker/index.ts` is fine with Lane A. The worker stays a separate process from Next, because it holds the verifier key. The URL comes as soon as the host is picked.
