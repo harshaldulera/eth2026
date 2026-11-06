@@ -101,6 +101,38 @@ export async function transactionResult(txId: string): Promise<TxResult> {
   return { state: "failed", result: primary.result ?? "UNKNOWN" };
 }
 
+/**
+ * What became of an HCS submit (by its transaction id): "landed" with the topic sequence number,
+ * "failed" (reached consensus with another status), or "unknown" (the mirror has not seen it).
+ */
+export async function topicSubmitResult(
+  txId: string,
+): Promise<{ state: "landed"; seq: number } | { state: "failed"; reason: string } | { state: "unknown" }> {
+  let r: { transactions?: { result?: string; nonce?: number; scheduled?: boolean; consensus_timestamp?: string }[] };
+  try {
+    r = await mirrorGet(`/transactions/${encodeURIComponent(normalizeTxId(txId))}`);
+  } catch (err) {
+    if (err instanceof MirrorHttpError && err.status === 404) return { state: "unknown" };
+    throw err;
+  }
+  const txs = r.transactions ?? [];
+  if (!txs.length) return { state: "unknown" };
+  const ok = txs.find((t) => t.result === "SUCCESS" && (t.nonce ?? 0) === 0 && !t.scheduled);
+  if (!ok) {
+    const primary = txs.find((t) => (t.nonce ?? 0) === 0 && t.result !== "DUPLICATE_TRANSACTION") ?? txs[0];
+    return { state: "failed", reason: primary.result ?? "UNKNOWN" };
+  }
+  if (!ok.consensus_timestamp) return { state: "unknown" };
+  let m: { sequence_number?: number };
+  try {
+    m = await mirrorGet(`/topics/messages/${encodeURIComponent(ok.consensus_timestamp)}`);
+  } catch (err) {
+    if (err instanceof MirrorHttpError && err.status === 404) return { state: "unknown" };
+    throw err;
+  }
+  return typeof m.sequence_number === "number" ? { state: "landed", seq: m.sequence_number } : { state: "unknown" };
+}
+
 export type MirrorLog = { transactionHash: `0x${string}`; data: `0x${string}`; topics: `0x${string}`[]; timestamp: string };
 
 /**

@@ -4,7 +4,6 @@ import { db as sharedDb, schema, type DB } from "@/lib/db";
 import { env } from "@/lib/config/env";
 import { voidInFlightSieges } from "@/lib/pay/refunds";
 import type { Amount, ChainPort, FeeSplit, SiegeEvent, TxRef, VaultCloseReason, Verification } from "@/lib/types";
-import { nowIso } from "@/lib/util/ids";
 import { arenaAccount } from "./evm";
 import { txUrl, isStubRef } from "./hashscan";
 import * as hcs from "./hcs";
@@ -12,9 +11,6 @@ import { accountEvmAddress } from "./mirror";
 import { siegeIdToBytes32, verifierAddress } from "./releaseSig";
 import {
   attemptRefusal,
-  auditCastle,
-  auditMessage,
-  auditType,
   buildRelease,
   closeVoidReason,
   isFreeSiege,
@@ -25,6 +21,7 @@ import {
   type SettleRows,
 } from "./settle";
 import * as vault from "./vault";
+import { enqueueAudit } from "./outbox";
 
 /**
  * Real ChainPort: SiegeVault through the Hashio relay (viem) + HCS through the Hedera SDK.
@@ -271,35 +268,11 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
       }
     },
 
+    /** Queues the message in the HCS audit outbox; the worker's drainer submits it in order (lib/chain/outbox.ts). */
     async audit(event: SiegeEvent) {
-      let d: DB;
       try {
-        d = getDb();
+        return enqueueAudit(getDb(), event, "testnet");
       } catch (err) {
-        return { ok: false, reason: reasonOf(err) };
-      }
-      const castle = auditCastle(d, event);
-      if (!castle) return { ok: false, reason: "no_castle" };
-      const message = auditMessage(event, castle.id);
-      const row = (topicId: string, seq: number | null, txId: string | null) => {
-        try {
-          d.insert(schema.auditLog)
-            .values({ topicId, castleId: castle.id, siegeId: event.siegeId || null, type: auditType(event), message, seq, txId, at: nowIso() })
-            .run();
-        } catch (err) {
-          console.warn("[chain] auditLog insert failed", err);
-        }
-      };
-      if (!castle.topicId) {
-        row("none", null, null);
-        return { ok: false, reason: "no_topic" };
-      }
-      try {
-        const res = await hcs.submit(castle.topicId, message);
-        row(castle.topicId, res.seq, res.txId);
-        return { ok: true, topicId: castle.topicId, seq: res.seq };
-      } catch (err) {
-        row(castle.topicId, null, null);
         return { ok: false, reason: reasonOf(err) };
       }
     },

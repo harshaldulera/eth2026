@@ -5,7 +5,14 @@
  * worker/dispatch.ts, and worker.tick() is driven by hand. Uses its own database
  * (DEMO_DATABASE_URL, default file:./data/demo.db, deleted first) and SIEGE_FAST=1.
  *
+ * STUB-SAFE BY DEFAULT. Without --testnet the script forces CHAIN_MODE=stub, ARKIV_MODE=stub and
+ * GUARDIAN_MODE=stub, whatever frontend/.env.local says, so it never sends a Hedera or Arkiv transaction.
+ * A banner at the top says which mode ran.
+ *
  * Flags:
+ *   --testnet          spend REAL testnet HBAR: CHAIN_MODE=testnet (keys from .env.local), ARKIV_MODE as in
+ *                      the env, GUARDIAN_MODE stub unless the env sets it. For the freeze capture against the
+ *                      running app, use `npm run golden` (scripts/golden-run.ts) instead.
  *   --auto-deny        (default) the script denies the first agent's approval itself, with the owner cookie
  *   --wait-for-owner   instead wait (up to 10 min) for someone to decide it on the phone — run the Next
  *                      server on the same DATABASE_URL for that
@@ -36,6 +43,31 @@ import { tick as workerTick } from "@/worker/tick";
 
 const args = new Set(process.argv.slice(2));
 const WAIT_FOR_OWNER = args.has("--wait-for-owner");
+const TESTNET_FLAG = args.has("--testnet");
+
+/**
+ * Pin the modes BEFORE anything reads env(). load-env has already copied .env.local into process.env
+ * (it may say testnet / live), so plain assignment, not ??=. Every mode is read at call time
+ * (env() is reset below, arkivConfig() and guardianMode() read process.env per call).
+ */
+function pinModes() {
+  if (TESTNET_FLAG) {
+    process.env.CHAIN_MODE = "testnet";
+    // The demo is scripted against the deterministic stub guardian; a real 0G model (picked up from
+    // ZG_API_KEY) can legitimately fall to the scripted raids and change the flow. Opt in with GUARDIAN_MODE=0g.
+    process.env.GUARDIAN_MODE ??= "stub";
+  } else {
+    process.env.CHAIN_MODE = "stub";
+    process.env.ARKIV_MODE = "stub";
+    process.env.GUARDIAN_MODE = "stub";
+  }
+}
+
+function banner(lines: string[]) {
+  const width = Math.max(...lines.map((l) => l.length)) + 4;
+  const bar = "#".repeat(width);
+  console.log(`\n${bar}\n${lines.map((l) => `# ${l.padEnd(width - 4)} #`).join("\n")}\n${bar}`);
+}
 const BASE = "http://localhost:3000";
 
 let failures = 0;
@@ -132,11 +164,23 @@ async function main() {
   process.env.SIEGE_FAST = "1";
   // The demo walks the SDK castle through its lifecycle with the dev endpoint (testnet included).
   process.env.SIEGE_DEV_ENDPOINTS ??= "1";
-  // The demo is scripted against the deterministic stub guardian; a real 0G model (picked up from
-  // ZG_API_KEY) can legitimately fall to the scripted raids and change the flow. Opt in with GUARDIAN_MODE=0g.
-  process.env.GUARDIAN_MODE ??= "stub";
+  pinModes();
   resetEnv();
   const e = env();
+  if (TESTNET_FLAG) {
+    banner([
+      "SIEGE DEMO -- --testnet: REAL HEDERA TESTNET TRANSACTIONS",
+      `CHAIN_MODE=${e.CHAIN_MODE}  ARKIV_MODE=${process.env.ARKIV_MODE ?? "stub"}  GUARDIAN_MODE=${process.env.GUARDIAN_MODE}`,
+      "Spends real testnet HBAR from the arena operator and the demo raider.",
+    ]);
+  } else {
+    banner([
+      "SIEGE DEMO -- STUB MODE (safe): no Hedera, Arkiv or 0G transaction is sent",
+      "CHAIN_MODE=stub  ARKIV_MODE=stub  GUARDIAN_MODE=stub  (forced; .env.local ignored)",
+      "Pass --testnet to spend real testnet HBAR instead.",
+    ]);
+  }
+  if (!TESTNET_FLAG && (e.CHAIN_MODE !== "stub" || process.env.ARKIV_MODE !== "stub")) throw new Error("refusing to run: stub modes did not stick");
   const file = e.DATABASE_URL.replace(/^file:/, "");
   if (file !== ":memory:") {
     const abs = path.isAbsolute(file) ? file : path.join(process.cwd(), file);

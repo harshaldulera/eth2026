@@ -2,9 +2,6 @@ import { timingSafeEqual } from "node:crypto";
 import { connection } from "next/server";
 import type { z } from "zod";
 import { DEFAULT_OWNER_SECRET, env, isStub } from "@/lib/config/env";
-import { chain } from "@/lib/chain";
-import type { SiegeEvent } from "@/lib/types";
-import { nowIso } from "@/lib/util/ids";
 
 /**
  * Shared helpers for app/api route handlers. Private folder (`_lib`): not a route.
@@ -93,18 +90,6 @@ export const isOwner = (req: Request) => secretMatches(readCookie(req, OWNER_COO
 /** 401 unless the request carries the owner cookie (POST /api/owner). Returns null when allowed. */
 export function requireOwner(req: Request): Response | null {
   return isOwner(req) ? null : err(401, "owner_key_required", { message: "Only the owner can do that. Enter the owner key first." });
-}
-
-// ─── HCS audit, fire-and-forget ─────────────────────────────────────────────
-
-/** Never blocks or fails a request: chain.audit already swallows errors; this also catches throws. */
-export function auditLater(e: Omit<SiegeEvent, "at">): void {
-  void chain
-    .audit({ ...e, at: nowIso() })
-    .then((r) => {
-      if (!r.ok) console.warn(`[audit] ${e.type} ${e.siegeId || e.castleId}: ${r.reason}`);
-    })
-    .catch((x) => console.warn("[audit] failed:", x instanceof Error ? x.message : x));
 }
 
 export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
