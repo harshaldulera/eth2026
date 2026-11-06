@@ -61,13 +61,23 @@ export function subscribe(fn: (e: StoredSiegeEvent) => void, filter?: { siegeId?
   return () => emitter.off("event", handler);
 }
 
-/** Cross-process read: every event with id > cursor, optionally for one siege. */
-/** The newest `limit` events (optionally of one siege), oldest first. For a feed's first load. */
-export function latestEvents(limit: number, filter?: { siegeId?: string }): StoredSiegeEvent[] {
+/** Feed filter: one siege, or every event touching one castle. */
+export type EventFilter = { siegeId?: string; castleId?: string };
+
+function whereFor(filter?: EventFilter, cursor?: number) {
+  const parts = [];
+  if (cursor !== undefined) parts.push(gt(schema.events.id, cursor));
+  if (filter?.siegeId) parts.push(eq(schema.events.siegeId, filter.siegeId));
+  if (filter?.castleId) parts.push(eq(schema.events.castleId, filter.castleId));
+  return parts.length === 0 ? undefined : parts.length === 1 ? parts[0] : and(...parts);
+}
+
+/** The newest `limit` events (optionally of one siege or castle), oldest first. For a feed's first load. */
+export function latestEvents(limit: number, filter?: EventFilter): StoredSiegeEvent[] {
   return db()
     .select()
     .from(schema.events)
-    .where(filter?.siegeId ? eq(schema.events.siegeId, filter.siegeId) : undefined)
+    .where(whereFor(filter))
     .orderBy(desc(schema.events.id))
     .limit(Math.max(1, Math.min(500, limit)))
     .all()
@@ -83,14 +93,12 @@ export function latestEvents(limit: number, filter?: { siegeId?: string }): Stor
     }));
 }
 
-export function eventsSince(cursor = 0, filter?: { siegeId?: string; limit?: number }): StoredSiegeEvent[] {
-  const where = filter?.siegeId
-    ? and(gt(schema.events.id, cursor), eq(schema.events.siegeId, filter.siegeId))
-    : gt(schema.events.id, cursor);
+/** Cross-process read: every event with id > cursor, optionally for one siege or castle. */
+export function eventsSince(cursor = 0, filter?: EventFilter & { limit?: number }): StoredSiegeEvent[] {
   return db()
     .select()
     .from(schema.events)
-    .where(where)
+    .where(whereFor(filter, cursor))
     .orderBy(asc(schema.events.id))
     .limit(filter?.limit ?? 500)
     .all()

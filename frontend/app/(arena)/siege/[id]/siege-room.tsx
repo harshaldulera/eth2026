@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowLeft, Bot, DoorClosed, DoorOpen, Gift, Loader2, RotateCcw, SendHorizontal, Shield, Wand2 } from "lucide-react";
 import { motion } from "motion/react";
@@ -10,8 +10,8 @@ import type { Castle, FeeSplit as FeeSplitT, Siege, StoredSiegeEvent } from "@/l
 import { MAX_TURNS } from "@/lib/types";
 import { ApiError, api, describeError, type FeeSplitBps } from "@/lib/api/client";
 import { useConfig } from "@/lib/hooks/useConfig";
-import { usePolling } from "@/lib/hooks/usePolling";
-import { useEventFeed } from "@/lib/hooks/useEventFeed";
+import { useSiege, type DemoSiege, type SiegeView } from "@/lib/hooks/useSiege";
+import demoSiege from "@/lib/fixtures/demo-siege.json";
 import { lastOf, parseAttempt } from "@/lib/money/events";
 import { formatAmount, toUnits } from "@/lib/money/format";
 import { voidCause } from "@/lib/money/vault";
@@ -42,8 +42,6 @@ function splitFor(fee: string, bps: FeeSplitBps = { castellan: 8000, pot: 1500, 
   return { castellan: castellan.toString(), pot: (f - castellan - arena).toString(), arena: arena.toString() };
 }
 
-/** The worker will not produce an attempt/release for this siege any more. */
-const settlementDone = (s: Siege) => s.settlement?.state === "failed" || s.settlement?.state === "void";
 
 const REASON_TEXT: Record<string, string> = {
   castle_already_broken: "another raider broke this castle moments before you did",
@@ -62,24 +60,12 @@ const reasonText = (r?: string) => (r ? (REASON_TEXT[r] ?? r.replace(/_/g, " "))
 
 export function SiegeRoom() {
   const { id } = useParams<{ id: string }>();
+  // ?demo=1 replays a recorded break with no network (UI polish, rehearsals, flaky venue Wi-Fi).
+  const demo = useSearchParams().get("demo") === "1" ? (demoSiege as unknown as DemoSiege) : undefined;
+  const view = useSiege(id, { demo });
 
-  // Poll fast while something is about to change (agent turns, chain settlement), stop when final.
-  const [interval, setIntervalMs] = useState(1500);
-  const detail = usePolling(() => api.siege(id), interval, { key: id, enabled: interval > 0 });
-  const siege = detail.data?.siege;
-  const voided = siege?.settlement?.state === "void";
-  const ended = siege ? ENDED.has(siege.status) || voided : false;
-  // Stop waiting once the worker settled, gave up ("failed") or voided the siege.
-  const awaitingChain = Boolean(
-    siege && ended && !siege.free && !settlementDone(siege) && (siege.status === "broken" ? !siege.release : !siege.attempt),
-  );
-  const nextInterval = !siege ? 1500 : awaitingChain ? 1000 : ended ? 0 : siege.agentId ? 1200 : 4000;
-  if (siege && nextInterval !== interval) setIntervalMs(nextInterval);
-
-  const feed = useEventFeed({ siegeId: id, intervalMs: ended && !awaitingChain ? 6000 : 1000 });
-
-  if (detail.error && !detail.data) {
-    const notFound = detail.error instanceof ApiError && detail.error.status === 404;
+  if (view.error && !view.siege) {
+    const notFound = view.error instanceof ApiError && view.error.status === 404;
     return (
       <div className="mx-auto w-full max-w-4xl px-4 py-10">
         {notFound ? (
@@ -89,20 +75,22 @@ export function SiegeRoom() {
             </Link>
           </EmptyState>
         ) : (
-          <ErrorState error={detail.error} onRetry={() => void detail.refresh()} title="Couldn't load the siege" />
+          <ErrorState error={view.error} onRetry={() => void view.refresh()} title="Couldn't load the siege" />
         )}
       </div>
     );
   }
-  if (!detail.data) return <Loading label="Entering the siege room…" />;
+  if (!view.siege || !view.castle) return <Loading label="Entering the siege room…" />;
 
   return (
     <Room
-      siege={detail.data.siege}
-      castle={detail.data.castle}
-      events={feed.events}
-      onSiege={(s) => detail.mutate((d) => (d ? { ...d, siege: s } : d))}
-      refresh={() => void detail.refresh()}
+      siege={view.siege}
+      castle={view.castle}
+      events={view.events}
+      guardianThinking={view.decisionInFlight}
+      mode={view.mode}
+      onSiege={view.setSiege}
+      refresh={() => void view.refresh()}
     />
   );
 }
@@ -111,12 +99,17 @@ function Room({
   siege,
   castle,
   events,
+  guardianThinking,
+  mode,
   onSiege,
   refresh,
 }: {
   siege: Siege;
   castle: Castle;
   events: StoredSiegeEvent[];
+  /** From the event stream: a raider message landed and the guardian has not answered yet. */
+  guardianThinking: boolean;
+  mode: SiegeView["mode"];
   onSiege: (s: Siege) => void;
   refresh: () => void;
 }) {
@@ -150,8 +143,9 @@ function Room({
 
   const showPending = sending && !siege.messages.some((m) => m.role === "raider" && m.turn === sending.turn);
   const lastMsg = siege.messages[siege.messages.length - 1];
-  const agentThinking = agentDriven && !ended && lastMsg?.role === "raider";
-  const thinking = Boolean(sending) || agentThinking;
+  // Every viewer sees the guardian think: the stream says a message landed with no decision yet.
+  // The record-based check covers a stream that is still catching up.
+  const thinking = Boolean(sending) || guardianThinking || (!ended && lastMsg?.role === "raider");
 
   const msgCount = siege.messages.length + (showPending ? 1 : 0);
   useEffect(() => {
@@ -159,7 +153,7 @@ function Room({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [msgCount, thinking, ended]);
 
-  const canSend = !ended && !agentDriven && !sending && siege.turn < MAX_TURNS && siege.status === "in_progress";
+  const canSend = mode !== "demo" && !ended && !agentDriven && !sending && siege.turn < MAX_TURNS && siege.status === "in_progress";
 
   async function send(text: string) {
     const t = text.trim();
@@ -204,6 +198,7 @@ function Room({
             <ArrowLeft className="size-4" /> {castle.name}
           </Link>
           <SiegeStatusBadge status={siege.status} />
+          <LiveDot mode={mode} />
         </div>
         {siege.receipt ? <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} asset={castle.asset} compact /> : null}
       </div>
@@ -304,6 +299,23 @@ function Room({
 
       {ended ? <Outcome siege={siege} castle={castle} events={events} /> : null}
     </div>
+  );
+}
+
+/** Whether this page is streaming, polling, or replaying the recorded demo. */
+function LiveDot({ mode }: { mode: SiegeView["mode"] }) {
+  if (mode === "demo")
+    return (
+      <span className="rounded-full border border-dashed border-gold/50 px-2 py-0.5 text-[11px] text-gold" title="Replaying a recorded siege. Nothing here touches the network.">
+        Demo replay
+      </span>
+    );
+  const live = mode === "live";
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px] text-stone" title={live ? "Streaming events as they happen" : mode === "polling" ? "Stream unavailable, checking every few seconds" : "Connecting…"}>
+      <span className={live ? "size-1.5 animate-pulse rounded-full bg-ember" : "size-1.5 rounded-full bg-stone/60"} aria-hidden />
+      {live ? "Live" : mode === "polling" ? "Polling" : "Connecting"}
+    </span>
   );
 }
 
