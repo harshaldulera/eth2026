@@ -19,6 +19,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { EmptyState, ErrorState, Loading } from "@/components/ui/state";
 import { SiegeStatusBadge, Streak, TIER_DEFENSES, TierBadge } from "@/components/arena/tier";
 import { ProtectedTool, TransportBadge, VaultSetupSteps, VaultStateBadge } from "@/components/arena/vault-state";
+import { ArkivCard } from "@/components/arena/arkiv-card";
 
 /** Fallback until /api/config arrives (the contract default). */
 const DEFAULT_SPLIT_BPS = { castellan: 8000, pot: 1500, arena: 500 };
@@ -97,6 +98,7 @@ function CastleDetailView({ detail, refresh }: { detail: CastleDetail; refresh: 
 
         <aside className="flex flex-col gap-6">
           <SiegeCta castle={c} onRefused={refresh} />
+          <ArkivCard castleId={c.id} />
           <AuditTrail audit={audit} />
           <CloseVault castle={c} onClosed={refresh} />
         </aside>

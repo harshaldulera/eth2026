@@ -130,6 +130,13 @@ export type ArkivReadMeta = { source: "arkiv" | "sqlite"; block?: string; query:
 export type ArkivCastleMeta = { stateKey?: string; identityKey: string; castellan: string; expiresAtMs?: number };
 export type CastleRow = Castle & { arkiv?: ArkivCastleMeta };
 
+export type LiveSiege = { id: string; castleId: string; turn: number; raider: string; agentId: string | null; createdAt: string };
+
+type ArkivEntityInfo = { key: string; owner?: string; readonly?: boolean; expiresAtMs?: number; url: string };
+export type ArkivCastleDetail =
+  | { live: false; castleId: string }
+  | { live: true; castleId: string; listing: ArkivEntityInfo | null; state: ArkivEntityInfo | null; castellan: string; castellanUrl: string; delisted: boolean; block: string };
+
 export type AuditMessage = { seq: number; type: string; siegeId?: string; txId?: string; at: string };
 
 export type CastleDetail = {
@@ -187,6 +194,11 @@ export const api = {
     return request<{ castles: CastleRow[]; arkiv?: ArkivReadMeta }>(`/api/castles${qs ? `?${qs}` : ""}`);
   },
   castle: (id: string) => request<CastleDetail>(`/api/castles/${enc(id)}`),
+
+  /** Sieges in progress, from Arkiv in live mode: the board marks castles already under attack. */
+  liveSieges: () => request<{ sieges: LiveSiege[] }>("/api/arkiv/live-sieges"),
+  /** A castle's two Arkiv entities with their on-chain owner, expiry and explorer links. */
+  arkivCastle: (id: string) => request<ArkivCastleDetail>(`/api/arkiv/castle/${enc(id)}`),
 
   /**
    * Owner-only: close the vault on chain — the pot goes back to the Castellan and every in-flight

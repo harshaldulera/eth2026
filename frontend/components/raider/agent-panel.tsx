@@ -25,14 +25,14 @@ import { AgentStatusPill, BudgetBar, liveStatus } from "./agent-bits";
  *
  * @example <AgentPanel agentId={id} castles={castles} />
  */
-export function AgentPanel({ agentId, castles }: { agentId: string; castles: Castle[] }) {
+export function AgentPanel({ agentId, castles, underSiege }: { agentId: string; castles: Castle[]; underSiege?: Set<string> }) {
   const { data, error, refresh } = usePolling(() => api.agent(agentId), 1500, { key: agentId });
   if (error && !data) return <ErrorState error={error} onRetry={() => void refresh()} title="Couldn't load this agent" />;
   if (!data) return <Loading label="Loading agent…" />;
-  return <AgentPanelView detail={data} castles={castles} refresh={() => void refresh()} />;
+  return <AgentPanelView detail={data} castles={castles} underSiege={underSiege} refresh={() => void refresh()} />;
 }
 
-function AgentPanelView({ detail, castles, refresh }: { detail: AgentDetail; castles: Castle[]; refresh: () => void }) {
+function AgentPanelView({ detail, castles, underSiege, refresh }: { detail: AgentDetail; castles: Castle[]; underSiege?: Set<string>; refresh: () => void }) {
   const { agent: a, approvals, events, sieges } = detail;
   const status = liveStatus(a, approvals);
   const pending = approvals.find((x) => x.status === "pending");
@@ -130,6 +130,7 @@ function AgentPanelView({ detail, castles, refresh }: { detail: AgentDetail; cas
                 {openCastles.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} — {c.tier}
+                    {underSiege?.has(c.id) ? " · under siege right now" : ""}
                   </option>
                 ))}
               </select>
