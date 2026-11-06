@@ -1,13 +1,13 @@
 "use client";
 
-import { Suspense, useCallback, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { Activity, Castle as CastleIcon } from "lucide-react";
-import type { Castle } from "@/lib/types";
+import type { Castle, StoredSiegeEvent } from "@/lib/types";
 import { api, type CastleRow } from "@/lib/api/client";
 import { usePolling, useNow } from "@/lib/hooks/usePolling";
-import { useEventFeed } from "@/lib/hooks/useEventFeed";
+import { useLiveEvents, type LiveEvents } from "@/lib/hooks/useLiveEvents";
 import { toUnits } from "@/lib/money/format";
 import { vaultStateOf } from "@/lib/money/vault";
 import { Amount } from "@/components/money/amount";
@@ -49,6 +49,25 @@ function ArenaBoard() {
   );
   const live = usePolling(() => api.liveSieges(), 5000);
   const now = useNow(30_000);
+
+  // Live events: the ticker, plus an early refetch when something on the board changed. Castles are
+  // read from Arkiv, which the worker updates a few seconds after the event, so refetch twice.
+  const refetchBoard = useRef<() => void>(() => {});
+  const refreshLive = live.refresh;
+  useEffect(() => {
+    refetchBoard.current = () => {
+      void refresh();
+      void refreshLive();
+    };
+  }, [refresh, refreshLive]);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const onEvent = useCallback((e: StoredSiegeEvent) => {
+    if (!BOARD_EVENTS.has(e.type)) return;
+    timers.current.forEach(clearTimeout);
+    timers.current = [setTimeout(() => refetchBoard.current(), 800), setTimeout(() => refetchBoard.current(), 7000)];
+  }, []);
+  const feed = useLiveEvents({ tail: 60, limit: 60, onEvent });
 
   const castles = useMemo(() => data?.castles ?? [], [data]);
   const underSiege = useMemo(() => new Set((live.data?.sieges ?? []).map((s) => s.castleId)), [live.data]);
@@ -107,7 +126,7 @@ function ArenaBoard() {
           <ArkivBar meta={data?.arkiv} className="mt-4" />
         </section>
 
-        <EventTicker castles={castles} />
+        <EventTicker castles={castles} feed={feed} />
       </div>
     </div>
   );
@@ -156,8 +175,11 @@ function BoardStats({ castles, loading }: { castles: Castle[]; loading: boolean 
   );
 }
 
-function EventTicker({ castles }: { castles: Castle[] }) {
-  const { events, error, ready } = useEventFeed({ intervalMs: 2000, limit: 60, tail: true });
+/** Events that change what the board shows. */
+const BOARD_EVENTS = new Set(["start", "end", "attempt", "release", "vault_state"]);
+
+function EventTicker({ castles, feed }: { castles: Castle[]; feed: LiveEvents }) {
+  const { events, error, ready, mode } = feed;
   const now = useNow(5000);
   const names = useMemo(() => new Map(castles.map((c) => [c.id, c.name])), [castles]);
   const shown = useMemo(
@@ -166,7 +188,16 @@ function EventTicker({ castles }: { castles: Castle[] }) {
   );
   return (
     <Card className="h-fit lg:sticky lg:top-20">
-      <CardHeader title="Live" icon={<Activity />} action={<span className="size-1.5 animate-pulse rounded-full bg-ember" aria-hidden />} />
+      <CardHeader
+        title="Live"
+        icon={<Activity />}
+        action={
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-stone" title={mode === "live" ? "Streaming" : mode === "polling" ? "Stream unavailable, polling" : "Connecting…"}>
+            {mode === "live" ? null : mode === "polling" ? "polling" : "connecting"}
+            <span className={mode === "live" ? "size-1.5 animate-pulse rounded-full bg-ember" : "size-1.5 rounded-full bg-stone/60"} aria-hidden />
+          </span>
+        }
+      />
       <CardBody className="max-h-[560px] overflow-y-auto">
         {!ready ? (
           <div className="space-y-3">

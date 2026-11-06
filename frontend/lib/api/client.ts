@@ -227,11 +227,12 @@ export const api = {
     request<MessageResponse>(`/api/siege/${enc(id)}/message`, { method: "POST", json: { text } }),
 
   /** `tail` (first load only): just the newest N events and the cursor to continue from. */
-  events: (q: { cursor?: number; siegeId?: string; tail?: number } = {}) => {
+  events: (q: { cursor?: number; siegeId?: string; castleId?: string; tail?: number } = {}) => {
     const p = new URLSearchParams();
     if (q.tail && !q.cursor) p.set("tail", String(q.tail));
     else p.set("cursor", String(q.cursor ?? 0));
     if (q.siegeId) p.set("siegeId", q.siegeId);
+    if (q.castleId) p.set("castleId", q.castleId);
     return request<EventsResponse>(`/api/events?${p}`);
   },
 
