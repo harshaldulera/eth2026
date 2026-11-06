@@ -15,3 +15,6 @@ export function transportFor(castleId: string): GuardianTransport {
   void castleId;
   return hosted;
 }
+
+/** What the verifier needs from the hosted runtime, without lib/siege importing lib/guardian. */
+export { guardianMode, PROTECTED_TOOL, systemPrompt } from "@/lib/guardian";
