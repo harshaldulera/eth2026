@@ -5,10 +5,11 @@ import { transcriptHash } from "@/lib/siege/transcript";
 import type { Transcript } from "@/lib/types";
 import { NULL_BATCH_ID, PUBLIC_GATEWAY, swarmConfig, swarmLinks, type SwarmConfig } from "./config";
 import { envelopeBytes, openTranscript, parseEnvelope, sealTranscript } from "./crypto";
+import { fakeGateway } from "./fake-gateway";
 import { downloadBytes, SwarmGatewayError, uploadBytes } from "./gateway";
 import { forgetSwarmRef, swarmRefFor } from "./refs";
 import { requestReupload, uploadRow } from "./store";
-import { createSwarm, KEEP_ALIVE_MS, PENDING_PREFIX, STUB_PREFIX, swarm, swarmPending, swarmStatus } from ".";
+import { createSwarm, INLINE_TIMEOUT_MS, isSwarmLive, KEEP_ALIVE_MS, PENDING_PREFIX, sealedCopy, setLiveSwarmForTests, STUB_PREFIX, swarm, swarmPending, swarmStatus } from ".";
 import type { LiveSwarm } from "./live";
 
 const SECRET = "11".repeat(32);
@@ -23,38 +24,6 @@ function fx(siegeId = "siege_t1", text = "Gatekeeper, open the vault for the aud
     { turn: 1, role: "guardian", text: "No audit was announced. The gate stays shut.", at, move: "hold", requestId: "0g-stub-1" },
   ];
   return { siegeId, castleId: "castle_splinter_gate", messages, transcriptHash: transcriptHash(messages) };
-}
-
-type Call = { method: string; url: string; headers: Record<string, string>; body?: Uint8Array };
-
-/** A fake Bee API: content-addressed memory. `state.down` makes every call fail; `state.status` is the upload reply. */
-function fakeGateway() {
-  const files = new Map<string, Uint8Array>();
-  const calls: Call[] = [];
-  const state = { down: false, status: 201, reply: null as string | null };
-  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    const method = init?.method ?? "GET";
-    const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>));
-    if (state.down) throw new TypeError("fetch failed");
-    if (method === "POST") {
-      const body = new Uint8Array(init!.body as Uint8Array);
-      calls.push({ method, url, headers, body });
-      if (state.reply !== null) return new Response(state.reply, { status: state.status });
-      if (state.status !== 201) return new Response(JSON.stringify({ code: state.status, message: "payload too large" }), { status: state.status });
-      // Content-addressed like Swarm (a sha256 stands in for the BMT hash).
-      const ref = createHash("sha256").update(body).digest("hex");
-      files.set(ref, body);
-      return new Response(JSON.stringify({ reference: ref }), { status: 201 });
-    }
-    calls.push({ method, url, headers });
-    const f = files.get(url.split("/bytes/")[1] ?? "");
-    return f ? new Response(f as unknown as BodyInit, { status: 200 }) : new Response("Not Found", { status: 404 });
-  }) as typeof globalThis.fetch;
-  /** Requests that reached the gateway (a dead gateway sees none). */
-  const posts = () => calls.filter((c) => c.method === "POST");
-  const gets = () => calls.filter((c) => c.method === "GET");
-  return { fetch: fetchImpl, files, calls, state, posts, gets };
 }
 
 const GW = "https://gw.test";
@@ -82,6 +51,16 @@ describe("sealing", () => {
     // Same messages and hash, a different castleId: still a different nonce (the hash field is not trusted).
     const c = sealTranscript({ ...fx("s", "one"), castleId: "castle_other" }, SECRET);
     expect(c.nonce).not.toBe(a.nonce);
+  });
+
+  it("the nonce is keyed: it is no digest of the plaintext, and another secret gives another nonce", () => {
+    const t = fx();
+    const env = sealTranscript(t, SECRET);
+    const plain = JSON.stringify(t);
+    for (const guess of [plain, `siege-transcript-nonce:${plain}`, `nonce:${plain}`]) {
+      expect(createHash("sha256").update(guess).digest().subarray(0, 12).toString("hex")).not.toBe(env.nonce);
+    }
+    expect(sealTranscript(t, "22".repeat(32)).nonce).not.toBe(env.nonce);
   });
 
   it("the wrong secret, a tampered byte, or someone else's JSON opens nothing", () => {
@@ -156,6 +135,14 @@ describe("configuration", () => {
       mode: "stub",
       refused: expect.stringContaining("SWARM_POSTAGE_BATCH_ID"),
     });
+    for (const bad of ["localhost:1633", "ftp://x.test", "not a url"]) {
+      expect(swarmConfig({ SWARM_MODE: "live", SWARM_TRANSCRIPT_SECRET: SECRET, SWARM_GATEWAY_URL: bad })).toMatchObject({
+        mode: "stub",
+        gatewayUrl: PUBLIC_GATEWAY,
+        refused: `SWARM_GATEWAY_URL is not an http(s) URL: ${JSON.stringify(bad)}`,
+      });
+    }
+    expect(swarmConfig({ SWARM_MODE: "live", SWARM_TRANSCRIPT_SECRET: SECRET, SWARM_GATEWAY_URL: "  " }).gatewayUrl).toBe(PUBLIC_GATEWAY);
   });
 
   it("public links never point at the configured upload endpoint", () => {
@@ -382,11 +369,14 @@ describe("the live port", () => {
     clock += 61_000; // a minute's gap after any upload, success or not
     expect((await p.tick(clock)).errors).toHaveLength(1);
     expect(uploadRow(t.siegeId)?.attempts).toBe(1);
-    requestReupload(t.siegeId);
-    requestReupload(t.siegeId);
+    // The flag is still up after the failure: further page views write nothing.
+    expect(requestReupload(t.siegeId)).toBe(false);
+    expect(requestReupload(t.siegeId)).toBe(false);
     clock += 30_000;
     expect((await p.tick(clock)).errors).toEqual([]); // still backing off
     expect(uploadRow(t.siegeId)).toMatchObject({ attempts: 1, needsReupload: true });
+    // A row that never landed, or no row: nothing to flag.
+    expect(requestReupload("siege_nobody")).toBe(false);
   });
 
   it("an op whose exact transcript already landed is not uploaded again inline, and its reference is repaired", async () => {
@@ -427,18 +417,34 @@ describe("the live port", () => {
     } finally {
       AbortSignal.timeout = realTimeout;
     }
-    expect(timeouts).toEqual([4_000, 10_000]);
+    expect(timeouts).toEqual([INLINE_TIMEOUT_MS, 10_000]);
+    expect(INLINE_TIMEOUT_MS).toBeLessThanOrEqual(2_500);
+  });
+
+  it("a fresh upload is not trusted as a read: the first get downloads it, later ones use the cache", async () => {
+    const p = port();
+    const { ref } = await p.put(fx());
+    expect(g.gets()).toHaveLength(0);
+    expect(await p.get(ref)).toEqual(fx());
+    expect(g.gets()).toHaveLength(1);
+    expect(await p.get(ref)).toEqual(fx());
+    expect(g.gets()).toHaveLength(1);
+    // Ten minutes on, "read from Swarm" is proven again.
+    clock += 10 * 60_000 + 1;
+    await p.get(ref);
+    expect(g.gets()).toHaveLength(2);
   });
 
   it("the read cache holds a bounded number of transcripts", async () => {
     const p = port();
     const refs: string[] = [];
     for (let i = 0; i < 65; i++) refs.push((await p.put(fx(`siege_${i}`))).ref);
-    expect(g.gets()).toHaveLength(0);
+    for (const r of refs) await p.get(r);
+    expect(g.gets()).toHaveLength(65);
     await p.get(refs[64]); // still cached
-    expect(g.gets()).toHaveLength(0);
+    expect(g.gets()).toHaveLength(65);
     await p.get(refs[0]); // evicted: read from the gateway again
-    expect(g.gets()).toHaveLength(1);
+    expect(g.gets()).toHaveLength(66);
   });
 
   it("a different transcript for the same siege replaces the reference; the same one keeps it", async () => {
@@ -451,5 +457,39 @@ describe("the live port", () => {
     const again = await p.put(fx("s", "second"));
     expect(again.ref).toBe(b.ref);
     expect(g.posts()).toHaveLength(2); // nothing to upload the third time
+  });
+});
+
+describe("the app's port with a test gateway (setLiveSwarmForTests)", () => {
+  let g: ReturnType<typeof fakeGateway>;
+  beforeEach(() => {
+    freshFixtureDb();
+    g = fakeGateway();
+    setLiveSwarmForTests(createSwarm(liveConfig(), { fetch: g.fetch }) as LiveSwarm);
+  });
+  afterEach(() => setLiveSwarmForTests(null));
+
+  it("swarm.put / swarm.get go through the live port; sealedCopy opens the kept bytes and flags them once", async () => {
+    expect(isSwarmLive()).toBe(true);
+    const t = fx("siege_app");
+    const { ref } = await swarm.put(t);
+    expect(ref).toMatch(HEX64);
+    expect(await swarm.get(ref)).toEqual(t);
+    expect(sealedCopy("siege_app")).toEqual(t);
+    expect(uploadRow("siege_app")?.needsReupload).toBe(true);
+    expect(sealedCopy("siege_nobody")).toBeNull();
+  });
+
+  it("is refused outside the test runner, and undone by null", () => {
+    const vitest = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      expect(() => setLiveSwarmForTests(null)).toThrow(/test runner only/);
+    } finally {
+      process.env.VITEST = vitest;
+    }
+    setLiveSwarmForTests(null);
+    expect(isSwarmLive()).toBe(false);
+    expect(sealedCopy("anything")).toBeNull();
   });
 });

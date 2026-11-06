@@ -16,8 +16,11 @@ import { STUB_PAYMENT_HEADER } from "@/lib/pay";
 import { siege } from "@/lib/siege";
 import { voidHeadline } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
-import { recordSwarmRef } from "@/lib/swarm/refs";
-import { rememberUpload, touchWorker } from "@/lib/swarm/store";
+import { createSwarm, NULL_BATCH_ID, setLiveSwarmForTests } from "@/lib/swarm";
+import { fakeGateway } from "@/lib/swarm/fake-gateway";
+import type { LiveSwarm } from "@/lib/swarm/live";
+import { recordSwarmRef, swarmRefFor } from "@/lib/swarm/refs";
+import { rememberUpload, touchWorker, uploadRow } from "@/lib/swarm/store";
 import { transitionVault } from "@/lib/vault/state";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { SDK_FIXTURE_CASTLE, sdkFixtureCastleRow } from "@/lib/fixtures/castles";
@@ -258,7 +261,7 @@ describe("tampering and odd shapes", () => {
 
   it("a Swarm reference that cannot be read is a failed transcript check", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
-    db().run(`UPDATE swarm_refs SET ref = 'swarm-stub:${"0".repeat(64)}' WHERE siege_id = '${id}'`);
+    recordSwarmRef(id, `swarm-stub:${"0".repeat(64)}`);
     const r = await buildReplay(id);
     expect(r!.transcript.source).toBe("database");
     expect(check(r, "transcript")?.state).toBe("fail");
@@ -307,6 +310,84 @@ describe("tampering and odd shapes", () => {
     expect(transcriptCheck({ ref, source: "swarm-copy", ended: true, sealed: null, workerAlive: false })).toMatchObject({
       state: "fail",
       detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, Swarm did not answer for it, and no worker is running to put the sealed copy back`,
+    });
+  });
+
+  describe("live Swarm, end to end through the replay route (fake gateway)", () => {
+    let gw: ReturnType<typeof fakeGateway>;
+    let port: LiveSwarm;
+    beforeEach(() => {
+      gw = fakeGateway();
+      port = createSwarm({ mode: "live", gatewayUrl: "https://gw.test", batchId: NULL_BATCH_ID, secret: "44".repeat(32) }, { fetch: gw.fetch }) as LiveSwarm;
+      setLiveSwarmForTests(port);
+    });
+    afterEach(() => setLiveSwarmForTests(null));
+
+    it("an op that ends uploads sealed bytes; the replay downloads them, passes, and links the public gateway", async () => {
+      const id = await free(WOOD, WOODEN_BREAK);
+      const ref = swarmRefFor(id)!;
+      expect(ref).toMatch(/^[0-9a-f]{64}$/);
+      expect(gw.posts()).toHaveLength(1);
+      expect(Buffer.from(gw.posts()[0].body!).toString("utf8")).not.toContain(WOODEN_BREAK[0]);
+      const r = await replay(id);
+      expect(r.transcript).toMatchObject({ source: "swarm", ref, url: `https://api.gateway.ethswarm.org/bytes/${ref}`, matches: true });
+      expect(check(r, "transcript")).toMatchObject({ state: "pass", label: "Transcript read from Swarm", href: `https://api.gateway.ethswarm.org/bytes/${ref}` });
+      expect(check(r, "hash")?.state).toBe("pass");
+      expect(gw.gets().map((c) => c.url)).toEqual([`https://gw.test/bytes/${ref}`]);
+    });
+
+    it("an edited database message is caught: Swarm keeps what was said", async () => {
+      const id = await free(WOOD, WOODEN_BREAK);
+      db().update(schema.messages).set({ text: "I never said that." }).where(and(eq(schema.messages.siegeId, id), eq(schema.messages.turn, 2), eq(schema.messages.role, "raider"))).run();
+      const r = await replay(id);
+      expect(r.transcript.source).toBe("swarm");
+      expect(r.turns[1].raider?.text).toBe(WOODEN_BREAK[1]);
+      expect(check(r, "hash")?.state).toBe("pass");
+    });
+
+    it("Swarm stops serving the reference: the sealed copy is shown, flagged once, and the check says whether a worker will put it back", async () => {
+      const id = await free(WOOD, WOODEN_BREAK);
+      const ref = swarmRefFor(id)!;
+      gw.files.clear();
+      let r = await replay(id);
+      expect(r.transcript).toMatchObject({ source: "swarm-copy", ref, matches: true });
+      expect(r.turns).toHaveLength(3);
+      expect(check(r, "transcript")).toMatchObject({ state: "fail", label: "Transcript read from the sealed copy kept for Swarm" });
+      expect(check(r, "transcript")?.href).toBeUndefined();
+      expect(uploadRow(id)?.needsReupload).toBe(true);
+      // The worker made a pass: it is putting the copy back.
+      touchWorker();
+      r = await replay(id);
+      expect(check(r, "transcript")?.state).toBe("pending");
+      // Its next pass (a minute after the last upload) re-uploads: same bytes, same reference.
+      const pass = await port.tick(Date.now() + 61_000);
+      expect(pass.refreshed).toEqual([{ siegeId: id, ref, was: ref }]);
+      expect(swarmRefFor(id)).toBe(ref);
+      expect(uploadRow(id)?.needsReupload).toBe(false);
+      // The replay reads Swarm again (a fresh port: the old one remembers the miss for 30 s).
+      setLiveSwarmForTests(createSwarm({ mode: "live", gatewayUrl: "https://gw.test", batchId: NULL_BATCH_ID, secret: "44".repeat(32) }, { fetch: gw.fetch }) as LiveSwarm);
+      r = await replay(id);
+      expect(r.transcript.source).toBe("swarm");
+      expect(check(r, "transcript")?.state).toBe("pass");
+    });
+
+    it("the gateway is down when the op ends: pending (no reference), then the worker lands it and the replay reads Swarm", async () => {
+      gw.state.down = true;
+      const id = await free(WOOD, WOODEN_BREAK);
+      expect(swarmRefFor(id)).toBeUndefined();
+      let r = await replay(id);
+      expect(r.transcript.source).toBe("database");
+      expect(check(r, "transcript")).toMatchObject({ state: "na", detail: "sealed for Swarm but never uploaded, and no worker is running to retry it" });
+      touchWorker();
+      r = await replay(id);
+      expect(check(r, "transcript")).toMatchObject({ state: "pending", detail: "sealed, upload to Swarm pending (the worker retries it)" });
+      gw.state.down = false;
+      const pass = await port.tick(Date.now() + 61_000);
+      expect(pass.uploaded).toEqual([{ siegeId: id, ref: swarmRefFor(id) }]);
+      r = await replay(id);
+      expect(r.transcript.source).toBe("swarm");
+      expect(check(r, "transcript")?.state).toBe("pass");
+      expect(check(r, "hash")?.state).toBe("pass");
     });
   });
 

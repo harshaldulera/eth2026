@@ -22,8 +22,12 @@ import { markFailed, markUploaded, pendingUploads, rememberUpload, staleUploads,
 import { STUB_PREFIX, stubRead } from "./stub";
 
 export const PENDING_PREFIX = "swarm-pending:";
-/** How long the op-ending request waits for the gateway before leaving the upload to the worker. */
-export const INLINE_TIMEOUT_MS = 4_000;
+/**
+ * How long the op-ending request waits for the gateway before leaving the upload to the worker.
+ * Inline at all because a normal upload takes ~0.5 s, and then the siege entity carries its
+ * reference from its first write; the worker only re-queues it when this budget runs out.
+ */
+export const INLINE_TIMEOUT_MS = 2_500;
 /** How long a replay waits for a download. */
 export const READ_TIMEOUT_MS = 5_000;
 /** Re-upload every transcript this often: the public gateway's stamps last about a day. */
@@ -98,7 +102,6 @@ export function createLiveSwarm(config: SwarmConfig, deps: LiveDeps = {}): LiveS
       const hash = transcript.transcriptHash.toLowerCase();
       if (landed && known.transcriptHash === hash) {
         // Already on Swarm with these exact bytes: nothing to upload; the keep-alive refreshes it.
-        remember(landed, transcript);
         recordSwarmRef(transcript.siegeId, landed); // repairs a missing swarm_refs row
         return { ref: landed };
       }
@@ -108,9 +111,8 @@ export function createLiveSwarm(config: SwarmConfig, deps: LiveDeps = {}): LiveS
       // A different transcript for this siege: until it lands, no reference beats a stale one.
       if (known && known.transcriptHash !== hash) forgetSwarmRef(transcript.siegeId);
       try {
-        const ref = await send(transcript.siegeId, body, INLINE_TIMEOUT_MS);
-        remember(ref, transcript);
-        return { ref };
+        // Not cached on purpose: "read from Swarm" on a replay must come from a real download.
+        return { ref: await send(transcript.siegeId, body, INLINE_TIMEOUT_MS) };
       } catch (e) {
         markFailed(transcript.siegeId, short(e), now());
         return { ref: PENDING_PREFIX + transcript.siegeId };

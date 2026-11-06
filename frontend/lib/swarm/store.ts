@@ -17,16 +17,14 @@ const DDL = `
     created_at INTEGER NOT NULL, uploaded_at INTEGER, tried_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
     needs_reupload INTEGER NOT NULL DEFAULT 0);
   CREATE TABLE IF NOT EXISTS swarm_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`;
-const altered = new WeakSet<object>();
+const checked = new WeakSet<object>();
 function sql() {
   const s = rawSqlite(DDL);
-  if (!altered.has(s)) {
-    try {
-      s.exec("ALTER TABLE swarm_uploads ADD COLUMN needs_reupload INTEGER NOT NULL DEFAULT 0");
-    } catch {
-      // column already there
-    }
-    altered.add(s);
+  if (!checked.has(s)) {
+    // A dev database from before needs_reupload existed (this branch only): add the column.
+    const cols = s.prepare("PRAGMA table_info(swarm_uploads)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "needs_reupload")) s.exec("ALTER TABLE swarm_uploads ADD COLUMN needs_reupload INTEGER NOT NULL DEFAULT 0");
+    checked.add(s);
   }
   return s;
 }
@@ -93,11 +91,13 @@ export function markFailed(siegeId: string, error: string, now = Date.now()): vo
 
 /**
  * Swarm stopped answering for a landed reference: have the worker re-upload it in its next pass,
- * even past the week horizon. Only a flag: a public page view must not reset the worker's
- * backoff or rewrite when the transcript was sealed or last uploaded.
+ * even past the week horizon. Only a flag, written once: a public page view must not reset the
+ * worker's backoff, rewrite when the transcript was sealed or last uploaded, or write at all while
+ * the flag is already up. Returns whether this call raised it.
  */
-export function requestReupload(siegeId: string): void {
-  sql().prepare("UPDATE swarm_uploads SET needs_reupload = 1 WHERE siege_id = ? AND ref IS NOT NULL").run(siegeId);
+export function requestReupload(siegeId: string): boolean {
+  const r = sql().prepare("UPDATE swarm_uploads SET needs_reupload = 1 WHERE siege_id = ? AND ref IS NOT NULL AND needs_reupload = 0").run(siegeId) as { changes: number };
+  return r.changes > 0;
 }
 
 export function uploadRow(siegeId: string): UploadRow | null {

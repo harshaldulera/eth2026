@@ -28,6 +28,15 @@ export type SwarmConfig = {
 
 const HEX64 = /^[0-9a-fA-F]{64}$/;
 
+function isHttpUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function swarmConfig(e: Record<string, string | undefined> = process.env): SwarmConfig {
   const wantsLive = (e.SWARM_MODE ?? "stub").trim().toLowerCase() === "live";
   const rawSecret = (e.SWARM_TRANSCRIPT_SECRET ?? "").trim().replace(/^0x/, "");
@@ -35,10 +44,13 @@ export function swarmConfig(e: Record<string, string | undefined> = process.env)
   const rawBatch = (e.SWARM_POSTAGE_BATCH_ID ?? "").trim().replace(/^0x/, "");
   const batchOk = rawBatch === "" || HEX64.test(rawBatch);
   const batchId = HEX64.test(rawBatch) ? rawBatch.toLowerCase() : NULL_BATCH_ID;
-  const gatewayUrl = ((e.SWARM_GATEWAY_URL ?? "").trim() || PUBLIC_GATEWAY).replace(/\/+$/, "");
+  const rawGateway = (e.SWARM_GATEWAY_URL ?? "").trim();
+  const gatewayOk = rawGateway === "" || isHttpUrl(rawGateway);
+  const gatewayUrl = (gatewayOk && rawGateway ? rawGateway : PUBLIC_GATEWAY).replace(/\/+$/, "");
   let refused: string | undefined;
   if (wantsLive && !secret) refused = "SWARM_TRANSCRIPT_SECRET is missing or not 32 bytes of hex (openssl rand -hex 32)";
   else if (wantsLive && !batchOk) refused = "SWARM_POSTAGE_BATCH_ID is set but not a 64-hex batch id (leave it unset for the public gateway)";
+  else if (wantsLive && !gatewayOk) refused = `SWARM_GATEWAY_URL is not an http(s) URL: ${JSON.stringify(rawGateway)}`;
   else if (wantsLive && e.VITEST) refused = "the test runner never uploads";
   return { mode: wantsLive && !refused ? "live" : "stub", gatewayUrl, batchId, secret, refused };
 }

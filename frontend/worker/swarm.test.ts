@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 process.env.SIEGE_FAST = "1";
 import { arkiv } from "@/lib/arkiv";
@@ -6,6 +5,7 @@ import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { siege } from "@/lib/siege";
 import { createSwarm, NULL_BATCH_ID } from "@/lib/swarm";
+import { fakeGateway } from "@/lib/swarm/fake-gateway";
 import type { LiveSwarm } from "@/lib/swarm/live";
 import { swarmRefFor } from "@/lib/swarm/refs";
 import type { PaidReceipt } from "@/lib/types";
@@ -15,23 +15,7 @@ import { swarmTick } from "./swarm";
 const SECRET = "33".repeat(32);
 const paid = (): Omit<PaidReceipt, "siegeId"> => ({ free: false, txId: `stub:x402@${Date.now()}`, payer: "0.0.raider", amount: "50000000", asset: "0.0.0", network: "hedera:testnet", hashscanUrl: "#stub", stub: true });
 
-/** A content-addressed fake gateway that can be switched off. */
-function gateway() {
-  const files = new Map<string, Uint8Array>();
-  const state = { down: false };
-  const f = (async (input: string | URL | Request, init?: RequestInit) => {
-    if (state.down) throw new TypeError("fetch failed");
-    if ((init?.method ?? "GET") === "POST") {
-      const body = new Uint8Array(init!.body as Uint8Array);
-      const ref = createHash("sha256").update(body).digest("hex"); // content-addressed, like Swarm
-      files.set(ref, body);
-      return new Response(JSON.stringify({ reference: ref }), { status: 201 });
-    }
-    const hit = files.get(String(input).split("/bytes/")[1] ?? "");
-    return hit ? new Response(hit as unknown as BodyInit) : new Response("Not Found", { status: 404 });
-  }) as typeof globalThis.fetch;
-  return { fetch: f, state };
-}
+const gateway = fakeGateway;
 
 describe("the worker's Swarm loop", () => {
   let clock: number;

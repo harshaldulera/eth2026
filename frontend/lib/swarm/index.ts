@@ -16,7 +16,10 @@ import { createLiveSwarm, type LiveDeps, type LiveSwarm } from "./live";
 import { requestReupload, uploadRef, uploadStats, workerSeenAt } from "./store";
 import { swarmStub } from "./stub";
 
-export { isSwarmLive, swarmConfig, swarmLinks, NULL_BATCH_ID, PUBLIC_GATEWAY } from "./config";
+export { swarmConfig, swarmLinks, NULL_BATCH_ID, PUBLIC_GATEWAY } from "./config";
+
+/** This process reads and writes live Swarm references (by env, or a test port). */
+export const isSwarmLive = () => liveSwarm() !== null;
 export { REFERENCE_RE } from "./gateway";
 export { INLINE_TIMEOUT_MS, KEEP_ALIVE_MS, PENDING_PREFIX } from "./live";
 export { STUB_PREFIX } from "./stub";
@@ -28,9 +31,20 @@ export function createSwarm(config: SwarmConfig = swarmConfig(), deps: LiveDeps 
 }
 
 let live: { key: string; port: LiveSwarm } | null = null;
+const g = globalThis as unknown as { __swarmTestPort?: LiveSwarm | null };
+
+/**
+ * Tests only: make `liveSwarm()` (and so `swarm`, `sealedCopy`, the replay) use this port, built
+ * with a fake gateway, although the test runner never goes live by env. null undoes it.
+ */
+export function setLiveSwarmForTests(port: LiveSwarm | null): void {
+  if (!process.env.VITEST) throw new Error("setLiveSwarmForTests is for the test runner only");
+  g.__swarmTestPort = port;
+}
 
 /** The live port for the current env, built once per configuration; null in stub mode. */
 export function liveSwarm(): LiveSwarm | null {
+  if (g.__swarmTestPort) return g.__swarmTestPort;
   const c = swarmConfig();
   if (c.mode !== "live") return null;
   const key = `${c.gatewayUrl}|${c.batchId}|${c.secret}`;

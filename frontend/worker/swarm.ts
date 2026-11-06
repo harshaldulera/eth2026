@@ -17,10 +17,11 @@ import { log } from "./log";
 const EVERY_MS = 60_000;
 let last = 0;
 
-/** `port` is injectable for tests; the worker uses the live port for the current env. */
-export async function swarmTick(now = Date.now(), port: LiveSwarm | null = liveSwarm()): Promise<void> {
+/** `injected` is for tests; the worker uses the live port for the current env (resolved after the throttle). */
+export async function swarmTick(now = Date.now(), injected?: LiveSwarm | null): Promise<void> {
   if (now - last < EVERY_MS) return;
   last = now;
+  const port = injected === undefined ? liveSwarm() : injected;
   if (!port) return;
   const r = await port.tick(now);
   for (const u of r.uploaded) log.ok(`swarm: uploaded ${u.siegeId} ${u.ref}`);

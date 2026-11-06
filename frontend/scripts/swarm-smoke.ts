@@ -14,7 +14,7 @@
 import "@/lib/config/load-env";
 import { swarmConfig, swarmLinks } from "@/lib/swarm/config";
 import { envelopeBytes, openTranscript, parseEnvelope, sealTranscript } from "@/lib/swarm/crypto";
-import { downloadBytes, uploadBytes } from "@/lib/swarm/gateway";
+import { downloadBytes, REFERENCE_RE, uploadBytes } from "@/lib/swarm/gateway";
 import { transcriptHash } from "@/lib/siege/transcript";
 import type { Transcript } from "@/lib/types";
 
@@ -53,6 +53,7 @@ async function main() {
   const secret = c.secret!;
   const readOnly = process.argv.indexOf("--read");
   let ref = readOnly >= 0 ? process.argv[readOnly + 1] : undefined;
+  if (readOnly >= 0 && !(ref && REFERENCE_RE.test(ref))) throw new Error("usage: npm run swarm:smoke -- --read <64-hex reference>");
 
   if (!ref) {
     const siegeId = `smoke_${Date.now().toString(36)}`;

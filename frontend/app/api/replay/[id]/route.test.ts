@@ -75,7 +75,7 @@ describe("GET /api/replay/[id]", () => {
     // And lib/replay's recomputed evidence rides along in `verify`.
     const v = r.data.verify;
     expect(v?.siege.id).toBe(id);
-    expect(v?.transcript.source).toMatch(/^(swarm|swarm-stub|database)$/);
+    expect(v?.transcript.source).toMatch(/^(swarm|swarm-copy|swarm-stub|database)$/);
     expect(v?.checks.length).toBeGreaterThan(0);
     expect(v?.checks.every((c) => ["pass", "fail", "pending", "na"].includes(c.state))).toBe(true);
     expect(v?.turns.map((t) => t.turn)).toEqual([1, 2, 3]);

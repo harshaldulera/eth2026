@@ -18,11 +18,11 @@ The field is `swarmRef` on the `siege` entity: the bare 64-hex Swarm reference. 
 
 _Filled at the freeze with a live op: the entity key on the Rabdi explorer and the `swarmRef` it carries, openable at `https://api.gateway.ethswarm.org/bytes/<ref>` and `https://bzz.limo/bytes/<ref>`._
 
-Until then, a transcript uploaded by `npm run swarm:smoke` on 7 Nov 2026, 19:50 UTC (a fixture op, sealed exactly as a real one):
+Until then, a transcript uploaded by `npm run swarm:smoke` on 7 Nov 2026, 20:31 UTC (a fixture op, sealed exactly as a real one):
 
-- reference `7a2b910385997678d19bca05fc51a26510540234dea5a9f6a580c8a8e82f1908`
-- https://api.gateway.ethswarm.org/bytes/7a2b910385997678d19bca05fc51a26510540234dea5a9f6a580c8a8e82f1908
-- https://bzz.limo/bytes/7a2b910385997678d19bca05fc51a26510540234dea5a9f6a580c8a8e82f1908
+- reference `186fea9a04704df0acfdedf7280b24109be00d5a9208aa343d94e20b53d3f415`
+- https://api.gateway.ethswarm.org/bytes/186fea9a04704df0acfdedf7280b24109be00d5a9208aa343d94e20b53d3f415
+- https://bzz.limo/bytes/186fea9a04704df0acfdedf7280b24109be00d5a9208aa343d94e20b53d3f415
 
 What you see at either link is the sealed envelope, not the text (the next section). It stays up as long as the gateway's stamp lasts, about a day; the worker re-uploads real transcripts twice a day, the smoke one is left to lapse.
 
@@ -31,10 +31,10 @@ What you see at either link is the sealed envelope, not the text (the next secti
 `lib/swarm/crypto.ts`. The transcript JSON is encrypted with AES-256-GCM before it leaves the server:
 
 - key: `HMAC-SHA256(SWARM_TRANSCRIPT_SECRET, "siege-transcript:" + siegeId)`, one key per op
-- nonce: the first 12 bytes of `sha256("siege-transcript-nonce:" + the transcript JSON)`
+- nonce: the first 12 bytes of `HMAC-SHA256(key, "nonce:" + the transcript JSON)` (a synthetic IV)
 - bytes on Swarm: `{"v":1,"alg":"A256GCM","siegeId":"…","nonce":"<hex>","ct":"<base64, tag appended>"}`
 
-Deterministic on purpose: the same transcript always gives the same bytes, so the same Swarm reference. That is what lets the worker re-upload a transcript without the entity ever changing. The nonce is a hash of the exact plaintext, so two different plaintexts under one op's key never share a nonce; it reveals only whether two envelopes hold the same transcript, which a content-addressed store reveals anyway.
+Deterministic on purpose: the same transcript always gives the same bytes, so the same Swarm reference. That is what lets the worker re-upload a transcript without the entity ever changing. The nonce is keyed: two different plaintexts under one op's key never share a nonce, and without the key it says nothing about the plaintext (an unkeyed digest would let anyone confirm a guessed transcript offline).
 
 We did not use Swarm's own encryption (`Swarm-Encrypt: true`): its references carry the decryption key, and the reference goes on a public Arkiv entity.
 
@@ -55,7 +55,7 @@ We hold no postage batch. Uploads go through Swarm's public gateway, `https://ap
 The gateway's batches last about a day, and it does not top them up. A transcript uploaded on Friday would be gone by Saturday night. Two things handle that:
 
 1. **Keep-alive.** `worker/swarm.ts` re-uploads every transcript from the last week every 12 hours. Same bytes, same reference, now stamped by the gateway's current batch. The entity's `swarmRef` never changes.
-2. **Retry.** The op-ending request gives the gateway 4 seconds. If it is slow or down, the sealed bytes wait in `swarm_uploads` and the worker retries with backoff (1, 2, 4 … minutes, at most an hour) and a 10-second budget; the same backoff covers keep-alive failures, and a pass stops after three failures in a row rather than timing out on every row. Until it lands, the op entity has no `swarmRef` and the replay says "sealed, upload to Swarm pending" (or "no worker is running to retry it": the worker leaves a heartbeat in the database, so the page reports what is true across processes). When it lands, the worker re-queues the op through the Arkiv port, so the entity gets its `swarmRef` after all.
+2. **Retry.** The op-ending request gives the gateway 2.5 seconds (a normal upload takes about half a second). If it is slow or down, the sealed bytes wait in `swarm_uploads` and the worker retries with backoff (1, 2, 4 … minutes, at most an hour) and a 10-second budget; the same backoff covers keep-alive failures, and a pass stops after three failures in a row rather than timing out on every row. Until it lands, the op entity has no `swarmRef` and the replay says "sealed, upload to Swarm pending" (or "no worker is running to retry it": the worker leaves a heartbeat in the database, so the page reports what is true across processes). When it lands, the worker re-queues the op through the Arkiv port, so the entity gets its `swarmRef` after all.
 3. **Revive on open.** If a replay's reference stops resolving (an outage, or a transcript past the one-week horizon), the page shows the sealed copy the arena kept, says so ("THE SEALED COPY · SWARM DID NOT ANSWER"), and flags the row for the worker to put back in its next pass. The flag is all a page view can do: it never resets the worker's backoff.
 
 A server that is not in live mode (no secret) cannot open a live reference; its replay says exactly that and links the reference, rather than calling a healthy archive a failed check.
@@ -87,7 +87,9 @@ npm run swarm:smoke
 
 Prints: the sealed bytes' first line, the reference (about half a second), two links, "re-upload of the same bytes: same reference", then a read from the gateway and a read from bzz.limo, each ending in "hash … matches". `npm run swarm:smoke -- --read <reference>` reads one you already have.
 
-In the game: play an op to its end with `SWARM_MODE=live` (`npm run dev` and `npm run worker`), then open `/replay/<op id>`. The transcript line says **READ FROM SWARM** and the reference is a link; the "Transcript read from Swarm" check passes with the same link. Stop the worker and the gateway stays as it is; delete the row from `swarm_refs` and the page falls back to the database and says so.
+In the game: play an op to its end with `SWARM_MODE=live` (`npm run dev` and `npm run worker`), then open `/replay/<op id>`. The transcript line says **READ FROM SWARM** and the reference is a link; the "Transcript read from Swarm" check passes with the same link.
+
+Checked on 7 Nov 2026: `npm run demo` with `SWARM_MODE=live` (Hedera, Arkiv and 0G forced to stub) uploaded all 10 of its ops' transcripts to the public gateway, and the replay of each one read its transcript back from Swarm with a matching hash.
 
 ## Demo video
 

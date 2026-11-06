@@ -3,20 +3,19 @@
  * from the public siege entity) holds only this envelope.
  *
  *   key   = HMAC-SHA256(SWARM_TRANSCRIPT_SECRET, "siege-transcript:" + siegeId)   (per siege)
- *   nonce = sha256("siege-transcript-nonce:" + transcript JSON)[0..12]
+ *   nonce = HMAC-SHA256(key, "nonce:" + transcript JSON)[0..12]   (a synthetic IV)
  *   body  = AES-256-GCM(key, nonce, transcript JSON), tag appended
  *
  * Deterministic on purpose: the same transcript always produces the same bytes, so a re-upload
- * (the keep-alive in worker/swarm.ts) lands on the same Swarm reference. The nonce is a hash of
- * the exact plaintext, so two different plaintexts under one key never share a nonce (a nonce
- * derived from a field of the transcript, such as its hash, would trust that field to be honest).
- * The nonce reveals only whether two envelopes hold the same transcript, which a content-addressed
- * store reveals anyway. Siege ids are public already (Arkiv, HCS); only the secret is not.
+ * (the keep-alive in worker/swarm.ts) lands on the same Swarm reference. The nonce is keyed:
+ * two different plaintexts under one key never share a nonce, and without the key the nonce says
+ * nothing about the plaintext (an unkeyed digest would let anyone confirm a guessed transcript
+ * offline). Siege ids are public already (Arkiv, HCS); only the secret is not.
  *
  * Why not Swarm's own encryption (`Swarm-Encrypt: true`): its references carry the decryption key,
  * and the reference goes on a public Arkiv entity.
  */
-import { createCipheriv, createDecipheriv, createHash, createHmac } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac } from "node:crypto";
 import type { Transcript } from "@/lib/types";
 
 export const ENVELOPE_VERSION = 1;
@@ -26,12 +25,13 @@ export const ENVELOPE_ALG = "A256GCM";
 export type Envelope = { v: typeof ENVELOPE_VERSION; alg: typeof ENVELOPE_ALG; siegeId: string; nonce: string; ct: string };
 
 const siegeKey = (secretHex: string, siegeId: string) => createHmac("sha256", Buffer.from(secretHex, "hex")).update(`siege-transcript:${siegeId}`).digest();
-const nonceFor = (plaintext: string) => createHash("sha256").update(`siege-transcript-nonce:${plaintext}`).digest().subarray(0, 12);
+const nonceFor = (key: Buffer, plaintext: string) => createHmac("sha256", key).update(`nonce:${plaintext}`).digest().subarray(0, 12);
 
 export function sealTranscript(t: Transcript, secretHex: string): Envelope {
   const plaintext = JSON.stringify(t);
-  const nonce = nonceFor(plaintext);
-  const cipher = createCipheriv("aes-256-gcm", siegeKey(secretHex, t.siegeId), nonce);
+  const key = siegeKey(secretHex, t.siegeId);
+  const nonce = nonceFor(key, plaintext);
+  const cipher = createCipheriv("aes-256-gcm", key, nonce);
   const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final(), cipher.getAuthTag()]);
   return { v: ENVELOPE_VERSION, alg: ENVELOPE_ALG, siegeId: t.siegeId, nonce: nonce.toString("hex"), ct: ct.toString("base64") };
 }

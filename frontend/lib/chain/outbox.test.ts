@@ -369,7 +369,15 @@ describe("audit outbox", () => {
 describe("migration 0005 on a DB with inline-era audit rows", () => {
   const dirs: string[] = [];
   afterEach(() => {
-    for (const x of dirs.splice(0)) rmSync(x, { recursive: true, force: true });
+    // openDb() keeps the file it opened as the process-wide handle: close it before deleting its
+    // directory, or Windows refuses (EPERM). The test reopens an in-memory DB itself; this covers a
+    // failure before it gets there.
+    const g = globalThis as unknown as { __siegeDb?: { sqlite: { close(): void }; url: string } };
+    if (g.__siegeDb && g.__siegeDb.url !== ":memory:") {
+      g.__siegeDb.sqlite.close();
+      g.__siegeDb = undefined;
+    }
+    for (const x of dirs.splice(0)) rmSync(x, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("marks sent rows submitted, failed ones skipped (never resent), numbers them, and starts derivation after the newest event", async () => {
@@ -403,6 +411,8 @@ describe("migration 0005 on a DB with inline-era audit rows", () => {
     // Already-audited events are not derived again; nothing old is resent.
     const rep = await drainAudit({ db: () => migrated, mode: "testnet", port: fakeHcs().port });
     expect(rep).toMatchObject({ derived: 0, submitted: [], failed: [] });
+    // Close the file handle before swapping in the in-memory one (openTestDb drops it unclosed).
+    (globalThis as unknown as { __siegeDb?: { sqlite: { close(): void } } }).__siegeDb?.sqlite.close();
     openTestDb();
   });
 });
