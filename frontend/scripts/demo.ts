@@ -118,6 +118,9 @@ async function main() {
   // ── Setup: private demo DB, fast guardian, in-process HTTP ──────────────────
   process.env.DATABASE_URL = process.env.DEMO_DATABASE_URL ?? "file:./data/demo.db";
   process.env.SIEGE_FAST = "1";
+  // The demo is scripted against the deterministic stub guardian; a real 0G model (picked up from
+  // ZG_API_KEY) can legitimately fall to the scripted raids and change the flow. Opt in with GUARDIAN_MODE=0g.
+  process.env.GUARDIAN_MODE ??= "stub";
   resetEnv();
   const e = env();
   const file = e.DATABASE_URL.replace(/^file:/, "");
