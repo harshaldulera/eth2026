@@ -35,7 +35,7 @@ import { createPayerFetch, getApproval } from "@/lib/pay";
 import { stubVaultTool } from "@/lib/chain/stub";
 import type { AgentDetail, CastleDetail, SiegeDetail } from "@/lib/api/client";
 import type { ApprovalRequest, Castle, RaiderAgent, Siege, StoredSiegeEvent } from "@/lib/types";
-import { REFUND_DESK, seed } from "./seed";
+import { REFUND_DESK, SEED_CASTLES, seed } from "./seed";
 import { createInProcessFetch } from "@/worker/dispatch";
 import { setFetch } from "@/worker/fetch";
 import { setWorkerQuiet } from "@/worker/log";
@@ -200,10 +200,11 @@ async function main() {
   const seeded = await seed({ quiet: true });
   const hosted = seeded.castles.filter((c) => c.transport === "hosted");
   const deskSeed = seeded.castles.find((c) => c.id === REFUND_DESK.id);
-  check(seeded.castles.length === 6 && hosted.length === 5, "five hosted castles + the Refund Desk seeded", seeded.castles.map((c) => c.name).join(", "));
+  check(seeded.castles.length === SEED_CASTLES.length && hosted.length === SEED_CASTLES.length - 1, `${SEED_CASTLES.length - 1} hosted castles + the Refund Desk seeded`, seeded.castles.map((c) => c.name).join(", "));
   check(hosted.every((c) => c.vaultId != null), "every hosted castle has a vault", hosted.map((c) => `#${c.vaultId}`).join(" "));
   check(seeded.castles.every((c) => c.topicId), "every castle has an HCS topic");
-  check(hosted.every((c) => c.vaultState === "guarding" && c.protectedTool === "unlock_vault"), "hosted castles: created → verified → funded → guarding, protecting unlock_vault", hosted.map((c) => c.vaultState).join(" "));
+  const toolFor = (id: string) => SEED_CASTLES.find((f) => f.id === id)?.protectedTool ?? "unlock_vault";
+  check(hosted.every((c) => c.vaultState === "guarding" && c.protectedTool === toolFor(c.id)), "hosted castles: created → verified → funded → guarding, each protecting its own tool (game castles: unlock_vault)", hosted.map((c) => `${c.vaultState}/${c.protectedTool}`).join(" "));
   check(deskSeed?.vaultState === "created" && deskSeed.transport === "sdk" && deskSeed.protectedTool === "issue_refund" && deskSeed.vaultId == null,
     "Refund Desk (SDK, protects issue_refund) waits at \"created\" with no vault", deskSeed ? `${deskSeed.vaultState}, vault ${deskSeed.vaultId ?? "none"}` : "missing");
   const seedStates = db().select().from(schema.auditLog).where(eq(schema.auditLog.type, "vault.state")).all();
@@ -211,7 +212,7 @@ async function main() {
   check(seeded.agent?.name === "Night Sapper", "demo raider agent Night Sapper exists", seeded.agent?.accountId);
   const again = await seed({ quiet: true });
   check(
-    again.castles.length === 6 &&
+    again.castles.length === SEED_CASTLES.length &&
       again.castles.every((c, i) => c.vaultId === seeded.castles[i].vaultId && c.vaultState === seeded.castles[i].vaultState) &&
       db().select().from(schema.auditLog).where(eq(schema.auditLog.type, "vault.state")).all().length === seedStates.length,
     "seed is idempotent (no new vaults, no new transitions)",
@@ -534,7 +535,7 @@ async function main() {
   const cfg = await call<{ chain: { mode: string }; asset: { id: string } }>("GET", "/api/config");
   check(cfg.data.chain.mode === e.CHAIN_MODE && cfg.data.asset.id === "0.0.0", "GET /api/config", `${cfg.data.chain.mode}, asset ${cfg.data.asset.id}`);
   const list = await call<{ castles: Castle[] }>("GET", "/api/castles");
-  check(list.data.castles.length === 7 && list.data.castles.every((c) => !("orders" in c)), "GET /api/castles never leaks guardian orders");
+  check(list.data.castles.length === SEED_CASTLES.length + 1 && list.data.castles.every((c) => !("orders" in c)), "GET /api/castles never leaks guardian orders");
 
   // ── (9) Receipts ─────────────────────────────────────────────────────────────
   step(9, "Every payment receipt belongs to a siege");

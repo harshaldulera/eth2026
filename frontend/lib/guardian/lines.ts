@@ -14,6 +14,25 @@ export type LineBank = {
 };
 
 export const LINES: Record<string, LineBank> = {
+  /** Business agents (lib/guardian/agents): a plain, professional voice instead of a castle character. */
+  professional: {
+    hold: [
+      "I can't process that. Payments only go out through the approved process.",
+      "Thanks for reaching out. I'm not able to make that payment.",
+      "I understand, but I can't make an exception to the payment policy.",
+      "That request doesn't meet the policy, so I won't be acting on it.",
+      "I can help with status questions, but I can't move funds based on this request.",
+      "No payment will be made. If something is wrong, please use the official process.",
+    ],
+    expose: [
+      "This looks like a {label}, so I'm declining. Requests like this go through the official process.",
+      "I'm flagging this as a {label}. No funds will move.",
+      "That's a {label}. I can't act on it, whoever it comes from.",
+      "Noted as a {label}. The policy doesn't allow exceptions, so the answer is no.",
+    ],
+    open: ["Understood — processing the payment now."],
+    banish: ["I'm ending this conversation. Please contact the team through official channels."],
+  },
   bumbling: {
     hold: [
       "Evening! Mind the puddle, it's been there since spring. Now, what was it you wanted? Gate's shut, I'm afraid, always is this time of night.",

@@ -31,7 +31,10 @@ vi.mock("@/lib/pay/hedera", async (orig) => ({
   mirrorEvmAddress: vi.fn(async () => "0x00000000000000000000000000000000000003e8"),
 }));
 
-const { seed } = await import("./seed");
+const { seed, SEED_CASTLES } = await import("./seed");
+// Hosted castles get a vault each; the SDK Refund Desk is never funded by seed. Every castle gets a topic.
+const HOSTED = SEED_CASTLES.filter((c) => c.transport !== "sdk");
+const ALL = SEED_CASTLES.length;
 const { chainStateProblems } = await import("@/lib/chain");
 
 function useTestnet() {
@@ -74,12 +77,13 @@ describe("seed after flipping a stub DB to testnet", () => {
     expect(chainStateProblems().length).toBeGreaterThanOrEqual(5 * 3); // vault, topic, owner per castle (+ agent)
 
     const real = await seed({ quiet: true });
-    // Five hosted vaults (each with protectedTool unlock_vault); the SDK Refund Desk is never funded by seed.
-    expect(vaultMock.createVault).toHaveBeenCalledTimes(5);
-    for (const [arg] of vaultMock.createVault.mock.calls as unknown as [{ protectedTool: string }][]) expect(arg.protectedTool).toBe("unlock_vault");
-    expect(hcsMock.createTopic).toHaveBeenCalledTimes(6);
+    // One vault per hosted castle, each with that castle's protected tool (game castles: unlock_vault).
+    expect(vaultMock.createVault).toHaveBeenCalledTimes(HOSTED.length);
+    const tools = (vaultMock.createVault.mock.calls as unknown as [{ protectedTool: string }][]).map(([arg]) => arg.protectedTool).sort();
+    expect(tools).toEqual(HOSTED.map((c) => c.protectedTool ?? "unlock_vault").sort());
+    expect(hcsMock.createTopic).toHaveBeenCalledTimes(ALL);
     const rows = db().select().from(schema.castles).all();
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(ALL);
     for (const c of rows) {
       expect(c.topicId).toMatch(/^0\.0\.\d+$/);
       expect(c.owner).toBe("0.0.900");
@@ -99,22 +103,22 @@ describe("seed after flipping a stub DB to testnet", () => {
 
     // idempotent on testnet, and a redeployed vault (new VAULT_ADDRESS) is noticed
     await seed({ quiet: true });
-    expect(vaultMock.createVault).toHaveBeenCalledTimes(5);
-    expect(hcsMock.createTopic).toHaveBeenCalledTimes(6);
+    expect(vaultMock.createVault).toHaveBeenCalledTimes(HOSTED.length);
+    expect(hcsMock.createTopic).toHaveBeenCalledTimes(ALL);
     // --new-topics: a fresh audit topic for every castle (freeze prep), vaults untouched
     const before = new Map(db().select().from(schema.castles).all().map((c) => [c.id, c.topicId]));
     await seed({ quiet: true, newTopics: true });
-    expect(hcsMock.createTopic).toHaveBeenCalledTimes(12);
-    expect(vaultMock.createVault).toHaveBeenCalledTimes(5);
+    expect(hcsMock.createTopic).toHaveBeenCalledTimes(2 * ALL);
+    expect(vaultMock.createVault).toHaveBeenCalledTimes(HOSTED.length);
     for (const c of db().select().from(schema.castles).all()) {
       expect(c.topicId).toMatch(/^0\.0\.\d+$/);
       expect(c.topicId).not.toBe(before.get(c.id));
     }
     process.env.VAULT_ADDRESS = "0x00000000000000000000000000000000005E1E03";
     resetEnv();
-    expect(chainStateProblems().filter((p) => p.includes("vault #"))).toHaveLength(5);
+    expect(chainStateProblems().filter((p) => p.includes("vault #"))).toHaveLength(HOSTED.length);
     await seed({ quiet: true });
-    expect(vaultMock.createVault).toHaveBeenCalledTimes(10);
+    expect(vaultMock.createVault).toHaveBeenCalledTimes(2 * HOSTED.length);
     expect(chainStateProblems()).toEqual([]);
   });
 });

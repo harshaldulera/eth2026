@@ -39,7 +39,7 @@ import { env } from "@/lib/config/env";
 import { db, schema } from "@/lib/db";
 import { chain, contractUrl, formatHbar, topicUrl, txUrl, isStubRef, vaultTag } from "@/lib/chain";
 import { VAULT_OPEN_STATES } from "@/lib/chain/settle";
-import { FIXTURE_CASTLES, SDK_FIXTURE_CASTLE, SDK_ORDERS_PLACEHOLDER, fixtureCastleRow, loadOrders, type FixtureCastle } from "@/lib/fixtures/castles";
+import { BUSINESS_CASTLES, FIXTURE_CASTLES, SDK_FIXTURE_CASTLE, SDK_ORDERS_PLACEHOLDER, fixtureCastleRow, loadOrders, type FixtureCastle } from "@/lib/fixtures/castles";
 import { createAgent, listAgents, setAgentStatus } from "@/lib/agents/accounts";
 import { HOSTED_PROTECTED_TOOL, type RaiderAgent, type TransportKind, type VaultState } from "@/lib/types";
 import { closeCastle, TERMINAL_STATES, transitionVault } from "@/lib/vault";
@@ -56,7 +56,8 @@ export const REFUND_DESK = SDK_FIXTURE_CASTLE as FixtureCastle & { transport: Tr
 /** An SDK guardian's orders live in the castellan's own harness; we never hold them. */
 const SDK_ORDERS = SDK_ORDERS_PLACEHOLDER;
 
-const SEED_CASTLES: readonly FixtureCastle[] = [...FIXTURE_CASTLES, REFUND_DESK];
+/** Everything seed creates: the five game castles, the Refund Desk, and the business agents. */
+export const SEED_CASTLES: readonly FixtureCastle[] = [...FIXTURE_CASTLES, REFUND_DESK, ...BUSINESS_CASTLES];
 const isSdk = (f: FixtureCastle) => f.id === REFUND_DESK.id;
 
 const link = (url: string, id: string) => (isStubRef(id) ? id : `${id}  ${url}`);
@@ -138,7 +139,7 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
     const sdk = isSdk(f);
     const identity = sdk
       ? { transport: REFUND_DESK.transport, protectedTool: REFUND_DESK.protectedTool, orders: SDK_ORDERS }
-      : { transport: "hosted" as const, protectedTool: HOSTED_PROTECTED_TOOL, orders: loadOrders(f.tier) };
+      : { transport: "hosted" as const, protectedTool: f.protectedTool ?? HOSTED_PROTECTED_TOOL, orders: loadOrders(f.ordersFile ?? f.tier) };
     // By id first (tests may have inserted the SDK fixture under another display name), then by name.
     let row = db().select().from(C).where(eq(C.id, f.id)).get() ?? db().select().from(C).where(eq(C.name, f.name)).get();
     if (!row) {
@@ -147,7 +148,7 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
         .values({ ...fixtureCastleRow(f, owner ? { owner } : {}), ...identity, vaultState: "created", vaultStateReason: null })
         .run();
       row = db().select().from(C).where(eq(C.name, f.name)).get()!;
-      say(`  + ${f.name}${sdk ? " (SDK guardian, protects issue_refund)" : ""}`);
+      say(`  + ${f.name}${sdk ? " (SDK guardian, protects issue_refund)" : f.ordersFile ? ` (business agent, protects ${f.protectedTool})` : ""}`);
     } else {
       db()
         .update(C)
