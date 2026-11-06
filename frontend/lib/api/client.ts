@@ -126,6 +126,10 @@ export type ConfigResponse = {
 /** Where GET /api/castles read from: Arkiv (with the block number) or the server's SQLite copy. */
 export type ArkivReadMeta = { source: "arkiv" | "sqlite"; block?: string; query: string; error?: string };
 
+/** Present on each castle when it was read from Arkiv: its entities and who owns the listing. */
+export type ArkivCastleMeta = { stateKey?: string; identityKey: string; castellan: string; expiresAtMs?: number };
+export type CastleRow = Castle & { arkiv?: ArkivCastleMeta };
+
 export type AuditMessage = { seq: number; type: string; siegeId?: string; txId?: string; at: string };
 
 export type CastleDetail = {
@@ -176,7 +180,12 @@ const enc = encodeURIComponent;
 export const api = {
   config: () => request<ConfigResponse>("/api/config"),
 
-  castles: () => request<{ castles: Castle[]; arkiv?: ArkivReadMeta }>("/api/castles"),
+  castles: (q: { tier?: string; sort?: string; minPot?: string; vaultState?: string } = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v) p.set(k, v);
+    const qs = p.toString();
+    return request<{ castles: CastleRow[]; arkiv?: ArkivReadMeta }>(`/api/castles${qs ? `?${qs}` : ""}`);
+  },
   castle: (id: string) => request<CastleDetail>(`/api/castles/${enc(id)}`),
 
   /**

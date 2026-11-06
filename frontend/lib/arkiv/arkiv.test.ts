@@ -4,20 +4,19 @@ import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { db } from "@/lib/db";
 import { getCastle, listCastles } from "@/lib/castles";
 import { siege } from "@/lib/siege";
-import { castleValues, fingerprint, profileValues, rowToCastle, rowToProfile, rowToSiege, siegeValues } from "./codec";
+import { castleIdentityValues, castleStateValues, fingerprint, profileValues, rowToCastle, rowToProfile, rowToSiege, siegeValues } from "./codec";
 import { describeCastleQuery } from "./queries";
-import { enqueue, entityRecord, outboxStats, payloadFingerprint } from "./outbox";
+import { castellanWallet, enqueue, entityRecord, outboxStats, payloadFingerprint } from "./outbox";
 import { reconcile } from "./reconcile";
 import { schemas } from "./schema";
 import { isArkivLive, listCastlesWithMeta } from ".";
 
 /** A query row as the SDK returns it: every column as { type, value }. */
 const asRow = (values: Record<string, { type: string; value: unknown }>) => values as unknown as Record<string, unknown>;
+const link = { castellan: "0x1111111111111111111111111111111111111111", identityKey: "0xabc" };
 
-const outboxRows = () =>
-  (db() as unknown as { $client: { prepare(s: string): { all(): unknown[] } } }).$client
-    .prepare("SELECT kind, id, force, attempts FROM arkiv_outbox ORDER BY kind, id")
-    .all() as { kind: string; id: string; force: number; attempts: number }[];
+const raw = () => (db() as unknown as { $client: { prepare(s: string): { all(): unknown[]; run(...a: unknown[]): unknown } } }).$client;
+const outboxRows = () => raw().prepare("SELECT kind, id, force, attempts FROM arkiv_outbox ORDER BY kind, id").all() as { kind: string; id: string; force: number; attempts: number }[];
 
 describe("arkiv", () => {
   beforeEach(() => {
@@ -33,20 +32,33 @@ describe("arkiv", () => {
     expect(all.castles.length).toBe(listCastles().length);
   });
 
-  it("schemas are namespaced and never carry orders", () => {
+  it("a castle is a Castellan-owned listing plus an arena-owned state; neither carries orders", () => {
     const s = schemas();
-    expect(Object.keys(s)).toEqual(["castle", "siege", "guardianProfile", "raiderProfile"]);
-    const values = castleValues(getCastle("castle_iron_warden")!);
-    expect(Object.keys(values)).not.toContain("orders");
-    expect(JSON.stringify(values, (_, v) => (typeof v === "bigint" ? v.toString() : v))).not.toMatch(/orders/i);
+    expect(Object.keys(s)).toEqual(["castle", "castleState", "siege", "guardianProfile", "raiderProfile"]);
+    const c = getCastle("castle_iron_warden")!;
+    const identity = castleIdentityValues(c);
+    const state = castleStateValues(c, link);
+    expect(Object.keys(identity)).not.toContain("pot"); // nothing that moves is on the listing
+    for (const v of [identity, state]) expect(JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x))).not.toMatch(/orders/i);
+    expect(state.identityKey.value).toBe("0xabc");
+    expect(state.castellan.value).toBe(link.castellan);
   });
 
-  it("castle values round-trip through a query row", () => {
+  it("the Castellan's wallet is the EVM address of the Hedera account that owns the vault", async () => {
+    const c = getCastle("castle_iron_warden")!;
+    const a = await castellanWallet(c);
+    expect(a).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    expect(await castellanWallet(c)).toBe(a); // deterministic
+    expect(await castellanWallet(getCastle("castle_splinter_gate")!)).not.toBe(a);
+  });
+
+  it("castle state values round-trip through a query row", () => {
     for (const c of listCastles()) {
-      const back = rowToCastle(asRow(castleValues(c)));
-      // createdAt is stored at ms precision; everything else is exact.
-      expect({ ...back, createdAt: undefined }).toEqual({ ...c, createdAt: undefined });
+      const back = rowToCastle(asRow(castleStateValues(c, link)));
+      const { arkiv, ...plain } = back;
+      expect({ ...plain, createdAt: undefined }).toEqual({ ...c, createdAt: undefined });
       expect(Date.parse(back.createdAt)).toBe(Date.parse(c.createdAt));
+      expect(arkiv).toEqual({ identityKey: "0xabc", castellan: link.castellan });
     }
   });
 
@@ -60,7 +72,7 @@ describe("arkiv", () => {
 
   it("fingerprints ignore key order and change when a value changes", () => {
     const c = getCastle("castle_granite_hold")!;
-    const a = castleValues(c) as Record<string, { type: string; value: unknown }>;
+    const a = castleStateValues(c, link) as Record<string, { type: string; value: unknown }>;
     const reversed = Object.fromEntries(Object.entries(a).reverse());
     expect(fingerprint(reversed)).toBe(fingerprint(a));
     expect(payloadFingerprint({ kind: "castle", data: { ...c, pot: "1" } })).not.toBe(payloadFingerprint({ kind: "castle", data: c }));
@@ -73,21 +85,27 @@ describe("arkiv", () => {
     expect(outboxRows().filter((r) => r.id === c.id)).toHaveLength(1);
     expect(outboxStats().pending).toBe(1);
 
-    // Pretend the drainer published exactly these values.
+    // Pretend the drainer published exactly these values (the state entity is what changes).
     const fp = payloadFingerprint({ kind: "castle", data: c });
-    (db() as unknown as { $client: { prepare(s: string): { run(...a: unknown[]): unknown } } }).$client
-      .prepare("INSERT INTO arkiv_entities (kind, id, key, fingerprint, expires_at_ms, updated_at) VALUES ('castle', ?, '0xabc', ?, ?, 'now')")
+    raw()
+      .prepare("INSERT INTO arkiv_entities (kind, id, key, fingerprint, expires_at_ms, updated_at) VALUES ('castleState', ?, '0xabc', ?, ?, 'now')")
       .run(c.id, fp, Date.now() + 60_000);
-    expect(entityRecord("castle", c.id)?.key).toBe("0xabc");
+    expect(entityRecord("castleState", c.id)?.key).toBe("0xabc");
     expect(enqueue({ kind: "castle", data: c })).toEqual({ queued: false, key: "0xabc" });
     expect(enqueue({ kind: "castle", data: c }, { force: true }).queued).toBe(true);
+  });
+
+  it("a delisted castle is never queued again", () => {
+    const c = getCastle("castle_granite_hold")!;
+    outboxStats(); // creates the outbox tables
+    raw().prepare("INSERT INTO arkiv_meta (k, v) VALUES (?, ?)").run(`delisted:${c.id}`, "2026-11-06T00:00:00Z");
+    expect(enqueue({ kind: "castle", data: c })).toEqual({ queued: false });
   });
 
   it("reconcile queues every castle and Castellan once, then nothing until something changes", async () => {
     const first = reconcile();
     expect(first.castles).toBe(listCastles().length);
     expect(first.profiles).toBeGreaterThan(0);
-    // Queued but unsent: re-queuing the same values replaces the row, it does not add one.
     const before = outboxRows().length;
     reconcile();
     expect(outboxRows().length).toBe(before);
@@ -98,8 +116,8 @@ describe("arkiv", () => {
   });
 
   it("describes the board query the way it runs", () => {
-    expect(describeCastleQuery()).toBe('castle WHERE vaultState = "guarding" ORDER BY pot DESC');
-    expect(describeCastleQuery({ tier: "stone", sort: "streak" })).toBe('castle WHERE tier = "stone" AND vaultState = "guarding" ORDER BY streak DESC');
-    expect(describeCastleQuery({}, { allStates: true })).toBe("castle ORDER BY pot DESC");
+    expect(describeCastleQuery()).toBe('castleState WHERE vaultState = "guarding" ORDER BY pot DESC');
+    expect(describeCastleQuery({ tier: "stone", sort: "streak" })).toBe('castleState WHERE tier = "stone" AND vaultState = "guarding" ORDER BY streak DESC');
+    expect(describeCastleQuery({}, { allStates: true })).toBe("castleState ORDER BY pot DESC");
   });
 });

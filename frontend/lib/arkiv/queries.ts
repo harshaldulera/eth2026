@@ -1,14 +1,14 @@
 /**
- * Live reads from Arkiv. Every query filters `.ownedBy(arena)`: only entities the arena wrote count.
- * Each result carries the block it was read at — the board prints it as proof the data came from
- * the chain, not from our database.
+ * Live reads from Arkiv. The board reads `castleState` (arena-owned); every query filters
+ * `.ownedBy(...)`, so only entities the arena wrote count. Each result carries the block it was
+ * read at: the board prints it as proof the data came from the chain, not from our database.
  */
 import { and, eq, gte, type Expression } from "@arkiv-network/sdk/query";
 import { asc, desc } from "@arkiv-network/sdk/query";
 import { u64 } from "@arkiv-network/sdk/schema";
-import type { Castle, CastleFilter, Profile, Siege } from "@/lib/types";
+import type { CastleFilter, Profile, Siege } from "@/lib/types";
 import { arenaAddress, arkivReader } from "./client";
-import { rowToCastle, rowToProfile, rowToSiege, type Row } from "./codec";
+import { rowToCastle, rowToProfile, rowToSiege, type CastleOnArkiv, type Row } from "./codec";
 import { schemas } from "./schema";
 
 export type Read<T> = { data: T; block: bigint };
@@ -24,7 +24,7 @@ type Builder = Fetchable & {
 const from = (kind: keyof ReturnType<typeof schemas>): Builder =>
   (arkivReader() as unknown as { select(): { from(s: unknown): Builder } }).select().from(schemas()[kind]).ownedBy(arenaAddress());
 
-/** Human-readable form of the board query, for the query bar. */
+/** Human-readable form of the board query, for the query bar and the README. */
 export function describeCastleQuery(f: CastleFilter = {}, opts: { allStates?: boolean } = {}): string {
   const parts: string[] = [];
   if (f.tier) parts.push(`tier = "${f.tier}"`);
@@ -33,14 +33,17 @@ export function describeCastleQuery(f: CastleFilter = {}, opts: { allStates?: bo
   if (f.transport) parts.push(`transport = "${f.transport}"`);
   if (f.minPot) parts.push(`pot >= ${f.minPot}`);
   const order = f.sort === "streak" ? "streak DESC" : f.sort === "fee" ? "fee ASC" : f.sort === "recent" ? "createdAtMs DESC" : "pot DESC";
-  return `castle${parts.length ? ` WHERE ${parts.join(" AND ")}` : ""} ORDER BY ${order}`;
+  return `castleState${parts.length ? ` WHERE ${parts.join(" AND ")}` : ""} ORDER BY ${order}`;
 }
+
+/** Block height → unix ms, assuming 2-second blocks from the block the query was answered at. */
+const blockToMs = (target: bigint, at: bigint, now: number) => now + Number(target - at) * 2000;
 
 /**
  * Board query. With no vaultState it lists guarding castles only (the only state that takes sieges),
  * unless `allStates` asks for every castle the arena publishes.
  */
-export async function listCastlesLive(f: CastleFilter = {}, opts: { allStates?: boolean } = {}): Promise<Read<Castle[]>> {
+export async function listCastlesLive(f: CastleFilter = {}, opts: { allStates?: boolean } = {}): Promise<Read<CastleOnArkiv[]>> {
   const conds: Expression[] = [];
   if (f.vaultState || !opts.allStates) conds.push(eq("vaultState", f.vaultState ?? "guarding"));
   if (f.tier) conds.push(eq("tier", f.tier));
@@ -49,9 +52,15 @@ export async function listCastlesLive(f: CastleFilter = {}, opts: { allStates?: 
   if (f.minPot && /^\d+$/.test(f.minPot)) conds.push(gte("pot", u64(BigInt(f.minPot))));
   const order =
     f.sort === "streak" ? desc("streak") : f.sort === "fee" ? asc("fee") : f.sort === "recent" ? desc("createdAtMs") : desc("pot");
-  const q = from("castle");
+  const q = from("castleState");
   const res = await (conds.length ? q.where(conds.length === 1 ? conds[0] : and(...conds)) : q).orderBy(order).limit(100).fetch();
-  return { data: res.entities.map(rowToCastle), block: res.blockNumber };
+  const now = Date.now();
+  const data = res.entities.map((r) => {
+    const c = rowToCastle(r);
+    if (typeof r.$expiresAt === "bigint") c.arkiv.expiresAtMs = blockToMs(r.$expiresAt, res.blockNumber, now);
+    return c;
+  });
+  return { data, block: res.blockNumber };
 }
 
 export async function liveSiegesLive(): Promise<Read<Siege[]>> {
