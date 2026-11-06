@@ -15,6 +15,7 @@ import type {
   TxRef,
   VaultCloseReason,
   VaultState,
+  ProgramBrief,
 } from "@/lib/types";
 import { notTakingSiegesReason } from "@/lib/money/vault";
 
@@ -144,6 +145,8 @@ export type CastleDetail = {
   castle: Castle;
   sieges: Siege[];
   audit: { topicId: string | null; topicUrl?: string; messages: AuditMessage[] };
+  /** Public program brief (tools, scope, docs) — never the orders. */
+  program?: ProgramBrief;
 };
 
 export type StartSiegeBody = { castleId: string; agentId?: string; free?: boolean; wallet?: string };
