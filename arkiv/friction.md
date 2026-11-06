@@ -2,11 +2,11 @@
 
 What got in our way building Siege on Arkiv (`@arkiv-network/sdk@1.0.1`, Rabdi testnet, Node 26, Windows), most costly first. Each has what we expected, what happened, and how to reproduce it.
 
-## 1. Transferring ownership locks the creator out, so we had to split every castle in two
+## 1. Transferring ownership locks the creator out, so we had to split every vault in two
 
 **Expected:** a way for an app to give users ownership of their record while the app keeps updating a few fields it is responsible for (a delegated writer, or per-attribute permissions).
 
-**What happened:** after `changeOwnership`, only the new owner can patch the entity. Our castles need both: the Castellan must own the listing, and the arena must update pot and streak after every siege. We split each castle into a Castellan-owned `castle` and an arena-owned `castleState`, duplicating the display fields on both because there are no joins. That doubles writes and needs reconciliation if the two drift.
+**What happened:** after `changeOwnership`, only the new owner can patch the entity. Our vaults need both: the Owner must own the listing, and the arena must update pot and streak after every op. We split each vault into an Owner-owned `vault` and an arena-owned `vaultStatus`, duplicating the display fields on both because there are no joins. That doubles writes and needs reconciliation if the two drift.
 
 **Reproduce:** create an entity, `changeOwnership` to another address, then `patchEntity` from the creator: it reverts with `NotOwner`.
 
@@ -16,7 +16,7 @@ What got in our way building Siege on Arkiv (`@arkiv-network/sdk@1.0.1`, Rabdi t
 
 **Expected:** fire-and-forget writes from a request handler, like a database insert.
 
-**What happened:** `createEntity` / `patchEntity` resolve after the transaction is in a block (~2 s). Our siege engine runs in Next route handlers and our worker is a separate process; both signing with the arena key would collide on the nonce. We built a SQLite outbox and a single drainer with a lease, plus batching with `executeBatch`. It works well, but it is infrastructure every multi-process app will rebuild.
+**What happened:** `createEntity` / `patchEntity` resolve after the transaction is in a block (~2 s). Our op engine runs in Next route handlers and our worker is a separate process; both signing with the arena key would collide on the nonce. We built a SQLite outbox and a single drainer with a lease, plus batching with `executeBatch`. It works well, but it is infrastructure every multi-process app will rebuild.
 
 **Reproduce:** this is the standard EVM single-sender problem: two processes reading the same pending nonce and signing at once. We designed around it rather than hitting it, but it is the first thing a Next.js app with a background worker runs into.
 
@@ -24,9 +24,9 @@ What got in our way building Siege on Arkiv (`@arkiv-network/sdk@1.0.1`, Rabdi t
 
 ## 3. No upsert by attribute
 
-**Expected:** "create this entity, or patch the one where `castleId = x` and owner = me".
+**Expected:** "create this entity, or patch the one where `vaultId = x` and owner = me".
 
-**What happened:** an entity key is random unless you pass a salt. To update a castle we must know its key, so we keep a local key table, and after a database reset we query by `castleId` + `$owner` to re-adopt existing entities before writing. `predictEntityKeys` with a fixed salt would avoid the lookup, but it is easy to miss.
+**What happened:** an entity key is random unless you pass a salt. To update a vault we must know its key, so we keep a local key table, and after a database reset we query by `vaultId` + `$owner` to re-adopt existing entities before writing. `predictEntityKeys` with a fixed salt would avoid the lookup, but it is easy to miss.
 
 **Reproduce:** wipe your local key store, re-run your writer, and you get duplicates unless you query first.
 
@@ -34,9 +34,9 @@ What got in our way building Siege on Arkiv (`@arkiv-network/sdk@1.0.1`, Rabdi t
 
 ## 4. Expiry cannot be shortened
 
-**Expected:** set an entity to expire 10 minutes after a siege ends, at the moment it ends.
+**Expected:** set an entity to expire 10 minutes after an op ends, at the moment it ends.
 
-**What happened:** `extendEntity` refuses to move expiry earlier (`ExpiryNotExtended: … would shorten its life`). A siege can last longer than 10 minutes, so we create it with a 10-minute life and extend it on every turn; a live siege idle for 5 minutes gets a forced extension. Workable, but it took a redesign to reach.
+**What happened:** `extendEntity` refuses to move expiry earlier (`ExpiryNotExtended: … would shorten its life`). An op can last longer than 10 minutes, so we create it with a 10-minute life and extend it on every turn; a live op idle for 5 minutes gets a forced extension. Workable, but it took a redesign to reach.
 
 **Reproduce:** create with `ExpirationTime.fromHours(1)`, then `extendEntity` with `ExpirationTime.fromMinutes(10)`: it reverts.
 
@@ -58,7 +58,7 @@ What got in our way building Siege on Arkiv (`@arkiv-network/sdk@1.0.1`, Rabdi t
 
 ## 7. The typed query builder fights dynamic filters
 
-**What happened:** the board builds its `where` from optional chips. The builder's types want each `where`/`orderBy` to be known statically, so composing `and(...conds)` from an array needed casts. We ended up with an untyped wrapper around `select().from().ownedBy()`.
+**What happened:** The Grid builds its `where` from optional chips. The builder's types want each `where`/`orderBy` to be known statically, so composing `and(...conds)` from an array needed casts. We ended up with an untyped wrapper around `select().from().ownedBy()`.
 
 **Ask:** a typed helper for "AND these optional conditions".
 

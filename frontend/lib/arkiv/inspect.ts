@@ -4,7 +4,7 @@
  */
 import { getCastle } from "@/lib/castles";
 import { arkivReader } from "./client";
-import { castellanWallet, entityRecord, isDelisted } from "./outbox";
+import { ownerWalletOf, entityRecord, isDelisted } from "./outbox";
 
 type EntityInfo = { key: string; owner?: string; readonly?: boolean; expiresAtMs?: number };
 type Full = { $owner?: string; $expiresAt?: bigint; $creationFlags?: { readonly: boolean } };
@@ -27,13 +27,13 @@ async function describe(key: `0x${string}`): Promise<EntityInfo | null> {
 export async function castleOnArkiv(castleId: string) {
   const castle = getCastle(castleId);
   if (!castle) return null;
-  const listingRec = entityRecord("castle", castleId);
-  const stateRec = entityRecord("castleState", castleId);
-  const [listing, state, castellan, block] = await Promise.all([
+  const listingRec = entityRecord("vault", castleId);
+  const stateRec = entityRecord("vaultStatus", castleId);
+  const [listing, state, ownerWallet, block] = await Promise.all([
     listingRec ? describe(listingRec.key) : null,
     stateRec ? describe(stateRec.key) : null,
-    castellanWallet(castle),
+    ownerWalletOf(castle),
     arkivReader().getBlockNumber(),
   ]);
-  return { listing, state, castellan, delisted: isDelisted(castleId), block: block.toString() };
+  return { listing, state, ownerWallet, delisted: isDelisted(castleId), block: block.toString() };
 }

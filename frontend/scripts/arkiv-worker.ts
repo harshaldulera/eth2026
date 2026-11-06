@@ -25,7 +25,7 @@ const log = (m: string) => console.log(`${ts()} ${m}`);
 
 async function pass(): Promise<void> {
   const r = reconcile();
-  if (r.castles + r.sieges + r.profiles) log(`queued: ${r.castles} castle(s), ${r.sieges} siege(s), ${r.profiles} profile(s)`);
+  if (r.vaults + r.ops + r.profiles) log(`queued: ${r.vaults} vault(s), ${r.ops} op(s), ${r.profiles} profile(s)`);
   // Drain until the queue is empty or a round makes no progress.
   for (let i = 0; i < 5; i++) {
     const d = await drain({ holder, log });

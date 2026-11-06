@@ -151,7 +151,7 @@ describe("vaultState.transition", () => {
       ["funded", "guarding"],
     ]);
     expect(audits[3]).toMatchObject({ v: 1, type: "vault.state", castleId: SDK, reason: "open for sieges" });
-    const entity = arkivStubWrites().get(`arkiv-stub:castle:${SDK}`) as { annotations?: { vaultState?: string }; vaultState?: string };
+    const entity = arkivStubWrites().get(`arkiv-stub:vault:${SDK}`) as { annotations?: { vaultState?: string }; vaultState?: string };
     expect(entity?.annotations?.vaultState ?? entity?.vaultState).toBe("guarding");
   });
 

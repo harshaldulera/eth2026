@@ -146,17 +146,17 @@ Avoid these claims:
 
 ## Arkiv track
 
-**For judges, a two-minute read.** Arkiv holds the arena's public state on the **Rabdi testnet** (chain id `7794095`): every castle, what it is worth right now, who owns it, and who is attacking what. The board and the raider's target picker read it from Arkiv, and each Castellan owns their castle's listing with their own wallet.
+**For judges, a two-minute read.** Arkiv holds the arena's public state on the **Rabdi testnet** (chain id `7794095`): every vault, what it is worth right now, who owns it, and which ops are running against what. The Grid and the operator's target picker read it from Arkiv, and each vault's Owner owns its listing with their own wallet.
 
-**Wallet that writes our entities (the arena):** [`0xA69d59B6d6e55Aa6da960405D4150ea59460bb18`](https://rabdi.explorer.arkiv.network/address/0xA69d59B6d6e55Aa6da960405D4150ea59460bb18). Castle listings are then transferred to each Castellan's wallet, for example [`0x6c5270FA826D134C99dE24921e69156079fd957D`](https://rabdi.explorer.arkiv.network/address/0x6c5270FA826D134C99dE24921e69156079fd957D) for The Iron Warden.
+**Wallet that writes our entities (the arena):** [`0xA69d59B6d6e55Aa6da960405D4150ea59460bb18`](https://rabdi.explorer.arkiv.network/address/0xA69d59B6d6e55Aa6da960405D4150ea59460bb18). Vault listings are then transferred to each Owner's wallet, for example [`0x6c5270FA826D134C99dE24921e69156079fd957D`](https://rabdi.explorer.arkiv.network/address/0x6c5270FA826D134C99dE24921e69156079fd957D) for The Iron Warden.
 
-**One query you can run** (the arena board: guarding castles, biggest pot first; no key needed):
+**One query you can run** (The Grid: guarding vaults, biggest pot first; no key needed):
 
 ```bash
 curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: application/json' -d '{
   "jsonrpc":"2.0","id":1,"method":"arkiv_query",
-  "params":["arkiv.schema = str('"'"'siege.castleState'"'"') AND vaultState = str('"'"'guarding'"'"') AND $owner = addr(0xA69d59B6d6e55Aa6da960405D4150ea59460bb18) ORDER BY pot:u64 DESC",
-    {"select":{"key":true,"expiresAt":true,"attributes":{"name":true,"tier":true,"pot":true,"streak":true,"castellan":true}},"limit":"0x14"}]}'
+  "params":["arkiv.schema = str('"'"'siege.vaultStatus'"'"') AND vaultState = str('"'"'guarding'"'"') AND $owner = addr(0xA69d59B6d6e55Aa6da960405D4150ea59460bb18) ORDER BY pot:u64 DESC",
+    {"select":{"key":true,"expiresAt":true,"attributes":{"name":true,"tier":true,"pot":true,"streak":true,"ownerWallet":true}},"limit":"0x14"}]}'
 ```
 
 | | Where |
@@ -166,9 +166,9 @@ curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: appli
 | What users lose without Arkiv, what we kept off | [arkiv/why-arkiv.md](arkiv/why-arkiv.md) |
 | Who it is for, try it, numbers | [arkiv/reach.md](arkiv/reach.md) |
 | Feedback with repro steps | [arkiv/friction.md](arkiv/friction.md) |
-| Code | `frontend/lib/arkiv/` (schemas, outbox, queries), board `frontend/app/page.tsx` |
+| Code | `frontend/lib/arkiv/` (schemas, outbox, queries), The Grid `frontend/app/grid-page.tsx` |
 
-On screen: the board's tier, pot, sort and state chips are the Arkiv `where` clause, and a bar under the grid prints the query and the block it was answered at. Each card shows who owns the listing and when its entity expires. Castles with a live siege entity are marked **Under siege**. The castle page has an **On Arkiv** card with both entities, their on-chain owner and explorer links.
+On screen: The Grid's tier, pot, sort and state filters are the Arkiv `where` clause, and a terminal line under the grid prints the query and the block it was answered at. Each vault card shows who owns the listing and when its entity expires. Vaults with a live op entity are marked **OP LIVE**. The vault page has an **Arkiv footprint** panel with both entities, their on-chain owner and explorer links.
 
 To run it: set `ARKIV_MODE=live`, `ARKIV_PRIVATE_KEY` and `ARKIV_ACCESS_KEY` in `frontend/.env` (see `.env.example`), then `npm run worker` publishes to Arkiv alongside its other loops. `npm run arkiv:check` verifies the setup; `npm run arkiv:smoke` shows a 2-minute entity expire on chain.
 
