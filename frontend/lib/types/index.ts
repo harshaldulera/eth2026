@@ -311,9 +311,15 @@ export interface ChainPort {
 
 export type FeeSplit = { castellan: Amount; pot: Amount; arena: Amount };
 
+/**
+ * ADDITIVE (Lane B): optional context the siege engine passes so the 0G proxy can tag each request
+ * with its siege and turn (the verifier checks the record against both). Implementations may ignore it.
+ */
+export type GuardianContext = { siegeId?: string; turn?: number };
+
 /** Lane B — lib/guardian */
 export interface GuardianPort {
-  respond(castleId: string, siegeMessages: SiegeMessage[]): Promise<GuardianDecision>;
+  respond(castleId: string, siegeMessages: SiegeMessage[], ctx?: GuardianContext): Promise<GuardianDecision>;
 }
 
 /** Lane B — lib/siege */
