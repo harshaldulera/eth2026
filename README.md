@@ -14,7 +14,7 @@ Built at ETHGlobal Mumbai 2026. Three lanes:
 |---|---|---|
 | A: money and chain | Dhruv | `contracts/`, `frontend/lib/{pay,chain,agents,vault}`, `frontend/worker/`, the approvals page, the money components |
 | B: guardian and siege engine | Harshal | `frontend/lib/{guardian,proxy,transport,siege}` (0G guardian, proxy and verifier merged; the siege state machine is still `lib/siege/stub.ts`), raider agent strategies |
-| C: frontend and shared state | Suja16 | all screens, `frontend/lib/arkiv` (live: the board reads Arkiv and shows the block and query), `frontend/lib/swarm` (stub, in progress), SSE |
+| C: frontend and shared state | Suja16 | all screens, `frontend/lib/arkiv` (live: the board reads Arkiv and shows the block and query), `frontend/lib/swarm` (live: sealed transcripts through the public gateway, replay reads them back), SSE |
 
 ## Hedera x402 track
 

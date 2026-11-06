@@ -17,7 +17,7 @@ import { verifier } from "@/lib/siege";
 import { getSiege, messageRows } from "@/lib/siege/read";
 import { reasonText, refundText, verifyText } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
-import { swarm } from "@/lib/swarm";
+import { isSwarmLive, REFERENCE_RE, sealedCopy, STUB_PREFIX, swarm, swarmLinks, swarmPending, swarmWorkerAlive, type SealedState } from "@/lib/swarm";
 import { swarmRefFor } from "@/lib/swarm/refs";
 import type { SiegeMessage } from "@/lib/types";
 import type { HcsEntry, ReplayCheck, ReplayData, ReplayTurn } from "./types";
@@ -28,6 +28,60 @@ const outcomeWord = (s?: string) => (s ? (OUTCOME_WORD[s] ?? s.replace(/_/g, " "
 
 const ENDED = new Set(["held", "broken", "banished"]);
 const short = (h?: string | null) => (h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "");
+
+/** The "transcript on Swarm" line of the checklist. Pure, so every wording is testable without a gateway. */
+export function transcriptCheck(i: {
+  ref?: string;
+  source: ReplayData["transcript"]["source"];
+  ended: boolean;
+  sealed: SealedState;
+  refUrl?: string;
+  workerAlive?: boolean;
+  /** This server can read live references (SWARM_MODE=live with the secret). A stub server cannot, and must not call that a failure. */
+  canRead?: boolean;
+}): ReplayCheck {
+  const { ref, source, ended, sealed, refUrl, workerAlive, canRead = true } = i;
+  const LABEL: Record<ReplayData["transcript"]["source"], string> = {
+    swarm: "Transcript read from Swarm",
+    "swarm-copy": "Transcript read from the sealed copy kept for Swarm",
+    "swarm-stub": "Transcript read from the Swarm store (local stand-in)",
+    database: "Transcript read from the arena database",
+  };
+  const cannotRead = source === "database" && !!ref && REFERENCE_RE.test(ref) && !canRead;
+  return {
+    key: "transcript",
+    label: LABEL[source],
+    state: ref
+      ? source === "database"
+        ? cannotRead ? "na" : "fail"
+        : source === "swarm-copy"
+          ? workerAlive ? "pending" : "fail"
+          : "pass"
+      : sealed === "pending" || !ended
+        ? "pending"
+        : "na",
+    detail: ref
+      ? `reference ${short(ref.startsWith(STUB_PREFIX) ? ref.slice(STUB_PREFIX.length) : ref)}${
+          source === "database"
+            ? cannotRead
+              ? ", not read: this server is not in SWARM_MODE=live, so it cannot open the sealed bytes"
+              : ", but the transcript could not be read from it"
+            : source === "swarm-copy"
+              ? workerAlive
+                ? ", Swarm did not answer for it; the worker is putting the sealed copy back"
+                : ", Swarm did not answer for it, and no worker is running to put the sealed copy back"
+              : ""
+        }`
+      : sealed === "pending"
+        ? "sealed, upload to Swarm pending (the worker retries it)"
+        : sealed === "stranded"
+          ? "sealed for Swarm but never uploaded, and no worker is running to retry it"
+          : ended
+            ? "no Swarm reference recorded for this op"
+            : "uploaded when the op ends",
+    ...(refUrl && source === "swarm" ? { href: refUrl } : {}),
+  };
+}
 /** Replies with no model call behind them: the stub guardian, and the SDK transport's test harness. */
 const STUB_REPLY = /^(0g|sdk)-stub-/;
 /** A voided siege's refund normally lands within minutes; after this the page stops waiting for it. */
@@ -109,9 +163,22 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
     const t = await swarm.get(ref).catch(() => null);
     if (t?.messages?.length) {
       messages = t.messages;
-      source = ref.startsWith("swarm-stub:") ? "swarm-stub" : "swarm";
+      source = ref.startsWith(STUB_PREFIX) ? "swarm-stub" : "swarm";
+    } else if (REFERENCE_RE.test(ref)) {
+      // Swarm has nothing for the reference right now (gateway down, or its stamp lapsed): show the
+      // sealed copy kept here and have the worker put it back.
+      const copy = sealedCopy(siegeId);
+      if (copy?.messages?.length) {
+        messages = copy.messages;
+        source = "swarm-copy";
+      }
     }
   }
+  /** A live reference is openable on the gateway (the bytes are the sealed envelope, not the text). */
+  const refUrl = ref && REFERENCE_RE.test(ref) ? swarmLinks.bytes(ref) : undefined;
+  /** Sealed at siege end but never landed: a worker is retrying it, or nothing is. */
+  const sealed = ref ? null : swarmPending(siegeId, now);
+  const workerAlive = swarmWorkerAlive(now);
   const recomputedHash = transcriptHash(messages);
   const storedHash = siege.transcriptHash;
   const transcriptMatches = storedHash ? storedHash.toLowerCase() === recomputedHash.toLowerCase() : null;
@@ -241,16 +308,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
 
   // ── The checklist ──────────────────────────────────────────────────────────────────────────────
   const checks: ReplayCheck[] = [];
-  checks.push({
-    key: "transcript",
-    label: source === "swarm" ? "Transcript read from Swarm" : source === "swarm-stub" ? "Transcript read from the Swarm store (local stand-in)" : "Transcript read from the arena database",
-    state: ref ? (source === "database" ? "fail" : "pass") : ended ? "na" : "pending",
-    detail: ref
-      ? `reference ${short(ref.replace(/^swarm-stub:/, ""))}${source === "database" ? ", but the transcript could not be read from it" : ""}`
-      : ended
-        ? "no Swarm reference recorded for this op"
-        : "uploaded when the op ends",
-  });
+  checks.push(transcriptCheck({ ref, source, ended, sealed, refUrl, workerAlive, canRead: isSwarmLive() }));
   checks.push({
     key: "hash",
     label: "Transcript hash recomputed here matches the op's",
@@ -397,7 +455,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   return {
     siege: siegeMeta,
     castle,
-    transcript: { source, ref, recomputedHash, storedHash, matches: transcriptMatches },
+    transcript: { source, ref, url: refUrl, recomputedHash, storedHash, matches: transcriptMatches },
     turns,
     hcs: { topicId: noTopic ? null : topicId, topicUrl: realTopic && topicId ? topicUrl(topicId) : undefined, stub: stubTopic, noTopic, entries, endHash: end?.hash, mirror, retrying },
     verdict,

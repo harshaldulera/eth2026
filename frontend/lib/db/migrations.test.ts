@@ -5,10 +5,23 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "./index";
 
+/**
+ * openDb() keeps the file it opened as the process-wide handle. Close it before deleting its
+ * directory: Windows refuses to remove an open file (EPERM).
+ */
+function closeCachedFileDb() {
+  const g = globalThis as unknown as { __siegeDb?: { sqlite: { close(): void }; url: string } };
+  if (g.__siegeDb && g.__siegeDb.url !== ":memory:") {
+    g.__siegeDb.sqlite.close();
+    g.__siegeDb = undefined;
+  }
+}
+
 describe("migrations: a DB migrated with a pre-merge 0003", () => {
   const dirs: string[] = [];
   afterEach(() => {
-    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    closeCachedFileDb();
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
   const dbFile = (setup: (s: Database.Database) => void) => {
     const dir = mkdtempSync(path.join(tmpdir(), "siege-mig-"));

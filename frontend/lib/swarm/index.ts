@@ -1,55 +1,100 @@
-// STUB — Lane C replaces with Swarm uploads (Bee API, real references); keep the signature.
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+/**
+ * Lane C — Swarm, the archive: every finished siege's transcript, encrypted, stored outside the
+ * arena and referenced from the public siege entity on Arkiv (`swarmRef`).
+ *
+ *   SWARM_MODE=stub (default, and always for this port under the test runner): a content-addressed
+ *     local store (./stub.ts). Nothing touches a network.
+ *   SWARM_MODE=live: sealed with SWARM_TRANSCRIPT_SECRET and uploaded through the Bee API at
+ *     SWARM_GATEWAY_URL (./live.ts). The worker retries failed uploads and re-uploads every
+ *     transcript twice a day so the gateway's stamps never let it lapse (worker/swarm.ts).
+ *
+ * The replay (lib/replay/build.ts) reads through `swarm.get` and says where the transcript came from.
+ */
 import type { SwarmPort, Transcript } from "@/lib/types";
-import { recordSwarmRef } from "./refs";
+import { swarmConfig, type SwarmConfig } from "./config";
+import { createLiveSwarm, type LiveDeps, type LiveSwarm } from "./live";
+import { requestReupload, uploadRef, uploadStats, workerSeenAt } from "./store";
+import { swarmStub } from "./stub";
+
+export { swarmConfig, swarmLinks, NULL_BATCH_ID, PUBLIC_GATEWAY } from "./config";
+
+/** This process reads and writes live Swarm references (by env, or a test port). */
+export const isSwarmLive = () => liveSwarm() !== null;
+export { REFERENCE_RE } from "./gateway";
+export { INLINE_TIMEOUT_MS, KEEP_ALIVE_MS, PENDING_PREFIX } from "./live";
+export { STUB_PREFIX } from "./stub";
+export type { Landed, UploadPass } from "./live";
+
+/** A port for a given configuration. Tests pass a fake fetch; the app uses `swarm` below. */
+export function createSwarm(config: SwarmConfig = swarmConfig(), deps: LiveDeps = {}): SwarmPort | LiveSwarm {
+  return config.mode === "live" ? createLiveSwarm(config, deps) : swarmStub;
+}
+
+let live: { key: string; port: LiveSwarm } | null = null;
+const g = globalThis as unknown as { __swarmTestPort?: LiveSwarm | null };
 
 /**
- * Content-addressed transcript store: ref = "swarm-stub:<sha256 of the JSON>". Kept in memory and,
- * outside tests, mirrored to data/swarm/<sha>.json so a restarted server can still serve it.
+ * Tests only: make `liveSwarm()` (and so `swarm`, `sealedCopy`, the replay) use this port, built
+ * with a fake gateway, although the test runner never goes live by env. null undoes it.
  */
+export function setLiveSwarmForTests(port: LiveSwarm | null): void {
+  if (!process.env.VITEST) throw new Error("setLiveSwarmForTests is for the test runner only");
+  g.__swarmTestPort = port;
+}
 
-const g = globalThis as unknown as { __swarmStub?: Map<string, Transcript> };
-const store = (g.__swarmStub ??= new Map<string, Transcript>());
-const PREFIX = "swarm-stub:";
+/** The live port for the current env, built once per configuration; null in stub mode. */
+export function liveSwarm(): LiveSwarm | null {
+  if (g.__swarmTestPort) return g.__swarmTestPort;
+  const c = swarmConfig();
+  if (c.mode !== "live") return null;
+  const key = `${c.gatewayUrl}|${c.batchId}|${c.secret}`;
+  if (live?.key !== key) live = { key, port: createLiveSwarm(c) };
+  return live.port;
+}
 
-const dir = () => path.join(process.cwd(), "data", "swarm");
-const persist = () => !process.env.VITEST;
-
+/** The port the app uses. Resolves the mode on every call, so env loaded after import still counts. */
 export const swarm: SwarmPort = {
-  async put(transcript: Transcript) {
-    const json = JSON.stringify(transcript);
-    const sha = createHash("sha256").update(json).digest("hex");
-    const ref = PREFIX + sha;
-    store.set(ref, transcript);
-    try {
-      recordSwarmRef(transcript.siegeId, ref);
-    } catch {
-      // the reference is a convenience for the Arkiv siege entity; never fail an upload over it
-    }
-    if (persist()) {
-      try {
-        mkdirSync(dir(), { recursive: true });
-        writeFileSync(path.join(dir(), `${sha}.json`), json);
-      } catch {
-        // memory copy is enough for the demo
-      }
-    }
-    return { ref };
-  },
-  async get(ref: string) {
-    const hit = store.get(ref);
-    if (hit) return hit;
-    if (!ref.startsWith(PREFIX)) return null;
-    const sha = ref.slice(PREFIX.length);
-    if (!/^[0-9a-f]{64}$/.test(sha)) return null;
-    try {
-      const t = JSON.parse(readFileSync(path.join(dir(), `${sha}.json`), "utf8")) as Transcript;
-      store.set(ref, t);
-      return t;
-    } catch {
-      return null;
-    }
-  },
+  put: (t) => (liveSwarm() ?? swarmStub).put(t),
+  get: (ref) => (liveSwarm() ?? swarmStub).get(ref),
 };
+
+/** A live Swarm worker that made a pass this recently is retrying uploads. */
+export const WORKER_STALE_MS = 3 * 60_000;
+export const swarmWorkerAlive = (now = Date.now()) => {
+  const seen = workerSeenAt();
+  return seen !== null && now - seen < WORKER_STALE_MS;
+};
+
+/**
+ * A siege whose transcript was sealed but never landed on Swarm: "pending" while a worker is
+ * retrying it, "stranded" when no worker has made a pass lately (nothing retries it), null
+ * otherwise. Decided from the worker's heartbeat in the database, not from this process's env:
+ * the worker and the Next server are separate processes with separate settings.
+ */
+export type SealedState = "pending" | "stranded" | null;
+export function swarmPending(siegeId: string, now = Date.now()): SealedState {
+  const row = uploadRef(siegeId);
+  if (!row || row.ref) return null;
+  return swarmWorkerAlive(now) ? "pending" : "stranded";
+}
+
+/**
+ * For a replay whose reference Swarm does not serve right now: the sealed copy this server keeps,
+ * opened (live mode only: the stub server has no secret), and a request to the worker to put it
+ * back on Swarm in its next pass.
+ */
+export function sealedCopy(siegeId: string): Transcript | null {
+  const t = liveSwarm()?.copy(siegeId) ?? null;
+  if (t) requestReupload(siegeId);
+  return t;
+}
+
+/** The startup line and the docs: what this process will do with transcripts. */
+export function swarmStatus(): string {
+  const c = swarmConfig();
+  if (c.mode === "live") {
+    const s = uploadStats();
+    return `SWARM_MODE=live, uploading sealed transcripts to ${c.gatewayUrl} (${c.batchId === "0".repeat(64) ? "gateway-stamped" : `batch ${c.batchId.slice(0, 8)}…`}); ${s.total} known, ${s.pending} pending`;
+  }
+  return c.refused ? `SWARM_MODE=live refused: ${c.refused}; transcripts stay in the local store` : "SWARM_MODE=stub, transcripts stay in the local store";
+}

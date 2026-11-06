@@ -21,8 +21,10 @@ import { atRequestTime, err, json } from "../../_lib/http";
  * `verify` is lib/replay's ReplayData: the same siege with every check recomputed (the transcript from
  * Swarm against its stored hash, the hash on the castle's HCS topic, each raider message against its
  * HCS hash, each guardian reply's inference record, the verifier's verdict and the payout tx), null
- * if it could not be built. Read-only: no writes; the only network read is lib/replay's mirror-node
- * check on testnet topics. `?verify=0` skips it (`verify: null`).
+ * if it could not be built. Read-only, with one exception: when Swarm does not answer for an op's
+ * transcript, a flag asks the worker to re-upload it (lib/swarm requestReupload, written once).
+ * Network reads: the transcript from Swarm (SWARM_MODE=live) and the mirror-node check on testnet
+ * topics. `?verify=0` skips them (`verify: null`).
  */
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);

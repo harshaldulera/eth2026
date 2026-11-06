@@ -54,6 +54,10 @@ const eslintConfig = defineConfig([
           patterns: [
             { group: ["@/worker", "@/worker/*", "**/worker/*", "**/worker"], message: "app/ and components/ must not import the worker (it holds VERIFIER_KEY)." },
             { group: ["@/lib/arkiv/client", "@/lib/arkiv/outbox", "**/lib/arkiv/client", "**/lib/arkiv/outbox"], message: "lib/arkiv/client and outbox hold the Arkiv writer key. Import @/lib/arkiv (the port) instead." },
+            {
+              group: ["@/lib/swarm/crypto", "@/lib/swarm/live", "@/lib/swarm/store", "**/lib/swarm/crypto", "**/lib/swarm/live", "**/lib/swarm/store"],
+              message: "lib/swarm/crypto, live and store hold the transcript secret and the sealed bytes. Import @/lib/swarm (the port) instead.",
+            },
             ...GUARDIAN_PATTERNS,
           ],
           paths: [

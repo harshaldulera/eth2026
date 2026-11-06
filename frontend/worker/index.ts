@@ -3,8 +3,9 @@
  *
  * Independent loops, every second: settlement (chain.recordAttempt / verifier + release), the
  * raider-agent runner, the HCS audit drainer (the only process that submits audit messages, one
- * topic message at a time in order: lib/chain/outbox.ts), and with ARKIV_MODE=live the Arkiv
- * publisher (lib/arkiv/outbox.ts). The only process that holds VERIFIER_KEY. Talks to the Next server at APP_URL
+ * topic message at a time in order: lib/chain/outbox.ts), with ARKIV_MODE=live the Arkiv
+ * publisher (lib/arkiv/outbox.ts), and with SWARM_MODE=live the Swarm retry and keep-alive loop
+ * (lib/swarm/live.ts). The only process that holds VERIFIER_KEY. Talks to the Next server at APP_URL
  * for agent sieges (the real x402 round-trip). `tick()` runs one pass of both, for scripts.
  */
 import "@/lib/config/load-env";
@@ -13,6 +14,7 @@ import { auditBacklog, chainStateProblems } from "@/lib/chain";
 import { db } from "@/lib/db";
 import { guardianMode } from "@/lib/transport";
 import { isArkivLive } from "@/lib/arkiv/config";
+import { swarmConfig, swarmStatus } from "@/lib/swarm";
 import { agentsTick } from "./agents";
 import { arkivTick } from "./arkiv";
 import { auditTick } from "./audit";
@@ -20,6 +22,7 @@ import { depositsTick } from "./deposits";
 import { guardTick } from "./guard";
 import { log } from "./log";
 import { settleTick } from "./settle";
+import { swarmTick } from "./swarm";
 
 export { tick } from "./tick";
 export { setFetch } from "./fetch";
@@ -71,6 +74,12 @@ export function main(): void {
   // ─── Onboarding loops (plans/siege-onboarding-plan.md) register here, one push each: ───
   loops.push(loop("deposits", depositsTick, () => stopping)); // foundation (worker/deposits.ts)
   loops.push(loop("guard", guardTick, () => stopping)); // part 2a (worker/guard.ts — expire turns, dormant, prompt drift)
+  // Lane C: retry and keep alive the sealed transcripts on Swarm.
+  const sc = swarmConfig();
+  if (sc.mode === "live") {
+    log.info(`swarm: ${swarmStatus()}`);
+    loops.push(loop("swarm", swarmTick, () => stopping));
+  } else if (sc.refused) log.fail(`swarm: ${swarmStatus()}`);
   const done = Promise.all(loops);
   const shutdown = (sig: string) => {
     if (stopping) process.exit(1);
