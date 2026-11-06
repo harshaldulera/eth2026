@@ -27,38 +27,63 @@ const ms = (iso: string | undefined) => {
   return Number.isFinite(t) ? t : 0;
 };
 
+/** What a castle read from Arkiv carries beyond the shared Castle type. */
+export type CastleArkivMeta = {
+  /** Key of the arena-owned `castleState` entity the board read. */
+  stateKey?: string;
+  /** Key of the Castellan-owned `castle` entity (the listing they can delete). */
+  identityKey: string;
+  /** EVM address that owns the listing. */
+  castellan: string;
+  /** When the state entity expires, unix ms (estimated from the block it was read at). */
+  expiresAtMs?: number;
+};
+
+export type CastleOnArkiv = Castle & { arkiv: CastleArkivMeta };
+
 // ─── Castle ────────────────────────────────────────────────────────────────
 
-export function castleValues(c: Castle) {
+/** The listing: fixed at creation, owned by the Castellan. */
+export function castleIdentityValues(c: Castle) {
   return {
     castleId: str(c.id),
     name: str(c.name),
     guardianName: str(c.guardianName),
     personality: str(c.personality),
     tier: str(c.tier),
-    status: str(c.status),
-    pot: u64(big(c.pot)),
-    fee: u64(big(c.fee)),
-    assetId: str(c.asset.id),
-    streak: u64(big(c.streak)),
-    siegeCount: u64(big(c.siegeCount)),
-    owner: str(c.owner),
-    deadline: u64(big(c.deadline)),
-    createdAtMs: u64(big(ms(c.createdAt))),
-    vaultState: str(c.vaultState),
     transport: str(c.transport),
     protectedTool: str(c.protectedTool),
-    ...(c.vaultStateReason ? { vaultStateReason: str(c.vaultStateReason) } : {}),
-    ...(c.lastSeenAt ? { lastSeenAtMs: u64(big(ms(c.lastSeenAt))) } : {}),
-    ...(c.vaultId !== null && c.vaultId !== undefined ? { vaultId: u64(big(c.vaultId)) } : {}),
-    ...(c.topicId ? { topicId: str(c.topicId) } : {}),
+    owner: str(c.owner),
+    assetId: str(c.asset.id),
+    deadline: u64(big(c.deadline)),
+    createdAtMs: u64(big(ms(c.createdAt))),
     ...(c.portraitUrl ? { portraitUrl: str(c.portraitUrl) } : {}),
   };
 }
 
-export function rowToCastle(r: Row): Castle {
+/** Everything that moves, plus the listing fields again so the board reads one entity. */
+export function castleStateValues(c: Castle, link: { castellan: string; identityKey: string }) {
+  return {
+    ...castleIdentityValues(c),
+    identityKey: str(link.identityKey),
+    castellan: str(link.castellan),
+    status: str(c.status),
+    pot: u64(big(c.pot)),
+    fee: u64(big(c.fee)),
+    streak: u64(big(c.streak)),
+    siegeCount: u64(big(c.siegeCount)),
+    vaultState: str(c.vaultState),
+    ...(c.vaultStateReason ? { vaultStateReason: str(c.vaultStateReason) } : {}),
+    ...(c.lastSeenAt ? { lastSeenAtMs: u64(big(ms(c.lastSeenAt))) } : {}),
+    ...(c.vaultId !== null && c.vaultId !== undefined ? { vaultId: u64(big(c.vaultId)) } : {}),
+    ...(c.topicId ? { topicId: str(c.topicId) } : {}),
+  };
+}
+
+/** A castle from a `castleState` row. `$key` / `$expiresAt` are read when the query selected them. */
+export function rowToCastle(r: Row): CastleOnArkiv {
   const streak = n(r, "streak") ?? 0;
-  const c: Castle = {
+  const c: CastleOnArkiv = {
     id: s(r, "castleId") ?? "",
     name: s(r, "name") ?? "",
     guardianName: s(r, "guardianName") ?? "",
@@ -79,6 +104,11 @@ export function rowToCastle(r: Row): Castle {
     vaultState: (s(r, "vaultState") ?? "guarding") as VaultState,
     transport: (s(r, "transport") ?? "hosted") as TransportKind,
     protectedTool: s(r, "protectedTool") ?? "",
+    arkiv: {
+      identityKey: s(r, "identityKey") ?? "",
+      castellan: s(r, "castellan") ?? "",
+      ...(typeof r.$key === "string" ? { stateKey: r.$key } : {}),
+    },
   };
   const reason = s(r, "vaultStateReason");
   if (reason) c.vaultStateReason = reason;

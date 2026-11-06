@@ -19,6 +19,7 @@
     "arkiv": "tsx scripts/arkiv-worker.ts",
     "arkiv:check": "tsx scripts/arkiv-check.ts",
     "arkiv:smoke": "tsx scripts/arkiv-smoke.ts",
+    "arkiv:wipe": "tsx scripts/arkiv-wipe.ts",
     "deploy:vault": "tsx scripts/deploy-vault.ts",
     "contracts:test": "vitest run contracts.test",
     "contracts:forge": "cd ../contracts && forge test -vv",

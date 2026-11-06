@@ -12,7 +12,7 @@ import "@/lib/config/load-env";
 import { ExpirationTime } from "@arkiv-network/sdk";
 import { and, eq } from "@arkiv-network/sdk/query";
 import { arenaAddress, arkivReader, arkivWriter } from "@/lib/arkiv/client";
-import { castleValues } from "@/lib/arkiv/codec";
+import { castleIdentityValues } from "@/lib/arkiv/codec";
 import { arkivConfig, arkivLinks } from "@/lib/arkiv/config";
 import { schemas } from "@/lib/arkiv/schema";
 import type { Castle } from "@/lib/types";
@@ -27,7 +27,7 @@ async function find(castleId: string) {
   })
     .select({ $key: true, name: true })
     .from(schemas().castle)
-    .where(and(eq("castleId", castleId), eq("vaultState", "guarding")))
+    .where(and(eq("castleId", castleId), eq("tier", "wooden")))
     .ownedBy(arenaAddress())
     .fetch();
   return res;
@@ -63,8 +63,9 @@ async function main() {
   };
 
   log(`creating castle entity ${id} (lives ${LIFETIME_MIN} min)…`);
-  const { entityKey, txHash } = await arkivWriter().createEntity(schemas().castle as never, castleValues(castle) as never, {
+  const { entityKey, txHash } = await arkivWriter().createEntity(schemas().castle as never, castleIdentityValues(castle) as never, {
     expiration: ExpirationTime.fromMinutes(LIFETIME_MIN),
+    flags: { readonly: true, permissionlessExtension: true },
   } as never);
   log(`created  ${arkivLinks.entity(entityKey)}`);
   log(`tx       ${arkivLinks.tx(txHash)}`);

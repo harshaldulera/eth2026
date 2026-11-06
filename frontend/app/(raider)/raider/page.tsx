@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Bot } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { ArkivBar } from "@/components/arena/arkiv-bar";
+import { BoardFilters, type BoardQuery } from "@/components/arena/board-filters";
 import { usePolling } from "@/lib/hooks/usePolling";
 import { useConfig } from "@/lib/hooks/useConfig";
 import { Amount } from "@/components/money/amount";
@@ -16,7 +18,11 @@ import { cn } from "@/lib/utils";
 export default function RaiderPage() {
   const { config } = useConfig();
   const agents = usePolling(() => api.agents(), 2000);
-  const castles = usePolling(() => api.castles(), 10000);
+  const [q, setQ] = useState<BoardQuery>({});
+  // The owner picks the target from the same Arkiv query the board runs (guarding castles only).
+  const castles = usePolling(() => api.castles({ tier: q.tier, sort: q.sort, minPot: q.minPot, vaultState: "guarding" }), 10000, { key: JSON.stringify(q) });
+  const live = usePolling(() => api.liveSieges(), 5000);
+  const underSiege = useMemo(() => new Set((live.data?.sieges ?? []).map((s) => s.castleId)), [live.data]);
   const approvals = usePolling(() => api.approvals("pending"), 2000);
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -69,7 +75,16 @@ export default function RaiderPage() {
             </div>
           )}
 
-          {current ? <AgentPanel key={current.id} agentId={current.id} castles={castles.data?.castles ?? []} /> : null}
+          {current ? (
+            <>
+              <div className="rounded-xl border border-arena-line bg-arena-panel/60 px-3 py-2.5">
+                <p className="mb-2 text-xs text-stone">Pick a target. These castles come from Arkiv: the same query any raider can run.</p>
+                <BoardFilters value={q} onChange={(next) => setQ({ ...next, all: false })} />
+                <ArkivBar meta={castles.data?.arkiv} className="mt-2" />
+              </div>
+              <AgentPanel key={current.id} agentId={current.id} castles={castles.data?.castles ?? []} underSiege={underSiege} />
+            </>
+          ) : null}
         </section>
 
         <aside className="space-y-6">

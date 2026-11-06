@@ -21,6 +21,8 @@ import { castleEntity, stubWrites } from "./stub";
 export { arkivStubWrites, castleEntity, type CastleEntity } from "./stub";
 export { arkivLinks, isArkivLive } from "./config";
 export { describeCastleQuery } from "./queries";
+export type { CastleArkivMeta, CastleOnArkiv } from "./codec";
+export { delistedCastles } from "./outbox";
 
 /** Where a read came from. `block` is the Arkiv block it was read at (live reads only). */
 export type ReadMeta = { source: "arkiv" | "sqlite"; block?: string; query: string; error?: string };
