@@ -175,7 +175,7 @@ export async function buildRelease(r: SettleRows): Promise<
 export const AUDIT_MAX_BYTES = 1000;
 
 /** Resolve the castle an event belongs to (event.castleId, else via its siege). */
-export function auditCastle(d: DB, event: SiegeEvent): CastleRow | null {
+export function auditCastle(d: Pick<DB, "select">, event: SiegeEvent): CastleRow | null {
   let castleId = event.castleId;
   if (!castleId && event.siegeId) {
     castleId = d.select({ c: schema.sieges.castleId }).from(schema.sieges).where(eq(schema.sieges.id, event.siegeId)).get()?.c;
@@ -210,12 +210,36 @@ export function auditType(event: SiegeEvent): string {
   return AUDIT_TYPES[event.type] ?? event.type;
 }
 
+/** A non-negative integer amount in the smallest unit (tinybar for HBAR), as a decimal string. */
+const units = (v: unknown): string | undefined => {
+  if (typeof v === "bigint") return v >= BigInt(0) ? v.toString() : undefined;
+  if (typeof v === "number") return Number.isSafeInteger(v) && v >= 0 ? String(v) : undefined;
+  return typeof v === "string" && /^\d{1,30}$/.test(v) ? v : undefined;
+};
+
+/** {castellan, pot, arena} cuts of a fee, each in the smallest unit, or undefined. */
+function cutsOf(v: unknown): { castellan: string; pot: string; arena: string } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const castellan = units(o.castellan);
+  const pot = units(o.pot);
+  const arena = units(o.arena);
+  return castellan && pot && arena ? { castellan, pot, arena } : undefined;
+}
+
+const APPROVAL_KINDS = new Set(["requested", "approved", "denied"]);
+
 /**
- * Compact audit JSON (<= 1000 bytes). Only ids and hashes leave the server; message text and orders never do.
- *   siege events: {v:1,type,siegeId,castleId,turn?,transport?,result?,hash?,requestId?,txId?,at}
- *                 (type = auditType(event); transport + requestId = which guardian transport answered and
- *                 the proxy request id; result = held | banished | broken on siege.end, plan A4)
- *   vault_state:  {v:1,type:"vault.state",castleId,from,to,reason,at}
+ * Compact audit JSON (<= 1000 bytes). Only ids, hashes and amounts leave the server; message text,
+ * orders and the agent's reasoning never do. Amounts are strings in the asset's smallest unit (tinybar).
+ *   siege events:   {v:1,type,siegeId,castleId,turn?,transport?,result?,hash?,requestId?,txId?,at}
+ *                   (type = auditType(event); transport + requestId = which guardian transport answered and
+ *                   the proxy request id; result = held | banished | broken on siege.end, plan A4)
+ *   siege.attempt:  + amount (the fee forwarded) and split {castellan,pot,arena}, when the payload has the split
+ *   vault.release:  + amount (pot + fee paid to the raider), when the payload has it
+ *   agent.approval: {v:1,type:"agent.approval",siegeId,castleId,kind:requested|approved|denied,approvalId,
+ *                    agentId,reason (cap hit),amount (extra allowance asked),txId? (the top-up),at}
+ *   vault_state:    {v:1,type:"vault.state",castleId,from,to,reason,at}
  */
 export function auditMessage(event: SiegeEvent, castleId: string): string {
   const p = (event.payload ?? {}) as Record<string, unknown>;
@@ -253,6 +277,22 @@ export function auditMessage(event: SiegeEvent, castleId: string): string {
     txId: str(p.txId) ?? str(tx?.txId),
     at: event.at,
   };
+  if (event.type === "approval") {
+    const kind = str(p.kind, 20);
+    Object.assign(msg, {
+      kind: kind && APPROVAL_KINDS.has(kind) ? kind : undefined,
+      approvalId: str(p.approvalId, 80),
+      agentId: str(p.agentId, 80),
+      reason: str(p.reason, 40),
+      amount: units(p.amount),
+    });
+  } else if (event.type === "attempt") {
+    const split = cutsOf(p.split);
+    const fee = split ? (BigInt(split.castellan) + BigInt(split.pot) + BigInt(split.arena)).toString() : undefined;
+    Object.assign(msg, { amount: units(p.amount) ?? fee, split });
+  } else if (event.type === "release") {
+    msg.amount = units(p.amount);
+  }
   let out = JSON.stringify(msg);
   for (const k of ["requestId", "txId", "hash"]) {
     if (Buffer.byteLength(out, "utf8") <= AUDIT_MAX_BYTES) break;

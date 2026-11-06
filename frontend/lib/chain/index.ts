@@ -1,8 +1,9 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import { env } from "@/lib/config/env";
 import { db, schema } from "@/lib/db";
 import type { ChainPort, SiegeEvent, Verification } from "@/lib/types";
 import { configuredChainId } from "./evm";
+import { enqueueAudit } from "./outbox";
 import { accountUrl, contractUrl, HASHSCAN_BASE, isStubRef, topicUrl } from "./hashscan";
 import type { ReleaseTypedData } from "./releaseSig";
 import { buildRelease, loadSettle, releaseRefusal } from "./settle";
@@ -11,6 +12,7 @@ import { stubChain } from "./stub";
 export * from "./hashscan";
 export * from "./units";
 export { siegeIdToBytes32, releaseTypedData, verifierAddress, signRelease, type ReleaseTypedData } from "./releaseSig";
+export { drainAudit, auditBacklog, syncAuditFromEvents, type DrainReport, type HcsPort } from "./outbox";
 
 /**
  * lib/chain — the arena's on-chain side (SiegeVault on Hedera EVM + HCS audit topics).
@@ -31,9 +33,16 @@ export const chain: ChainPort = {
   createVault: async (i) => (await impl()).createVault(i),
   recordAttempt: async (siegeId: string) => (await impl()).recordAttempt(siegeId),
   release: async (siegeId: string, verdict: Verification & { signature: `0x${string}` }) => (await impl()).release(siegeId, verdict),
+  /**
+   * Queues the message in the HCS audit outbox (lib/chain/outbox.ts) — synchronously, so calls keep
+   * their order — and resolves `{ ok: true, topicId, seq }` where `seq` is the LOCAL per-topic sequence
+   * ("queued"). The worker's drainer submits each topic in that order and records the HCS seq on the row.
+   * siege.start / siege.message / siege.end are derived from the siege engine's events; callers audit
+   * only what has no event of its own kind (siege.attempt, vault.release, vault.state, agent.approval).
+   */
   audit: async (event: SiegeEvent) => {
     try {
-      return await (await impl()).audit(event);
+      return enqueueAudit(db(), event, env().CHAIN_MODE);
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
     }
@@ -129,12 +138,24 @@ export function chainInfo(): ChainInfo {
 export type AuditTrail = {
   topicId: string | null;
   topicUrl?: string;
-  messages: { seq: number; type: string; siegeId?: string; txId?: string; at: string }[];
+  /**
+   * Newest first. `seq` is the HCS topic sequence number once the message is on the topic, null while
+   * it waits in the outbox (`state: "pending"`); `localSeq` is its place in the topic's order either way.
+   */
+  messages: {
+    seq: number | null;
+    localSeq: number | null;
+    state: "pending" | "submitted";
+    type: string;
+    siegeId?: string;
+    txId?: string;
+    at: string;
+  }[];
 };
 
 /**
- * The castle's audit trail from the local auditLog copy (every HCS submission is mirrored there;
- * in stub mode it is the whole log). Shape matches GET /api/castles/[id] `audit`.
+ * The castle's audit trail from the audit outbox (audit_log): submitted messages with their HCS seq and
+ * tx id, queued ones as pending. Shape matches GET /api/castles/[id] `audit`.
  */
 export function auditTrail(castleId: string, limit = 25): AuditTrail {
   const d = db();
@@ -142,7 +163,7 @@ export function auditTrail(castleId: string, limit = 25): AuditTrail {
   const rows = d
     .select()
     .from(schema.auditLog)
-    .where(and(eq(schema.auditLog.castleId, castleId), isNotNull(schema.auditLog.seq)))
+    .where(and(eq(schema.auditLog.castleId, castleId), ne(schema.auditLog.state, "skipped")))
     .orderBy(desc(schema.auditLog.id))
     .limit(limit)
     .all();
@@ -150,12 +171,17 @@ export function auditTrail(castleId: string, limit = 25): AuditTrail {
   return {
     topicId,
     topicUrl: topicId ? topicUrl(topicId) : undefined,
-    messages: rows.map((r) => ({
-      seq: r.seq ?? 0,
-      type: r.type,
-      siegeId: r.siegeId ?? undefined,
-      txId: r.txId ?? undefined,
-      at: r.at,
-    })),
+    messages: rows.map((r) => {
+      const submitted = r.state === "submitted";
+      return {
+        seq: submitted ? r.seq : null,
+        localSeq: r.localSeq,
+        state: submitted ? "submitted" : "pending",
+        type: r.type,
+        siegeId: r.siegeId ?? undefined,
+        txId: submitted ? (r.txId ?? undefined) : undefined,
+        at: r.at,
+      };
+    }),
   };
 }

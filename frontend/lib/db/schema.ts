@@ -236,17 +236,53 @@ export const freeSieges = sqliteTable(
   (t) => [uniqueIndex("free_sieges_wallet_day").on(t.wallet, t.day)],
 );
 
-/** Local copy of every HCS submission (and the whole log in stub mode). */
-export const auditLog = sqliteTable("audit_log", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  topicId: text("topic_id").notNull(),
-  castleId: text("castle_id"),
-  siegeId: text("siege_id"),
-  type: text("type").notNull(),
-  message: text("message").notNull(),
-  seq: integer("seq"),
-  txId: text("tx_id"),
-  at: text("at").notNull(),
+export const AUDIT_STATES = ["pending", "submitting", "submitted", "skipped"] as const;
+export type AuditState = (typeof AUDIT_STATES)[number];
+
+/**
+ * The HCS audit outbox (lib/chain/outbox.ts) and the local copy of every HCS message (the whole log
+ * in stub mode). chain.audit() only appends a row: `local_seq` is the per-topic order the messages
+ * happened in. The worker's drainer submits each topic's rows strictly in `local_seq` order and fills
+ * in `seq` (the HCS topic sequence number) and `tx_id`.
+ *   pending     queued, not sent
+ *   submitting  sent with `tx_id` (pre-generated), outcome not yet known: reconciled from the mirror
+ *   submitted   on the topic as HCS message `seq`
+ *   skipped     never sent (no topic in testnet mode, or a submit that failed before the outbox existed)
+ */
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    topicId: text("topic_id").notNull(),
+    castleId: text("castle_id"),
+    siegeId: text("siege_id"),
+    type: text("type").notNull(),
+    message: text("message").notNull(),
+    /** HCS topic sequence number, once submitted. */
+    seq: integer("seq"),
+    txId: text("tx_id"),
+    at: text("at").notNull(),
+    /** Per-topic append order (1, 2, 3…): the order the drainer submits in. */
+    localSeq: integer("local_seq"),
+    state: text("state", { enum: AUDIT_STATES }).notNull().default("pending"),
+    /** events.id this row was derived from (siege.start / siege.message / siege.end). */
+    eventId: integer("event_id"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    submittedAt: text("submitted_at"),
+  },
+  (t) => [
+    uniqueIndex("audit_log_topic_local_seq").on(t.topicId, t.localSeq).where(sql`${t.localSeq} IS NOT NULL`),
+    uniqueIndex("audit_log_event_id").on(t.eventId).where(sql`${t.eventId} IS NOT NULL`),
+    index("audit_log_state_idx").on(t.state, t.topicId),
+    index("audit_log_castle_idx").on(t.castleId),
+  ],
+);
+
+/** Small key/value state for the audit outbox: `events_cursor` = last events.id turned into audit rows. */
+export const auditMeta = sqliteTable("audit_meta", {
+  k: text("k").primaryKey(),
+  v: text("v").notNull(),
 });
 
 /**

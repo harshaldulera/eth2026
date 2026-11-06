@@ -5,7 +5,7 @@ import { attachReceipt, claimFree, DuplicatePaymentError, markFreeSiege, markRef
 import { CastleNotGuardingError, siege } from "@/lib/siege";
 import type { FreeReceipt, PaidReceipt } from "@/lib/types";
 import { siegeBlockedReason, vaultStateOf } from "@/lib/vault";
-import { auditLater, err, errorMessage, json, readBody } from "../../_lib/http";
+import { err, errorMessage, json, readBody } from "../../_lib/http";
 
 /**
  * POST /api/siege/start — THE x402-gated endpoint. Any outside agent can call it:
@@ -107,13 +107,6 @@ export async function POST(req: Request) {
   attachReceipt(receiptId, started.id);
   if (receipt.free) markFreeSiege(receipt.payer, started.id);
 
-  auditLater({
-    siegeId: started.id,
-    castleId,
-    type: "start",
-    transport: started.transport ?? castle.transport,
-    payload: { payer: receipt.payer, ...(receipt.free ? {} : { txId: receipt.txId }) },
-  });
-
+  // HCS siege.start is derived from the engine's "start" event by the audit outbox (lib/chain/outbox.ts).
   return json({ siegeId: started.id, siege: started, receipt }, 200, headers);
 }

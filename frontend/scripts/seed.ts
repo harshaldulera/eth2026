@@ -1,5 +1,6 @@
 /**
  * Seed the arena:  npm run seed            (npm run seed -- --rearm wooden | <castle id> | <name> | broken | all)
+ *                                           (npm run seed -- --new-topics: a fresh HCS topic for every castle)
  *
  * Idempotent: upserts the five FIXTURE_CASTLES by name (refreshes guardian/orders, never resets money
  * state), creates the on-chain vault and the HCS audit topic for each castle that lacks one (testnet:
@@ -23,6 +24,10 @@
  * "issue_refund". It seeds to "created" only — Lane B's SDK (or, in stub mode, the dev endpoint
  * POST /api/castles/[id]/vault-state) walks it to guarding. Re-arming it closes any open vault and
  * puts it back to "created".
+ *
+ * --new-topics: give every castle a NEW HCS audit topic, even if it has one (the old topic stays on
+ * chain, unchanged; rows already queued for it still drain to it). Use it before the freeze so the
+ * submitted topics hold only messages written by the ordered audit outbox. Combines with --rearm.
  *
  * NOTE: streak / siegeCount values come from the fixtures and are COSMETIC demo history (the Iron
  * Warden's 212 is there for the pitch). The on-chain vault streak starts at 0, so DB and contract
@@ -80,7 +85,7 @@ function rearmMatches(target: string, row: { id: string; name: string; tier: str
   return t === "all" || (t === "broken" && row.status !== "open") || t === row.id.toLowerCase() || t === row.name.toLowerCase() || t === row.tier;
 }
 
-export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Promise<SeedSummary> {
+export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: boolean } = {}): Promise<SeedSummary> {
   const say = (s: string) => !opts.quiet && console.log(s);
   const e = env();
   const testnet = e.CHAIN_MODE === "testnet";
@@ -91,7 +96,7 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
   say(`Seeding (CHAIN_MODE=${e.CHAIN_MODE}, db ${e.DATABASE_URL}, vaults on ${tag})`);
   const C = schema.castles;
 
-  /** One audited vault transition (awaited, so a script exit never drops the HCS message). */
+  /** One audited vault transition (awaited: its vault.state row is queued in the HCS audit outbox, and the worker submits it). */
   async function step(id: string, to: VaultState, reason: string, force = false): Promise<boolean> {
     const r = await transitionVault(id, to, reason, { force, awaitSideEffects: true });
     if (r.ok) say(`    → ${r.change.from} → ${to}: ${reason}`);
@@ -161,12 +166,13 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
     }
 
     // The audit topic first, so every vault.state transition below lands on it.
-    if (!row.topicId || (testnet && isStubRef(row.topicId))) {
+    if (!row.topicId || (testnet && isStubRef(row.topicId)) || opts.newTopics) {
+      const was = row.topicId;
       const r = await chain.createTopic(row.id);
       if (r.ok) {
         db().update(C).set({ topicId: r.topicId }).where(eq(C.id, row.id)).run();
         row = { ...row, topicId: r.topicId };
-        say(`    ✓ HCS topic ${link(topicUrl(r.topicId), r.topicId)}`);
+        say(`    ✓ HCS topic ${link(topicUrl(r.topicId), r.topicId)}${was && was !== r.topicId ? ` (new; was ${was})` : ""}`);
       } else say(`    ✗ createTopic: ${r.reason}`);
     }
 
@@ -280,7 +286,7 @@ if (/scripts[\\/]seed\.[cm]?[jt]s$/.test(process.argv[1] ?? "")) {
     console.error("usage: npm run seed -- --rearm <wooden|stone|iron|castle id|castle name|broken|all>");
     process.exit(1);
   }
-  seed({ rearm }).then(
+  seed({ rearm, newTopics: process.argv.includes("--new-topics") }).then(
     () => process.exit(0),
     (err) => {
       console.error("✗ seed failed:", err instanceof Error ? err.message : err);

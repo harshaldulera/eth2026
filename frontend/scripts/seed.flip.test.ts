@@ -100,6 +100,16 @@ describe("seed after flipping a stub DB to testnet", () => {
     // idempotent on testnet, and a redeployed vault (new VAULT_ADDRESS) is noticed
     await seed({ quiet: true });
     expect(vaultMock.createVault).toHaveBeenCalledTimes(5);
+    expect(hcsMock.createTopic).toHaveBeenCalledTimes(6);
+    // --new-topics: a fresh audit topic for every castle (freeze prep), vaults untouched
+    const before = new Map(db().select().from(schema.castles).all().map((c) => [c.id, c.topicId]));
+    await seed({ quiet: true, newTopics: true });
+    expect(hcsMock.createTopic).toHaveBeenCalledTimes(12);
+    expect(vaultMock.createVault).toHaveBeenCalledTimes(5);
+    for (const c of db().select().from(schema.castles).all()) {
+      expect(c.topicId).toMatch(/^0\.0\.\d+$/);
+      expect(c.topicId).not.toBe(before.get(c.id));
+    }
     process.env.VAULT_ADDRESS = "0x00000000000000000000000000000000005E1E03";
     resetEnv();
     expect(chainStateProblems().filter((p) => p.includes("vault #"))).toHaveLength(5);

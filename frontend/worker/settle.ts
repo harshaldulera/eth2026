@@ -180,7 +180,8 @@ async function settleHeld(row: SiegeRow) {
       ...txPayload(r.tx),
     },
   });
-  await chain.audit({ siegeId: row.id, castleId: row.castleId, type: "attempt", transport, payload: { txId: r.tx.txId, transport }, at });
+  // HCS siege.attempt carries the fee and its on-chain split (tinybar), so the topic alone shows the money.
+  await chain.audit({ siegeId: row.id, castleId: row.castleId, type: "attempt", transport, payload: { txId: r.tx.txId, transport, split: r.split }, at });
   await syncCastleEntity(row.castleId);
   log.ok(
     `attempt ${short(row.id)} @ ${castle.name}: ${row.status}, pot +${formatHbar(BigInt(r.split.pot))} -> ${formatHbar(BigInt(r.newPot))}, streak ${castle.streak} (${r.tx.txId})`,
@@ -225,6 +226,15 @@ async function settleBroken(row: SiegeRow) {
     return before;
   });
   if (voided) log.fail(`release ${short(row.id)} landed (${r.tx.txId}) on a siege voided as ${voided} — check its receipt by hand`);
+  // HCS order = what happened: the payout first, then the vault.state "broken" transition it causes.
+  await chain.audit({
+    siegeId: row.id,
+    castleId: row.castleId,
+    type: "release",
+    transport,
+    payload: { txId: r.tx.txId, transcriptHash: v.transcriptHash, requestId: v.requestId, transport, amount: r.amount },
+    at,
+  });
   const t = await transitionVault(row.castleId, "broken", `paid out to ${row.raider}`);
   if (!t.ok) log.fail(`vault state ${castleName(row.castleId)} -> broken: ${t.reason}`);
   // Anyone still mid-siege on this castle can no longer win anything: void them, refund their fees.
@@ -244,14 +254,6 @@ async function settleBroken(row: SiegeRow) {
       agentId: row.agentId ?? undefined,
       ...txPayload(r.tx),
     },
-  });
-  await chain.audit({
-    siegeId: row.id,
-    castleId: row.castleId,
-    type: "release",
-    transport,
-    payload: { txId: r.tx.txId, transcriptHash: v.transcriptHash, requestId: v.requestId, transport },
-    at,
   });
   log.ok(`release ${short(row.id)} @ ${castleName(row.castleId)}: ${formatHbar(BigInt(r.amount))} -> ${row.raider} (${r.tx.txId})`);
 }
@@ -276,6 +278,21 @@ function settleFree(row: SiegeRow) {
   const streak = db().select({ s: C.streak }).from(C).where(eq(C.id, row.castleId)).get()?.s ?? 0;
   emit({ siegeId: row.id, castleId: row.castleId, type: "attempt", transport: transportOf(row), payload: { castleId: row.castleId, free: true, streak, transport: transportOf(row) } });
   log.ok(`free ${row.status} ${short(row.id)} @ ${castleName(row.castleId)}: practice defense, streak unchanged (${streak}), no money`);
+}
+
+/**
+ * The siege engine commits a siege's final status a moment before it persists that turn's "message"
+ * and "end" events. The HCS audit trail is derived from those events (lib/chain/outbox.ts), so a paid
+ * siege is settled only once its "end" event exists: siege.attempt / vault.release then always follow
+ * siege.end on the castle's topic. A siege whose end event never shows up still settles after the grace.
+ */
+const END_EVENT_GRACE_MS = 10_000;
+function awaitingEndEvent(row: SiegeRow): boolean {
+  if (row.free) return false;
+  const E = schema.events;
+  if (db().select({ id: E.id }).from(E).where(and(eq(E.siegeId, row.id), eq(E.type, "end"))).get()) return false;
+  const ended = Date.parse(row.endedAt ?? "");
+  return Number.isFinite(ended) && Date.now() - ended < END_EVENT_GRACE_MS;
 }
 
 /** Ended sieges the worker still has to settle, oldest end first (a held siege lands before a later break). */
@@ -305,6 +322,7 @@ export async function settleTick(): Promise<number> {
   for (const row of pending()) {
     const due = nextTry.get(row.id);
     if (due && due > Date.now()) continue;
+    if (awaitingEndEvent(row)) continue;
     nextTry.delete(row.id);
     n++;
     try {

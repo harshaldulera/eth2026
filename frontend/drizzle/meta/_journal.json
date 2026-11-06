@@ -36,6 +36,13 @@
       "when": 1793952976032,
       "tag": "0004_lane_b_proxy_records",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793958932138,
+      "tag": "0005_audit_outbox",
+      "breakpoints": true
     }
   ]
 }

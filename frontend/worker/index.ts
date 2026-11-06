@@ -1,15 +1,18 @@
 /**
  * The Siege worker:  npm run worker   (tsx worker/index.ts)
  *
- * Two independent loops, every second: settlement (chain.recordAttempt / verifier + release) and the
- * raider-agent runner. The only process that holds VERIFIER_KEY. Talks to the Next server at APP_URL
+ * Three independent loops, every second: settlement (chain.recordAttempt / verifier + release), the
+ * raider-agent runner, and the HCS audit drainer (the only process that submits audit messages, one
+ * topic message at a time in order: lib/chain/outbox.ts). The only process that holds VERIFIER_KEY. Talks to the Next server at APP_URL
  * for agent sieges (the real x402 round-trip). `tick()` runs one pass of both, for scripts.
  */
 import "@/lib/config/load-env";
 import { env } from "@/lib/config/env";
-import { chainStateProblems } from "@/lib/chain";
+import { auditBacklog, chainStateProblems } from "@/lib/chain";
+import { db } from "@/lib/db";
 import { guardianMode } from "@/lib/transport";
 import { agentsTick } from "./agents";
+import { auditTick } from "./audit";
 import { log } from "./log";
 import { settleTick } from "./settle";
 
@@ -47,7 +50,14 @@ export function main(): void {
   const gm = guardianMode();
   const mock = gm === "0g" && (process.env.ZG_MOCK === "1" || !process.env.ZG_API_KEY);
   log.info(`worker up — CHAIN_MODE=${e.CHAIN_MODE}, GUARDIAN_MODE=${gm}${mock ? " (offline 0G mock)" : ""}, db ${e.DATABASE_URL}, api ${e.APP_URL}`);
-  const done = Promise.all([loop("settle", settleTick, () => stopping), loop("agents", agentsTick, () => stopping)]);
+  const backlog = auditBacklog(db());
+  if (backlog.length)
+    log.info(`hcs outbox: ${backlog.reduce((n, b) => n + b.pending, 0)} queued audit message(s) on ${backlog.length} topic(s), submitting in order`);
+  const done = Promise.all([
+    loop("settle", settleTick, () => stopping),
+    loop("agents", agentsTick, () => stopping),
+    loop("audit", auditTick, () => stopping),
+  ]);
   const shutdown = (sig: string) => {
     if (stopping) process.exit(1);
     stopping = true;

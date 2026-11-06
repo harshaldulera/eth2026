@@ -37,7 +37,7 @@ describe("migrations: a DB migrated with a pre-merge 0003", () => {
     const s = new Database(file);
     const journalJson = JSON.parse(readFileSync(path.join(process.cwd(), "drizzle/meta/_journal.json"), "utf8")) as { entries: { tag: string; when: number }[] };
     s.exec("CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash text NOT NULL, created_at numeric)");
-    for (const e of journalJson.entries.filter((e) => !e.tag.startsWith("0004"))) {
+    for (const e of journalJson.entries.filter((e) => Number(e.tag.slice(0, 4)) < 4)) {
       for (const stmt of readFileSync(path.join(process.cwd(), "drizzle", `${e.tag}.sql`), "utf8").split("--> statement-breakpoint")) if (stmt.trim()) s.exec(stmt);
       s.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)").run(e.tag, e.when);
     }

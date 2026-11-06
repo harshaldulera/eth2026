@@ -3,14 +3,11 @@ import { recoverTypedDataAddress } from "viem";
 import { db as sharedDb, schema, type DB } from "@/lib/db";
 import { voidInFlightSieges } from "@/lib/pay/refunds";
 import type { Amount, ChainPort, SiegeEvent, TxRef, VaultCloseReason, Verification } from "@/lib/types";
-import { nowIso } from "@/lib/util/ids";
 import { txUrl } from "./hashscan";
+import { enqueueAudit, stubTopicId } from "./outbox";
 import { verifierAddress } from "./releaseSig";
 import {
   attemptRefusal,
-  auditCastle,
-  auditMessage,
-  auditType,
   buildRelease,
   closeVoidReason,
   computeSplit,
@@ -65,7 +62,7 @@ export function stubTx(): TxRef {
   return { txId, hashscanUrl: txUrl(txId), stub: true };
 }
 
-export const stubTopicId = (castleId: string) => `0.0.stub-${castleId}`;
+export { stubTopicId };
 
 export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
   return {
@@ -154,31 +151,10 @@ export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
       return { ok: true, tx, amount: amount.toString() };
     },
 
+    /** Queues the message in the HCS audit outbox; the worker's drainer gives it a stub seq (lib/chain/outbox.ts). */
     async audit(event: SiegeEvent) {
       try {
-        const d = getDb();
-        const castle = auditCastle(d, event);
-        if (!castle) return { ok: false, reason: "no_castle" };
-        const topicId = castle.topicId ?? stubTopicId(castle.id);
-        const message = auditMessage(event, castle.id);
-        const seq = d.transaction((tx) => {
-          const last = tx.select({ m: max(schema.auditLog.seq) }).from(schema.auditLog).where(eq(schema.auditLog.topicId, topicId)).get()?.m ?? 0;
-          const next = last + 1;
-          tx.insert(schema.auditLog)
-            .values({
-              topicId,
-              castleId: castle.id,
-              siegeId: event.siegeId || null,
-              type: auditType(event),
-              message,
-              seq: next,
-              txId: null,
-              at: nowIso(),
-            })
-            .run();
-          return next;
-        });
-        return { ok: true, topicId, seq };
+        return enqueueAudit(getDb(), event, "stub");
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
