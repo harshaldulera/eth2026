@@ -75,7 +75,7 @@ export type StubDecisionInput = {
 };
 
 /** The vault-scoped proxy key a guardian call goes through (lib/proxy issueKey). */
-export type GuardianVia = { modelKey: string; baseURL: string };
+export type GuardianVia = import("@/lib/types").GuardianVia;
 
 /** Pure decision function (no DB, no delay). Exported for tests and for Lane B to diff against. */
 export function decide(i: StubDecisionInput): GuardianDecision {

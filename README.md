@@ -2,7 +2,7 @@
 
 **Companies are giving AI agents wallets. Siege is where those agents get attacked for sport, and the attackers get paid.**
 
-AI guardians hold vaults of real (test) HBAR. A Raider pays a siege fee over **x402 on Hedera** for five messages to talk the guardian into calling its one real tool, `open_vault`.
+AI guardians hold vaults of real (test) HBAR. A Raider pays a siege fee over **x402 on Hedera** for five messages to talk the guardian into calling its one protected tool (`unlock_vault` for hosted guardians; an SDK castle names its own, e.g. `issue_refund`).
 
 - **The guardian holds.** The fee is split on chain: 80% to the Castellan, 15% grows the pot, 5% to the arena.
 - **The guardian opens.** A verifier checks the transcript, and `SiegeVault` pays the whole pot to the Raider.
@@ -31,7 +31,7 @@ Stub mode is the default. It needs no environment variables. Every transaction i
 The headless end-to-end test exercises the whole demo path in-process and prints a narrative you can reuse in the pitch:
 
 ```bash
-npm run demo          # PASS — 71/71 checks
+npm run demo          # PASS — 108/108 checks
 ```
 
 Other checks:
@@ -127,7 +127,7 @@ Lane A laid down Checkpoint 0 while Harshal and Suja16 built from the original t
   - the recomputed transcript hash matches the stored hash
   - the siege is broken and paid
   - the last guardian message has a request id
-  - that message carries an `open_vault` tool call
+  - that message carries a call to the castle's `protectedTool`
 
   It is not a proof unless 0G returns an attestation we verify.
 - **Lane C.** Everything in `frontend/components/money` is props only:
@@ -137,7 +137,8 @@ Lane A laid down Checkpoint 0 while Harshal and Suja16 built from the original t
 
   The board, castle and siege pages are Lane A demo screens, so replace or merge them freely. Live data: `/api/events?cursor=` and `?tail=`, plus an SSE stream at `/api/events/stream`. The worker is a separate process, so the `events` table is the cross-process channel.
 - **Next 16 config.** `next.config.ts` keeps `cacheComponents` and `partialPrefetching` on. `export const dynamic` does not exist with that config, so GET handlers that read the DB call `await connection()` first. `next dev` re-adds an "agent feedback" block to `frontend/AGENTS.md` on every run. Don't commit it.
-- **Owner-only endpoints.** Creating, running and stopping agents, and deciding approvals, require the `siege_owner` cookie. Get it with `POST /api/owner`.
+- **Owner-only endpoints.** Creating, running and stopping agents, deciding approvals, opening a verified vault (`POST /api/castles/[id]/open`) and closing one (`POST /api/castles/[id]/close`, 409 `being_broken` while a paid break waits for its release) require the `siege_owner` cookie. Get it with `POST /api/owner`.
+- **Vault lifecycle API (Lane B).** Use `vaultState.transition` from `lib/vault` for connected / verified / guarding / dormant. It refuses `funded` and `broken`, and `closed` needs a close reason (`orders_changed`, `owner_closed`, `expired`) and routes through `closeCastle`, which closes the vault on chain first. Never call `chain.closeVault` directly: it does not take the castle off the board.
 - **Storage.** SQLite through Drizzle lives at `frontend/data/siege.db`. Migrations are in `frontend/drizzle/` and apply automatically on first open. The schema stays portable to Postgres.
 
 ## Sponsor claims (Hedera x402)
@@ -147,7 +148,7 @@ Each of these is true as built:
 - **Caps are enforced before payment, and by account balance.** The account-balance part holds in per-agent mode.
 - **The owner decides on every cap hit.** Hitting a cap pauses the agent and asks its owner. Deny stops it, and approve tops it up on chain.
 - **HashScan shows every money step.** The fee split and the payout run in `SiegeVault`, as covered in "How the money moves".
-- **Every siege is audited on HCS.** It writes to a per-castle topic, with hashes and ids only.
+- **Every siege is audited on HCS.** It writes to a per-castle topic, with hashes and ids only. Message types (plan A4): `vault.state`, `siege.start`, `siege.message`, `siege.decision`, `siege.end` (result + transcript hash), `siege.attempt`, `vault.release`, `agent.approval`.
 
 Avoid these claims:
 - "Fees go straight into the contract." They go via the treasury.

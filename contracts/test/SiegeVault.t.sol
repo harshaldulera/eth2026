@@ -379,20 +379,25 @@ contract SiegeVaultTest is MiniTest {
         assertEq(_status(1), 1, "still open");
     }
 
-    function test_closeVault_ownerClosed_castellanAnyTime() public {
+    function test_closeVault_ownerClosed_arenaAnyTime() public {
         _open(1_000, 50_000);
         uint256 before = castellan.balance;
         vm.expectEmit(true, false, false, true);
         emit VaultClosed(1, 50_000, SiegeVault.CloseReason.OwnerClosed);
-        _close(1, SiegeVault.CloseReason.OwnerClosed, castellan);
+        vault.closeVault(1, SiegeVault.CloseReason.OwnerClosed); // the test contract is the arena
         assertEq(castellan.balance - before, 50_000, "refund");
         assertEq(_status(1), 3, "status Closed");
     }
 
-    function test_closeVault_ownerClosed_stranger() public {
+    /// The castellan asks the arena (which refuses while a verified break waits for its release);
+    /// a direct castellan close could front-run that release.
+    function test_closeVault_ownerClosed_castellanOrStranger_notArena() public {
         _open(1_000, 50_000);
+        vm.prank(castellan);
+        vm.expectRevert(SiegeVault.NotArena.selector);
+        vault.closeVault(1, SiegeVault.CloseReason.OwnerClosed);
         vm.prank(stranger);
-        vm.expectRevert(SiegeVault.NotAllowed.selector);
+        vm.expectRevert(SiegeVault.NotArena.selector);
         vault.closeVault(1, SiegeVault.CloseReason.OwnerClosed);
         assertEq(_status(1), 1, "still open");
     }
@@ -400,7 +405,7 @@ contract SiegeVaultTest is MiniTest {
     function test_closeVault_closedOrBroken_badStatus() public {
         _open(1_000, 50_000);
         _open(1_000, 50_000);
-        _close(1, SiegeVault.CloseReason.OwnerClosed, castellan);
+        vault.closeVault(1, SiegeVault.CloseReason.OwnerClosed);
         bytes32 t = keccak256("t");
         vault.release{value: 1_000}(2, raider, t, _sid("b"), _sign(VERIFIER_PK, 2, raider, t, _sid("b")));
         vm.warp(block.timestamp + DAY);
@@ -485,7 +490,7 @@ contract SiegeVaultTest is MiniTest {
         cs[1] = castellan2;
         vault.createVault{value: 40_000}(3_333, uint64(DAY), castellan, HOSTED_TOOL); // 1: Expired
         vault.createVault{value: 25_000}(3_333, uint64(3 * DAY), castellan2, "issue_refund"); // 2: OrdersChanged
-        vault.createVault{value: 11}(3_333, uint64(3 * DAY), castellan, "send_email"); // 3: OwnerClosed (castellan)
+        vault.createVault{value: 11}(3_333, uint64(3 * DAY), castellan, "send_email"); // 3: OwnerClosed (arena, castellan 1)
         vault.createVault{value: 99_999}(3_333, uint64(3 * DAY), castellan2, HOSTED_TOOL); // 4: OwnerClosed (arena)
         vault.createVault{value: 5_000}(3_333, uint64(3 * DAY), castellan, HOSTED_TOOL); // 5: Broken
         vault.createVault{value: 1}(3_333, uint64(3 * DAY), castellan2, HOSTED_TOOL); // 6: stays open
@@ -495,7 +500,7 @@ contract SiegeVaultTest is MiniTest {
         }
         vault.closeVault(2, SiegeVault.CloseReason.OrdersChanged);
         _invariant(cs);
-        _close(3, SiegeVault.CloseReason.OwnerClosed, castellan);
+        vault.closeVault(3, SiegeVault.CloseReason.OwnerClosed);
         _invariant(cs);
         vm.prank(castellan2);
         vault.withdraw();

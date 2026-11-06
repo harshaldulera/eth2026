@@ -14,6 +14,7 @@ import {
   buildRelease,
   closeVoidReason,
   computeSplit,
+  isFreeSiege,
   loadSettle,
   releaseRefusal,
   splitToAmounts,
@@ -25,17 +26,33 @@ import {
 /**
  * Stub ChainPort: no network. Applies the same refusal rules and the same integer fee math as
  * SiegeVault, verifies release signatures against verifierAddress(), and keeps the HCS audit log
- * in the auditLog table. Like the real port it never writes castles/sieges: the worker does.
+ * in the auditLog table. Like the real port, its only DB write is the write-ahead `sieges.pending_tx`
+ * of a recordAttempt/release (so a vault close racing the worker cannot void a siege whose chain write
+ * already "landed"); castles and settlement results are written by the worker.
  */
 
 const g = globalThis as unknown as {
   __siegeStubTx?: number;
   __siegeStubVault?: number;
   __siegeStubVaultTools?: Map<number, string>;
-  __siegeStubClosed?: Set<number>;
+  __siegeStubClosed?: WeakMap<DB, Set<number>>;
 };
 const vaultTools = (g.__siegeStubVaultTools ??= new Map<number, string>());
-const closedVaults = (g.__siegeStubClosed ??= new Set<number>());
+/** Vaults closed on the stub "chain", per database (a fresh DB restarts vault ids at 1; its vaults are not closed). */
+const closedByDb = (g.__siegeStubClosed instanceof WeakMap ? g.__siegeStubClosed : (g.__siegeStubClosed = new WeakMap<DB, Set<number>>()));
+const closedVaults = (d: DB): Set<number> => {
+  let set = closedByDb.get(d);
+  if (!set) closedByDb.set(d, (set = new Set<number>()));
+  return set;
+};
+
+/** A stub write that already "landed" for this siege (its pending_tx), as a TxRef. */
+const landedStub = (r: { siege: { pendingTx: string | null } }): TxRef | null =>
+  r.siege.pendingTx?.startsWith("stub:") ? { txId: r.siege.pendingTx, hashscanUrl: txUrl(r.siege.pendingTx), stub: true } : null;
+
+/** Write-ahead marker, like the testnet port's pending_tx: a siege with a chain write in flight is never voided. */
+const markPending = (d: DB, siegeId: string, tx: TxRef) =>
+  d.update(schema.sieges).set({ pendingTx: tx.txId }).where(eq(schema.sieges.id, siegeId)).run();
 
 /** The protectedTool a stub vault was created with (this process only; the castle row has it too). */
 export const stubVaultTool = (vaultId: number): string | undefined => vaultTools.get(vaultId);
@@ -85,10 +102,10 @@ export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
         .from(C)
         .where(and(eq(C.vaultId, vaultId), or(eq(C.vaultAddress, "stub"), isNull(C.vaultAddress))))
         .get();
-      if (!castle || closedVaults.has(vaultId) || castle.status !== "open" || !VAULT_OPEN_STATES.has(castle.vaultState))
+      if (!castle || closedVaults(d).has(vaultId) || castle.status !== "open" || !VAULT_OPEN_STATES.has(castle.vaultState))
         return { ok: false, reason: "vault_not_open" };
       if (reason === "expired" && castle.deadline > Date.now()) return { ok: false, reason: "not_expired" };
-      closedVaults.add(vaultId);
+      closedVaults(d).add(vaultId);
       const voided = voidInFlightSieges(castle.id, closeVoidReason(reason), { includeEnded: true });
       return { ok: true, tx: stubTx(), refunded: String(castle.potTinybar), inFlightRefunds: voided.refunds };
     },
@@ -97,18 +114,29 @@ export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
       const d = getDb();
       const r = loadSettle(d, siegeId);
       if (!r.ok) return r;
+      // An earlier call "landed" (pending_tx written) but the worker never applied it: that write stands,
+      // like a landed testnet tx wins over a later DB-level refusal (e.g. the vault closed since).
+      const prior = landedStub(r);
+      if (prior && !r.siege.attemptTx && !isFreeSiege(r)) {
+        const split = computeSplit(BigInt(r.castle.feeTinybar));
+        return { ok: true, tx: prior, split: splitToAmounts(split), newPot: (BigInt(r.castle.potTinybar) + split.pot).toString() };
+      }
       const refusal = attemptRefusal(d, r);
       if (refusal) return { ok: false, reason: refusal };
       const fee = BigInt(r.castle.feeTinybar);
       const split = computeSplit(fee);
       const newPot = BigInt(r.castle.potTinybar) + split.pot;
-      return { ok: true, tx: stubTx(), split: splitToAmounts(split), newPot: newPot.toString() };
+      const tx = stubTx();
+      markPending(d, siegeId, tx);
+      return { ok: true, tx, split: splitToAmounts(split), newPot: newPot.toString() };
     },
 
     async release(siegeId: string, verdict: Verification & { signature: `0x${string}` }) {
       const d = getDb();
       const r = loadSettle(d, siegeId);
       if (!r.ok) return r;
+      const prior = landedStub(r);
+      if (prior && !r.siege.releaseTx && !isFreeSiege(r)) return { ok: true, tx: prior, amount: (BigInt(r.castle.potTinybar) + BigInt(r.castle.feeTinybar)).toString() };
       const refusal = releaseRefusal(d, r) ?? verdictRefusal(r, verdict);
       if (refusal) return { ok: false, reason: refusal };
       const built = await buildRelease(r);
@@ -121,7 +149,9 @@ export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
       }
       if (signer.toLowerCase() !== verifierAddress().toLowerCase()) return { ok: false, reason: "bad_signature" };
       const amount = BigInt(r.castle.potTinybar) + BigInt(r.castle.feeTinybar);
-      return { ok: true, tx: stubTx(), amount: amount.toString() };
+      const tx = stubTx();
+      markPending(d, siegeId, tx);
+      return { ok: true, tx, amount: amount.toString() };
     },
 
     async audit(event: SiegeEvent) {

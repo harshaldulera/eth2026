@@ -435,7 +435,7 @@ describe("createVault", () => {
     expect(await v.read("protectedTool", [2n])).toBe("issue_refund");
     expect(await v.read("protectedTool", [99n])).toBe(""); // unknown vault: empty, not a revert
     // the tool survives close (it is metadata, not money)
-    await v.close(2n, CloseReason.OwnerClosed, A.castellan2);
+    await v.close(2n, CloseReason.OwnerClosed, A.arena);
     expect(await v.read("protectedTool", [2n])).toBe("issue_refund");
   });
 
@@ -846,26 +846,33 @@ describe("closeVault", () => {
     });
   });
 
-  describe("OwnerClosed", () => {
-    it("by the castellan before the deadline: closes and refunds (reason 2)", async () => {
-      await closesAndRefunds(CloseReason.OwnerClosed, A.castellan);
-    });
-
-    it("by the castellan after the deadline", async () => {
-      v.c.warp(DAY + 5n);
-      await closesAndRefunds(CloseReason.OwnerClosed, A.castellan);
-    });
-
-    it("by the arena at any time (refund still goes to the castellan)", async () => {
+  describe("OwnerClosed (arena only: the castellan asks through the app's owner route)", () => {
+    it("by the arena before the deadline: closes and refunds the castellan (reason 2)", async () => {
       await closesAndRefunds(CloseReason.OwnerClosed, A.arena);
     });
 
-    it("by a stranger -> NotAllowed (before and after the deadline)", async () => {
-      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.stranger), "NotAllowed");
-      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.raider), "NotAllowed");
-      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.castellan2), "NotAllowed"); // another castle's owner
+    it("by the arena after the deadline as well", async () => {
+      v.c.warp(DAY + 5n);
+      await closesAndRefunds(CloseReason.OwnerClosed, A.arena);
+    });
+
+    it("by the castellan directly -> NotArena: it cannot front-run a release of a pot a raider already won", async () => {
+      // A verified break is waiting for the arena's release: the castellan's own close must not get there first.
+      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.castellan), "NotArena");
+      v.c.warp(DAY + 5n);
+      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.castellan), "NotArena");
+      await untouched();
+      const sig = await v.sign({ vaultId: 1n, raider: A.raider, transcriptHash: th("won"), siege: "won-1" });
+      await v.release(1n, A.raider, th("won"), "won-1", sig, FEE);
+      expect((await v.getVault(1n)).status).toBe(Status.Broken);
+    });
+
+    it("by a stranger, a raider or another castle's owner -> NotArena (before and after the deadline)", async () => {
+      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.stranger), "NotArena");
+      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.raider), "NotArena");
+      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.castellan2), "NotArena"); // another castle's owner
       v.c.warp(DAY);
-      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.stranger), "NotAllowed");
+      await expectRevert(v.close(1n, CloseReason.OwnerClosed, A.stranger), "NotArena");
       await untouched();
     });
   });
@@ -880,7 +887,7 @@ describe("closeVault", () => {
   });
 
   it("any close on a Closed vault -> BadStatus, whatever the reason or caller", async () => {
-    await v.close(1n, CloseReason.OwnerClosed, A.castellan);
+    await v.close(1n, CloseReason.OwnerClosed, A.arena);
     v.c.warp(DAY);
     for (const reason of ALL_REASONS)
       for (const from of [A.arena, A.castellan, A.stranger]) await expectRevert(v.close(1n, reason, from), "BadStatus");
@@ -1022,7 +1029,11 @@ describe("reentrancy", () => {
     const call = (fn: string, args: readonly unknown[] = []) =>
       v.c.raw(A.stranger, evil, encodeFunctionData({ abi: h.abi, functionName: fn, args }), 0n, h.abi);
     await call("arm", [v.address, 1n, CloseReason.OwnerClosed]);
-    await call("doOwnerClose");
+    // The castellan contract cannot close it itself (arena only) ...
+    await expect(call("doOwnerClose")).rejects.toBeInstanceOf(RevertError);
+    expect((await v.getVault(1n)).status).toBe(Status.Open);
+    // ... the arena closes it on the castellan's behalf, and the refund's re-entry gets nothing more.
+    await v.close(1n, CloseReason.OwnerClosed, A.arena);
     expect(decodeFunctionResult({ abi: h.abi, functionName: "hits", data: (await call("hits")).returnValue })).toBeGreaterThan(0n);
     const received = decodeFunctionResult({ abi: h.abi, functionName: "received", data: (await call("received")).returnValue }) as bigint;
     expect(received).toBe(7_000n);
@@ -1072,7 +1083,7 @@ describe("invariant: balance == sum(pots) + sum(castellanBalance) + arenaBalance
     const plan: { castellan: Address; pot: bigint; dur: bigint; tool: string }[] = [
       { castellan: A.castellan, pot: 40_000n, dur: DAY, tool: HOSTED_TOOL }, // 1: Expired (castellan)
       { castellan: A.castellan2, pot: 25_000n, dur: 3n * DAY, tool: "issue_refund" }, // 2: OrdersChanged (arena)
-      { castellan: A.castellan, pot: 11n, dur: 3n * DAY, tool: "send_email" }, // 3: OwnerClosed (castellan)
+      { castellan: A.castellan, pot: 11n, dur: 3n * DAY, tool: "send_email" }, // 3: OwnerClosed (arena, castellan 1)
       { castellan: A.castellan2, pot: 99_999n, dur: 3n * DAY, tool: HOSTED_TOOL }, // 4: OwnerClosed (arena)
       { castellan: A.castellan, pot: 5_000n, dur: 3n * DAY, tool: HOSTED_TOOL }, // 5: Broken
       { castellan: A.castellan2, pot: 1n, dur: 3n * DAY, tool: "x".repeat(64) }, // 6: stays open
@@ -1089,8 +1100,8 @@ describe("invariant: balance == sum(pots) + sum(castellanBalance) + arenaBalance
     await v.close(2n, CloseReason.OrdersChanged, A.arena);
     expect((await v.c.balance(A.castellan2)) - c2).toBe(pot2);
     await v.checkInvariant(cs);
-    // OwnerClosed by the castellan, then by the arena on another castle
-    await v.close(3n, CloseReason.OwnerClosed, A.castellan);
+    // OwnerClosed (always sent by the arena) on castellan 1's vault, then on castellan 2's
+    await v.close(3n, CloseReason.OwnerClosed, A.arena);
     await v.checkInvariant(cs);
     await v.send(A.castellan2, "withdraw");
     await v.close(4n, CloseReason.OwnerClosed, A.arena);

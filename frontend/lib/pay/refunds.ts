@@ -72,12 +72,15 @@ export type InFlightVoid = {
  * voided and every paid one's receipt goes refund_due — the same path as any other void, so the
  * worker's reconcileReceipts pass pays it back. Free sieges are voided with nothing to refund.
  *   in flight     = created / in_progress (default)
- *   includeEnded  = also ended sieges the worker has not settled yet (no chain write on record or
- *                   pending): after an on-chain close those can never settle either.
+ *   includeEnded  = also ended held / banished sieges the worker has not settled yet (no chain write on
+ *                   record or pending): after an on-chain close their attempt can never land either.
+ * A paid "broken" siege is NEVER voided here: it is a win waiting for its release. Closing a vault while
+ * one is pending is refused (lib/vault/close: being_broken), so a close can never hand a raider's pot
+ * back to the castellan.
  */
 export function voidInFlightSieges(castleId: string, reason: string, opts: { includeEnded?: boolean } = {}): InFlightVoid {
   const statuses = opts.includeEnded
-    ? (["created", "in_progress", "held", "banished", "broken"] as const)
+    ? (["created", "in_progress", "held", "banished"] as const)
     : (["created", "in_progress"] as const);
   return db().transaction((tx) => {
     const rows = tx

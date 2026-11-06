@@ -180,6 +180,53 @@ describe("a chain write that landed is reconciled, never abandoned", () => {
   });
 });
 
+describe("a write that lost the race against closeVault is refunded, never stuck", () => {
+  const receiptState = (siegeId: string) =>
+    db().select().from(schema.paymentReceipts).where(eq(schema.paymentReceipts.id, siegeRow(siegeId).receiptId!)).get()!.state;
+  const closeCastleInDb = () =>
+    db().update(schema.castles).set({ status: "closed", vaultState: "closed", potTinybar: 0 }).where(eq(schema.castles.id, "castle_granite_hold")).run();
+
+  it("recordAttempt sent, then reverted because the close mined first: pending tx cleared, next pass voids + refunds", async () => {
+    const id = await playSiege("castle_granite_hold", MUST_NOT_BREAK);
+    const streak = castleRow("castle_granite_hold").streak;
+    vaultMock.recordAttempt.mockImplementationOnce(async (_p: unknown, onSent: (h: string) => void) => {
+      await onSent(HASH1);
+      closeCastleInDb(); // the close (which skipped this siege: pending_tx set) mines first
+      throw new VaultError("reverted", "SiegeVault.recordAttempt reverted on chain", HASH1);
+    });
+    vaultMock.writeOutcome.mockResolvedValue({ status: "reverted" });
+    await settleTick();
+    expect(siegeRow(id)).toMatchObject({ pendingTx: null, attemptTx: null, voidReason: null, chainError: "reverted", chainAttempts: 1 });
+    backoff();
+    await settleTick();
+    expect(siegeRow(id)).toMatchObject({ voidReason: "vault_not_open", attemptTx: null });
+    expect(["refund_due", "refunding", "refund_failed"]).toContain(receiptState(id));
+    expect(castleRow("castle_granite_hold")).toMatchObject({ potTinybar: 0, streak });
+  });
+
+  it("a pending tx a crashed pass left behind, proven reverted: cleared, then refused and refunded in the same pass", async () => {
+    const id = await playSiege("castle_granite_hold", MUST_NOT_BREAK);
+    db().update(schema.sieges).set({ pendingTx: HASH2 }).where(eq(schema.sieges.id, id)).run();
+    closeCastleInDb();
+    vaultMock.writeOutcome.mockResolvedValue({ status: "reverted" });
+    await settleTick();
+    expect(siegeRow(id)).toMatchObject({ pendingTx: null, voidReason: "vault_not_open" });
+    expect(["refund_due", "refunding", "refund_failed"]).toContain(receiptState(id));
+    expect(vaultMock.recordAttempt).not.toHaveBeenCalled();
+  });
+
+  it("reverted but the siege id IS consumed on chain (another tx landed it): pending tx kept, nothing voided", async () => {
+    const id = await playSiege("castle_granite_hold", MUST_NOT_BREAK);
+    db().update(schema.sieges).set({ pendingTx: HASH2 }).where(eq(schema.sieges.id, id)).run();
+    closeCastleInDb();
+    vaultMock.writeOutcome.mockResolvedValue({ status: "reverted" });
+    vaultMock.siegeConsumed.mockResolvedValue(true);
+    await settleTick();
+    expect(siegeRow(id)).toMatchObject({ pendingTx: HASH2, voidReason: null });
+    expect(receiptState(id)).toBe("settled");
+  });
+});
+
 describe("raider address: resolved once, signature re-checked before sending", () => {
   it("a mirror failure while preparing is retryable; the signed raider == the sent raider", async () => {
     const id = await playSiege("castle_splinter_gate", WOODEN_BREAK, "0.0.1234");

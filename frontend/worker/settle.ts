@@ -1,12 +1,13 @@
 import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { chain, formatHbar, prepareRelease } from "@/lib/chain";
-import { titleFor } from "@/lib/castles";
+import { arkiv } from "@/lib/arkiv";
+import { getCastle, titleFor } from "@/lib/castles";
 import { db, schema } from "@/lib/db";
 import { MAX_CHAIN_ATTEMPTS } from "@/lib/db/schema";
 import { emit } from "@/lib/events/bus";
 import { reconcileReceipts, voidSiege, voidStrandedSieges } from "@/lib/pay/refunds";
 import { verifier } from "@/lib/siege";
-import type { TxRef } from "@/lib/types";
+import type { TransportKind, TxRef } from "@/lib/types";
 import { nowIso } from "@/lib/util/ids";
 import { closeExpiredVaults, transitionVault } from "@/lib/vault";
 import { log } from "./log";
@@ -31,6 +32,11 @@ import { signReleaseTypedData } from "./signer";
  * sieges.pending_tx / the contract first (lib/chain/testnet.ts).
  * Each pass also voids in-progress sieges stranded on closed castles and runs receipt
  * reconciliation + refunds (lib/pay/refunds.ts).
+ *
+ * Order matters: pending sieges settle BEFORE expired vaults close, so a paid break that ended before
+ * the deadline is released to its raider (SiegeVault.release has no deadline check) instead of the
+ * close handing its pot back to the castellan. closeExpiredVaults also skips a castle while such a
+ * break is pending.
  */
 
 export { MAX_CHAIN_ATTEMPTS };
@@ -78,9 +84,14 @@ function castleName(id: string): string {
   return db().select({ n: C.name }).from(C).where(eq(C.id, id)).get()?.n ?? id;
 }
 
-/** The castle can no longer pay this siege (another raider won it, or it closed/expired). */
+/**
+ * The castle can no longer pay this siege (another raider won it, or it closed/expired).
+ * voidSiege re-reads the row and refuses while a chain write is pending (sieges.pending_tx): the
+ * testnet port clears pending_tx once that write is proven reverted, so the row read at the start of
+ * this pass is not trusted for it.
+ */
 function voidOrFail(row: SiegeRow, reason: string): void {
-  if (!row.free && !row.pendingTx && voidSiege(row.id, reason)) {
+  if (!row.free && voidSiege(row.id, reason)) {
     log.fail(`settle ${short(row.id)} (${row.status}): ${reason} — siege void, fee queued for refund`);
     return;
   }
@@ -97,6 +108,19 @@ function fail(row: SiegeRow, reason: string, permanent: boolean) {
 
 const txPayload = (tx: TxRef) => ({ tx, txId: tx.txId, hashscanUrl: tx.hashscanUrl, stub: tx.stub === true });
 
+/** The guardian transport the siege ran on (SiegeEvent.transport is set on every siege event). */
+const transportOf = (row: SiegeRow): TransportKind => (row.transport === "sdk" ? "sdk" : "hosted");
+
+/** Best effort: re-write the castle's Arkiv entity after its pot / streak / status moved (Lane C's board reads it). */
+async function syncCastleEntity(castleId: string): Promise<void> {
+  try {
+    const c = getCastle(castleId);
+    if (c) await arkiv.writeCastle(c);
+  } catch (e) {
+    log.info(`arkiv.writeCastle ${castleId} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 async function settleHeld(row: SiegeRow) {
   if (row.attemptTx) {
     // Chain write landed but we crashed before marking it settled.
@@ -109,22 +133,37 @@ async function settleHeld(row: SiegeRow) {
     return fail(row, r.reason, PERMANENT.has(r.reason) || r.reason === "already_released");
   }
   const at = nowIso();
-  const castle = db().transaction((tx) => {
-    tx.update(S).set({ attemptTx: r.tx.txId, pendingTx: null, chainError: null, settledAt: at }).where(eq(S.id, row.id)).run();
+  const transport = transportOf(row);
+  const applied = db().transaction((tx) => {
+    // Only a siege nobody voided meanwhile (e.g. a close that raced this pass) records its attempt.
+    const s = tx
+      .update(S)
+      .set({ attemptTx: r.tx.txId, pendingTx: null, chainError: null, settledAt: at })
+      .where(and(eq(S.id, row.id), isNull(S.voidReason)))
+      .run();
+    if (s.changes !== 1) return null;
+    // The pot and streak move only while the castle is still open: a closed castle's pot went back.
     const c = tx
       .update(C)
       .set({ potTinybar: Number(r.newPot), streak: sql`${C.streak} + 1` })
-      .where(eq(C.id, row.castleId))
+      .where(and(eq(C.id, row.castleId), eq(C.status, "open")))
       .returning()
       .get();
-    tx.update(C).set({ title: titleFor(c.streak) }).where(eq(C.id, c.id)).run();
-    return c;
+    if (c) tx.update(C).set({ title: titleFor(c.streak) }).where(eq(C.id, c.id)).run();
+    return c ?? tx.select().from(C).where(eq(C.id, row.castleId)).get() ?? null;
   });
+  if (!applied) {
+    log.fail(`attempt ${short(row.id)}: the siege was voided while its attempt was recorded (${r.tx.txId}) — not applied`);
+    return;
+  }
+  const castle = applied;
   emit({
     siegeId: row.id,
     castleId: row.castleId,
     type: "attempt",
+    transport,
     payload: {
+      transport,
       castleId: row.castleId,
       split: r.split,
       newPot: r.newPot,
@@ -133,7 +172,8 @@ async function settleHeld(row: SiegeRow) {
       ...txPayload(r.tx),
     },
   });
-  await chain.audit({ siegeId: row.id, castleId: row.castleId, type: "attempt", payload: { txId: r.tx.txId }, at });
+  await chain.audit({ siegeId: row.id, castleId: row.castleId, type: "attempt", transport, payload: { txId: r.tx.txId, transport }, at });
+  await syncCastleEntity(row.castleId);
   log.ok(
     `attempt ${short(row.id)} @ ${castle.name}: ${row.status}, pot +${formatHbar(BigInt(r.split.pot))} -> ${formatHbar(BigInt(r.newPot))}, streak ${castle.streak} (${r.tx.txId})`,
   );
@@ -160,13 +200,20 @@ async function settleBroken(row: SiegeRow) {
     return fail(row, r.reason, PERMANENT.has(r.reason) || r.reason === "already_recorded");
   }
   const at = nowIso();
-  db().transaction((tx) => {
+  const transport = transportOf(row);
+  // A landed release is chain truth: the vault IS broken, so it is always recorded. (A siege with a
+  // chain write pending cannot be voided — voidSiege refuses while sieges.pending_tx is set — so a
+  // void here would be a bug: say so loudly.)
+  const voided = db().transaction((tx) => {
+    const before = tx.select({ v: S.voidReason }).from(S).where(eq(S.id, row.id)).get()?.v ?? null;
     tx.update(S)
       .set({ releaseTx: r.tx.txId, releaseAmountTinybar: Number(r.amount), pendingTx: null, chainError: null, settledAt: at })
       .where(eq(S.id, row.id))
       .run();
     tx.update(C).set({ status: "broken", potTinybar: 0 }).where(eq(C.id, row.castleId)).run();
+    return before;
   });
+  if (voided) log.fail(`release ${short(row.id)} landed (${r.tx.txId}) on a siege voided as ${voided} — check its receipt by hand`);
   const t = await transitionVault(row.castleId, "broken", `paid out to ${row.raider}`);
   if (!t.ok) log.fail(`vault state ${castleName(row.castleId)} -> broken: ${t.reason}`);
   // Anyone still mid-siege on this castle can no longer win anything: void them, refund their fees.
@@ -175,7 +222,9 @@ async function settleBroken(row: SiegeRow) {
     siegeId: row.id,
     castleId: row.castleId,
     type: "release",
+    transport,
     payload: {
+      transport,
       castleId: row.castleId,
       amount: r.amount,
       raider: row.raider,
@@ -189,7 +238,8 @@ async function settleBroken(row: SiegeRow) {
     siegeId: row.id,
     castleId: row.castleId,
     type: "release",
-    payload: { txId: r.tx.txId, transcriptHash: v.transcriptHash, requestId: v.requestId },
+    transport,
+    payload: { txId: r.tx.txId, transcriptHash: v.transcriptHash, requestId: v.requestId, transport },
     at,
   });
   log.ok(`release ${short(row.id)} @ ${castleName(row.castleId)}: ${formatHbar(BigInt(r.amount))} -> ${row.raider} (${r.tx.txId})`);
@@ -203,7 +253,8 @@ function settleFree(row: SiegeRow) {
       siegeId: row.id,
       castleId: row.castleId,
       type: "release",
-      payload: { castleId: row.castleId, free: true, amount: "0", raider: row.raider, title: "Breaker (practice)" },
+      transport: transportOf(row),
+      payload: { castleId: row.castleId, free: true, amount: "0", raider: row.raider, title: "Breaker (practice)", transport: transportOf(row) },
     });
     log.ok(`free break ${short(row.id)} @ ${castleName(row.castleId)}: practice only, castle stays open, no payout`);
     return;
@@ -212,7 +263,7 @@ function settleFree(row: SiegeRow) {
   // effectively unlimited: they must not move the castle's public streak/title (paid sieges do).
   db().update(S).set({ settledAt: at, chainError: null }).where(eq(S.id, row.id)).run();
   const streak = db().select({ s: C.streak }).from(C).where(eq(C.id, row.castleId)).get()?.s ?? 0;
-  emit({ siegeId: row.id, castleId: row.castleId, type: "attempt", payload: { castleId: row.castleId, free: true, streak } });
+  emit({ siegeId: row.id, castleId: row.castleId, type: "attempt", transport: transportOf(row), payload: { castleId: row.castleId, free: true, streak, transport: transportOf(row) } });
   log.ok(`free ${row.status} ${short(row.id)} @ ${castleName(row.castleId)}: practice defense, streak unchanged (${streak}), no money`);
 }
 
@@ -232,18 +283,6 @@ function pending(): SiegeRow[] {
 /** One settlement pass. Returns how many sieges / receipts it acted on. */
 export async function settleTick(): Promise<number> {
   let n = 0;
-  try {
-    const exp = await closeExpiredVaults();
-    for (const c of exp.closed) {
-      n++;
-      log.ok(
-        `vault ${c.name} expired — closed${c.tx ? ` on chain (${c.tx.txId})` : ""}, ${formatHbar(BigInt(c.refunded))} back to the castellan, ${c.inFlightRefunds} in-flight fee(s) queued for refund`,
-      );
-    }
-    for (const f of exp.failed) log.fail(`close expired vault ${castleName(f.castleId)}: ${f.reason} — retrying`);
-  } catch (e) {
-    log.fail(`expired vaults: ${e instanceof Error ? e.message : String(e)}`);
-  }
   for (const id of voidStrandedSieges()) {
     n++;
     log.info(`siege ${short(id)} void — its castle closed under it, fee queued for refund`);
@@ -260,6 +299,18 @@ export async function settleTick(): Promise<number> {
     } catch (e) {
       fail(row, e instanceof Error ? e.message : String(e), false);
     }
+  }
+  try {
+    const exp = await closeExpiredVaults();
+    for (const c of exp.closed) {
+      n++;
+      log.ok(
+        `vault ${c.name} expired — closed${c.tx ? ` on chain (${c.tx.txId})` : ""}, ${formatHbar(BigInt(c.refunded))} back to the castellan, ${c.inFlightRefunds} in-flight fee(s) queued for refund`,
+      );
+    }
+    for (const f of exp.failed) log.fail(`close expired vault ${castleName(f.castleId)}: ${f.reason} — retrying`);
+  } catch (e) {
+    log.fail(`expired vaults: ${e instanceof Error ? e.message : String(e)}`);
   }
   try {
     const rep = await reconcileReceipts();

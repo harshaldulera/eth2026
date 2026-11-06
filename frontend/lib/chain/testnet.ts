@@ -68,6 +68,40 @@ const recordPending = (d: DB, siegeId: string) => (hash: Hash) => {
   d.update(schema.sieges).set({ pendingTx: hash }).where(eq(schema.sieges.id, siegeId)).run();
 };
 
+/**
+ * A write-ahead pending_tx that is PROVEN not to have landed (its receipt says reverted and the contract
+ * has not consumed the siege id) is cleared, so the siege can be refused / voided and refunded normally
+ * (e.g. a recordAttempt that lost the race against closeVault). Otherwise it would block voidSiege forever.
+ */
+async function clearRevertedPending(d: DB, r: SettleRows, hash: string): Promise<boolean> {
+  if (await vault.siegeConsumed(siegeIdToBytes32(r.siege.id))) return false;
+  const res = d
+    .update(schema.sieges)
+    .set({ pendingTx: null })
+    .where(and(eq(schema.sieges.id, r.siege.id), eq(schema.sieges.pendingTx, hash)))
+    .run();
+  if (res.changes === 1) r.siege = { ...r.siege, pendingTx: null };
+  return res.changes === 1;
+}
+
+/**
+ * Before any refusal: did the pending write land? success -> its result; proven reverted -> pending_tx
+ * cleared (returns null so the normal refusals apply); unknown -> null (refusals apply; voidSiege still
+ * refuses while pending_tx is set).
+ */
+async function settlePending<E extends "AttemptRecorded" | "Broken">(
+  d: DB,
+  r: SettleRows,
+  eventName: E,
+): Promise<(E extends "AttemptRecorded" ? vault.AttemptResult : vault.ReleaseResult) | null> {
+  const hash = r.siege.pendingTx;
+  if (!hash) return null;
+  const o = await vault.writeOutcome(hash as Hash, eventName);
+  if (o.status === "success") return o.result;
+  if (o.status === "reverted") await clearRevertedPending(d, r, hash);
+  return null;
+}
+
 type AttemptOk = { ok: true; tx: TxRef; split: FeeSplit; newPot: Amount };
 type ReleaseOk = { ok: true; tx: TxRef; amount: Amount };
 
@@ -139,8 +173,8 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
       // the DB-level refusals: a sibling's release recorded since must not hide our own landed write.
       if (r.siege.pendingTx && !r.siege.attemptTx && !isFreeSiege(r)) {
         try {
-          const prior = await landed(r, "AttemptRecorded", [r.siege.pendingTx], false);
-          if (prior && prior !== "consumed_unindexed") return attemptOk(prior);
+          const prior = await settlePending(d, r, "AttemptRecorded");
+          if (prior) return attemptOk(prior);
         } catch (e) {
           return { ok: false, reason: `reconcile_failed: ${reasonOf(e)}` };
         }
@@ -160,7 +194,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
         );
         return attemptOk(res);
       } catch (err) {
-        return recover(r, "AttemptRecorded", err, attemptOk);
+        return recover(d, r, "AttemptRecorded", err, attemptOk);
       }
     },
 
@@ -170,8 +204,8 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
       if (!r.ok) return r;
       if (r.siege.pendingTx && !r.siege.releaseTx && !isFreeSiege(r)) {
         try {
-          const prior = await landed(r, "Broken", [r.siege.pendingTx], false);
-          if (prior && prior !== "consumed_unindexed") return releaseOk(prior);
+          const prior = await settlePending(d, r, "Broken");
+          if (prior) return releaseOk(prior);
         } catch (e) {
           return { ok: false, reason: `reconcile_failed: ${reasonOf(e)}` };
         }
@@ -203,7 +237,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
         );
         return releaseOk(res);
       } catch (err) {
-        return recover(r, "Broken", err, releaseOk);
+        return recover(d, r, "Broken", err, releaseOk);
       }
     },
 
@@ -283,6 +317,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
 
 /** A write threw: if it (or an earlier try) actually landed, return that result; else map the error. */
 async function recover<E extends "AttemptRecorded" | "Broken", T>(
+  d: DB,
   r: SettleRows,
   eventName: E,
   err: unknown,
@@ -300,6 +335,15 @@ async function recover<E extends "AttemptRecorded" | "Broken", T>(
   if (found === "consumed_unindexed") return { ok: false, reason: "reconcile_pending" };
   if (found) return ok(found);
   if (err.errorName === "receipt_timeout") return { ok: false, reason: "receipt_timeout" };
+  // Mined and reverted, and (landed checked it) the siege id is not consumed: nothing landed. Clear the
+  // write-ahead marker so the next pass can refuse it (e.g. vault_not_open after a close) and refund it.
+  if (err.errorName === "reverted" && err.txHash) {
+    try {
+      await clearRevertedPending(d, r, err.txHash);
+    } catch {
+      /* next pass re-checks the pending tx */
+    }
+  }
   return { ok: false, reason };
 }
 

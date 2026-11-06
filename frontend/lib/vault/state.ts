@@ -23,6 +23,10 @@ import { nowIso } from "@/lib/util/ids";
  *
  * Lane A drives funded (lib/vault/fund), broken (worker release) and closed (lib/vault/close);
  * Lane B drives connected / verified / guarding / dormant. Only "guarding" castles take sieges.
+ *
+ * transitionVault is RAW (no chain side effects): only lib/vault/fund, lib/vault/close, the worker and
+ * seed scripts call it. Every other caller uses the VaultStatePort `vaultState` (lib/vault/port.ts),
+ * which refuses funded / broken and routes closed through closeCastle.
  */
 
 const C = schema.castles;
@@ -113,9 +117,3 @@ export function isGuarding(castleId: string): boolean {
   return vaultStateOf(castleId) === "guarding";
 }
 
-export const vaultState: VaultStatePort = {
-  async get(castleId: string) {
-    return vaultStateOf(castleId);
-  },
-  transition: (castleId: string, to: VaultState, reason: string) => transitionVault(castleId, to, reason),
-};

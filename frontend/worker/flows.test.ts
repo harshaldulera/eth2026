@@ -394,3 +394,146 @@ describe("small things", () => {
     resetEnv();
   });
 });
+
+describe("a vault a raider already won is never closed under them", () => {
+  const castleRow = (id: string) => db().select().from(schema.castles).where(eq(schema.castles.id, id)).get()!;
+  let vid = 9100;
+  /** WOOD as a funded stub vault with a fresh on-chain id. */
+  const fund = () => db().update(schema.castles).set({ vaultId: ++vid, vaultAddress: "stub" }).where(eq(schema.castles.id, WOOD)).run();
+  async function breakWood(raider = "0.0.stub-winner") {
+    const id = await paidSiege(WOOD, raider);
+    for (const t of WOODEN_BREAK) await say(id, t);
+    expect(getSiege(id)!.status).toBe("broken");
+    return id;
+  }
+  const paidOut = (id: string, pot: number) => {
+    const s = getSiege(id)!;
+    expect(s.release?.amount).toBe(String(pot + castleRow(WOOD).feeTinybar));
+    expect(s.settlement?.state).toBe("settled");
+    expect(receiptOf(id).state).toBe("settled"); // the fee went into the payout, not back to the raider
+    expect(castleRow(WOOD)).toMatchObject({ vaultState: "broken", status: "broken", potTinybar: 0 });
+  };
+
+  it("expired: a break that ended before the deadline is released after it (the worker settles before it expires vaults)", async () => {
+    fund();
+    const pot = castleRow(WOOD).potTinybar;
+    const id = await breakWood();
+    db().update(schema.castles).set({ deadline: Date.now() - 1 }).where(eq(schema.castles.id, WOOD)).run();
+    const { closeExpiredVaults } = await import("@/lib/vault");
+    expect((await closeExpiredVaults()).closed).toHaveLength(0); // skipped while the break is pending
+    expect(castleRow(WOOD).vaultState).toBe("guarding");
+    await settleTick();
+    paidOut(id, pot);
+    expect(getSiege(id)!.settlement?.reason).toBeUndefined();
+  });
+
+  it("owner_closed between the break and the release -> 409 being_broken; the raider is paid", async () => {
+    fund();
+    const pot = castleRow(WOOD).potTinybar;
+    const id = await breakWood();
+    const owner = await ownerCookie();
+    const r = await call<{ error: string }>("POST", `/api/castles/${WOOD}/close`, { reason: "owner_closed" }, owner);
+    expect(r.status).toBe(409);
+    expect(r.data.error).toBe("being_broken");
+    expect(castleRow(WOOD)).toMatchObject({ vaultState: "guarding", potTinybar: pot });
+    await settleTick();
+    paidOut(id, pot);
+    expect((await call("POST", `/api/castles/${WOOD}/close`, { reason: "owner_closed" }, owner)).status).toBe(409);
+  });
+
+  it("orders_changed through the VaultStatePort is refused while the break is pending, then the raider is paid", async () => {
+    fund();
+    const pot = castleRow(WOOD).potTinybar;
+    const id = await breakWood();
+    const { vaultState } = await import("@/lib/vault");
+    expect(await vaultState.transition(WOOD, "closed", "orders_changed")).toEqual({ ok: false, reason: "being_broken" });
+    await settleTick();
+    paidOut(id, pot);
+  });
+
+  it("closeVault never voids a pending paid break, even when called on its own", async () => {
+    fund();
+    const id = await breakWood();
+    const { chain } = await import("@/lib/chain");
+    const r = await chain.closeVault(castleRow(WOOD).vaultId!, "orders_changed");
+    expect(r.ok).toBe(true);
+    expect(getSiege(id)!.settlement?.state).not.toBe("void");
+    expect(receiptOf(id).state).toBe("settled");
+  });
+});
+
+describe("VaultStatePort: Lane B cannot set Lane A's money states without the chain", () => {
+  const castleRow = (id: string) => db().select().from(schema.castles).where(eq(schema.castles.id, id)).get()!;
+
+  it("funded / broken are refused; closed needs a close reason and closes the vault on chain first", async () => {
+    const { vaultState } = await import("@/lib/vault");
+    const { chain } = await import("@/lib/chain");
+    db().update(schema.castles).set({ vaultId: 9301, vaultAddress: "stub" }).where(eq(schema.castles.id, WOOD)).run();
+    const pot = castleRow(WOOD).potTinybar;
+    const live = await paidSiege(WOOD);
+    await say(live, MUST_NOT_BREAK[0]);
+    expect(await vaultState.transition(WOOD, "broken", "x")).toEqual({ ok: false, reason: "illegal_transition" });
+    expect(await vaultState.transition(WOOD, "funded", "x")).toEqual({ ok: false, reason: "illegal_transition" });
+    expect(await vaultState.transition(WOOD, "closed", "prompt hash changed")).toEqual({ ok: false, reason: "illegal_transition" });
+    expect(await vaultState.transition("castle_nope", "closed", "orders_changed")).toEqual({ ok: false, reason: "not_found" });
+    expect(castleRow(WOOD)).toMatchObject({ vaultState: "guarding", potTinybar: pot });
+    const r = await vaultState.transition(WOOD, "closed", "orders_changed");
+    expect(r).toMatchObject({ ok: true, change: { castleId: WOOD, from: "guarding", to: "closed", reason: "orders_changed" } });
+    expect(castleRow(WOOD)).toMatchObject({ vaultState: "closed", status: "closed", potTinybar: 0, vaultStateReason: "orders_changed" });
+    expect(await chain.closeVault(9301, "owner_closed")).toEqual({ ok: false, reason: "vault_not_open" }); // closed on chain
+    expect(receiptOf(live).state).toBe("refund_due");
+    // a hosted castle cannot be walked to guarding without a vault
+    const DESK2 = "castle_granite_hold";
+    db().update(schema.castles).set({ vaultState: "verified", vaultId: null }).where(eq(schema.castles.id, DESK2)).run();
+    expect(await vaultState.transition(DESK2, "funded", "skip createVault")).toEqual({ ok: false, reason: "illegal_transition" });
+    expect(castleRow(DESK2).vaultState).toBe("verified");
+  });
+});
+
+describe("POST /api/castles/[id]/open (Bring-your-agent Open button)", () => {
+  it("owner only; verified only; creates the vault on chain -> funded", async () => {
+    const DESK = "castle_sdk_open_test";
+    const { sdkFixtureCastleRow } = await import("@/lib/fixtures/castles");
+    db().insert(schema.castles).values({ ...sdkFixtureCastleRow({ vaultState: "connected" }), id: DESK, name: "Open Test Desk" }).run();
+    expect((await call("POST", `/api/castles/${DESK}/open`, {})).status).toBe(401);
+    const owner = await ownerCookie();
+    const early = await call<{ error: string; vaultState: string }>("POST", `/api/castles/${DESK}/open`, {}, owner);
+    expect(early.status).toBe(409);
+    expect(early.data).toMatchObject({ error: "not_verified", vaultState: "connected" });
+    expect((await call("POST", `/api/castles/nope/open`, {}, owner)).status).toBe(404);
+    const { transitionVault } = await import("@/lib/vault");
+    await transitionVault(DESK, "verified", "smoke siege passed");
+    const r = await call<{ ok: boolean; vaultId: number; castle: { vaultState: string; protectedTool: string } }>("POST", `/api/castles/${DESK}/open`, {}, owner);
+    expect(r.status).toBe(200);
+    expect(r.data.vaultId).toBeGreaterThan(0);
+    expect(r.data.castle).toMatchObject({ vaultState: "funded", protectedTool: "issue_refund" });
+    expect((await call("POST", `/api/castles/${DESK}/open`, {}, owner)).status).toBe(409); // already funded
+  });
+});
+
+describe("stub: a held siege settling while its vault closes is paid once, never both attempted and refunded", () => {
+  it("sweeping the interleaving of settleTick and closeCastle", async () => {
+    const { closeCastle } = await import("@/lib/vault");
+    for (let delay = 0; delay <= 8; delay++) {
+      freshFixtureDb();
+      resetEnv();
+      db().update(schema.castles).set({ vaultId: 9500 + delay, vaultAddress: "stub" }).where(eq(schema.castles.id, WOOD)).run();
+      const id = await paidSiege(WOOD);
+      for (const t of MUST_NOT_BREAK) await say(id, t);
+      expect(getSiege(id)!.status).toBe("held");
+      const tick = settleTick();
+      for (let i = 0; i < delay; i++) await Promise.resolve();
+      const close = await closeCastle(WOOD, "owner_closed");
+      await tick;
+      await settleTick();
+      const s = db().select().from(schema.sieges).where(eq(schema.sieges.id, id)).get()!;
+      const rc = receiptOf(id).state;
+      const both = s.attemptTx != null && (rc === "refund_due" || rc === "refunded" || rc === "refunding");
+      expect(both, `delay ${delay}: attempt ${s.attemptTx}, receipt ${rc}, void ${s.voidReason}`).toBe(false);
+      expect(s.attemptTx != null || s.voidReason != null, `delay ${delay}: settled one way`).toBe(true);
+      expect(close.ok).toBe(true);
+      const c = db().select().from(schema.castles).where(eq(schema.castles.id, WOOD)).get()!;
+      expect(c, `delay ${delay}`).toMatchObject({ vaultState: "closed", status: "closed", potTinybar: 0 });
+    }
+  });
+});

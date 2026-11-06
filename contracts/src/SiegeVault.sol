@@ -16,7 +16,8 @@ contract SiegeVault {
     }
 
     /// @notice Why a vault closed. Expired needs the deadline; OrdersChanged is the arena's auto-close
-    ///         when a guardian's prompt hash changes; OwnerClosed is the Castellan's (or arena's) choice.
+    ///         when a guardian's prompt hash changes; OwnerClosed is the Castellan's choice,
+    ///         sent by the arena on the Castellan's behalf.
     enum CloseReason {
         Expired,
         OrdersChanged,
@@ -172,7 +173,9 @@ contract SiegeVault {
     /// @notice Close an unbroken vault and return the pot to its Castellan.
     ///         Expired: after the deadline, by the Castellan or the arena.
     ///         OrdersChanged: any time, arena only (auto-close when the guardian's prompt hash changes).
-    ///         OwnerClosed: any time, by the Castellan or the arena.
+    ///         OwnerClosed: any time, arena only. The Castellan asks through the arena's owner-authenticated
+    ///         close route, which refuses while a verified break is waiting to be paid; a direct Castellan
+    ///         call could otherwise front-run the arena's release and take back a pot a raider already won.
     /// @dev In-flight sieges' fees were never forwarded here; the arena refunds them off chain.
     function closeVault(uint256 vaultId, CloseReason reason) external {
         Vault storage v = vaults[vaultId];
@@ -180,10 +183,9 @@ contract SiegeVault {
         if (reason == CloseReason.Expired) {
             if (block.timestamp < v.deadline) revert NotExpired();
             if (msg.sender != v.castellan && msg.sender != arena) revert NotAllowed();
-        } else if (reason == CloseReason.OrdersChanged) {
-            if (msg.sender != arena) revert NotArena();
         } else {
-            if (msg.sender != v.castellan && msg.sender != arena) revert NotAllowed();
+            // OrdersChanged and OwnerClosed
+            if (msg.sender != arena) revert NotArena();
         }
         uint256 refund = v.pot;
         v.pot = 0;

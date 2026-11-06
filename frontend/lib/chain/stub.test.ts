@@ -237,8 +237,9 @@ describe("stub chain (isolated test db)", () => {
       expect(r.message).not.toMatch(/hello|SECRET|"no"/);
       expect(JSON.parse(r.message).v).toBe(1);
     }
-    expect(JSON.parse(rows[1].message)).toMatchObject({ type: "decision", turn: 2, requestId: "0g-1", castleId: one.castleId });
-    expect(JSON.parse(rows[2].message)).toMatchObject({ hash: HASH });
+    expect(rows.map((r) => r.type)).toEqual(["siege.start", "siege.decision", "siege.end"]);
+    expect(JSON.parse(rows[1].message)).toMatchObject({ type: "siege.decision", turn: 2, requestId: "0g-1", castleId: one.castleId });
+    expect(JSON.parse(rows[2].message)).toMatchObject({ type: "siege.end", hash: HASH });
     expect(await c.audit({ siegeId: "", type: "approval", payload: {}, at })).toEqual({ ok: false, reason: "no_castle" });
   });
 
@@ -251,12 +252,31 @@ describe("stub chain (isolated test db)", () => {
     const [vs, msg] = d.select().from(schema.auditLog).where(eq(schema.auditLog.castleId, x.castleId)).all();
     expect(vs.type).toBe("vault.state");
     expect(JSON.parse(vs.message)).toEqual({ v: 1, type: "vault.state", castleId: x.castleId, from: "guarding", to: "dormant", reason: "three missed heartbeats", at });
-    expect(JSON.parse(msg.message)).toMatchObject({ type: "message", turn: 1, transport: "sdk", requestId: "proxy-req-1", hash: HASH });
+    expect(msg.type).toBe("siege.message");
+    expect(JSON.parse(msg.message)).toMatchObject({ type: "siege.message", turn: 1, transport: "sdk", requestId: "proxy-req-1", hash: HASH });
     // a huge multi-byte reason still fits in one HCS message
     await c.audit({ siegeId: "", castleId: x.castleId, type: "vault_state", payload: { from: "guarding", to: "closed", reason: "🏰".repeat(5000) }, at });
     const big = d.select().from(schema.auditLog).where(eq(schema.auditLog.castleId, x.castleId)).all().at(-1)!;
     expect(Buffer.byteLength(big.message)).toBeLessThanOrEqual(1000);
     expect(JSON.parse(big.message).to).toBe("closed");
+  });
+
+  it("audit: plan A4 type strings; siege.end carries the result; attempt/release carry the transport", async () => {
+    const x = seed(d);
+    const at = new Date().toISOString();
+    const ev = (type: "start" | "end" | "attempt" | "release", payload: Record<string, unknown>) =>
+      c.audit({ siegeId: x.siegeId, castleId: x.castleId, type, transport: "hosted", payload, at });
+    await ev("start", { txId: "0.0.1@1.2" });
+    await ev("end", { result: "broken", transcriptHash: HASH, requestId: "proxy-req-9" });
+    await ev("attempt", { txId: "0xatt" });
+    await ev("release", { txId: "0xrel", transcriptHash: HASH });
+    const rows = d.select().from(schema.auditLog).where(eq(schema.auditLog.castleId, x.castleId)).all();
+    expect(rows.map((r) => r.type)).toEqual(["siege.start", "siege.end", "siege.attempt", "vault.release"]);
+    const msgs = rows.map((r) => JSON.parse(r.message));
+    expect(msgs.map((m) => m.type)).toEqual(["siege.start", "siege.end", "siege.attempt", "vault.release"]);
+    expect(msgs[1]).toMatchObject({ result: "broken", hash: HASH, requestId: "proxy-req-9", transport: "hosted" });
+    expect(msgs[3]).toMatchObject({ txId: "0xrel", transport: "hosted" });
+    expect(msgs[0].result).toBeUndefined();
   });
 });
 
@@ -279,8 +299,16 @@ describe("chain (env-selected, shared db)", () => {
     if (!r.ok) throw new Error(r.reason);
     expect(r.amount).toBe("550000000");
     expect(r.tx.stub).toBe(true);
+    // write-ahead like testnet: the siege carries the "landed" tx until the worker applies it, so a vault
+    // close racing the worker cannot void it, and a retry returns the same landed write
+    expect(d.select().from(schema.sieges).where(eq(schema.sieges.id, siegeId)).get()!.pendingTx).toBe(r.tx.txId);
+    expect(await chain.release(siegeId, verdict(siegeId, sig))).toMatchObject({ ok: true, tx: { txId: r.tx.txId } });
     // transcript mismatch is refused before the signature check
-    expect(await chain.release(siegeId, { ...verdict(siegeId, sig), transcriptHash: `0x${"00".repeat(32)}` })).toEqual({
+    const other = seed(d, { status: "broken", fee: 50_000_000, pot: 500_000_000 });
+    const prep2 = await prepareRelease(other.siegeId);
+    if (!prep2.ok) throw new Error(prep2.reason);
+    const sig2 = await privateKeyToAccount(DEV_VERIFIER_KEY).signTypedData(prep2.typedData);
+    expect(await chain.release(other.siegeId, { ...verdict(other.siegeId, sig2), transcriptHash: `0x${"00".repeat(32)}` })).toEqual({
       ok: false,
       reason: "transcript_mismatch",
     });

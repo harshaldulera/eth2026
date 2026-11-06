@@ -139,6 +139,7 @@ export type StartSiegeResponse = {
 };
 
 export type CloseCastleResponse = { ok: true; tx: TxRef; refunded: Amount; inFlightRefunds: number };
+export type OpenVaultResponse = { ok: true; vaultId: number; tx: TxRef; reason: string; castle: Castle };
 export type VaultStateResponse = { ok: true; castle?: Castle; change?: { from: VaultState; to: VaultState; reason: string; at: string } };
 
 export type PlayStartResponse = { siegeId: string; receipt: StartSiegeResponse["receipt"] };
@@ -181,6 +182,8 @@ export const api = {
    */
   closeCastle: (id: string, reason: VaultCloseReason = "owner_closed") =>
     request<CloseCastleResponse>(`/api/castles/${enc(id)}/close`, { method: "POST", json: { reason } }),
+  /** Bring-your-agent "Open" (owner cookie): a verified castle's vault is created on chain -> funded. 409 `not_verified` otherwise. */
+  openVault: (id: string) => request<OpenVaultResponse>(`/api/castles/${enc(id)}/open`, { method: "POST", json: {} }),
   /** Dev only: force a vault state transition (e.g. guarding -> dormant) for demos and tests. */
   setVaultState: (id: string, to: VaultState, reason: string) =>
     request<VaultStateResponse>(`/api/castles/${enc(id)}/vault-state`, { method: "POST", json: { to, reason } }),

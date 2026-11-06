@@ -25,7 +25,7 @@ closeVault(vaultId, reason)                   see below, refunds the pot to the 
 |---|---|---|---|---|
 | `Expired` | 0 | at or after the deadline (`NotExpired` before) | castellan or arena | `NotAllowed` |
 | `OrdersChanged` | 1 | any time | arena only (auto-close when the guardian's orders hash changes) | `NotArena` |
-| `OwnerClosed` | 2 | any time | castellan or arena | `NotAllowed` |
+| `OwnerClosed` | 2 | any time | arena only (the castellan asks through the app's owner-authenticated close route, which refuses while a verified break waits to be paid) | `NotArena` |
 
 A value above 2 fails ABI decoding and reverts with no data. After a close, `recordAttempt` and `release` revert `BadStatus`, and a second close of any reason reverts `BadStatus`. Earnings already in `castellanBalance` are not part of the pot and stay withdrawable.
 
@@ -43,7 +43,7 @@ cast send $VAULT "createVault(uint256,uint64,address,string)" 100000000 604800 $
 #         fee = 1e8 tinybars                         value = 20e8 tinybars * 1e10 weibars
 ```
 
-Close it early because the castellan asked (reason 2 = OwnerClosed; use 1 for OrdersChanged, 0 once expired):
+Close it early because the castellan asked (reason 2 = OwnerClosed, sent from the arena key; use 1 for OrdersChanged, 0 once expired, which the castellan may also send):
 
 ```
 cast send $VAULT "closeVault(uint256,uint8)" $VAULT_ID 2 --rpc-url https://testnet.hashio.io/api --private-key $KEY --legacy --gas-limit 300000

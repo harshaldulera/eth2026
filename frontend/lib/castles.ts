@@ -124,6 +124,17 @@ export function castleClosedReason(castleId: string, opts: { exceptSiegeId?: str
   if (c.status === "broken") return "broken";
   if (c.status !== "open") return "closed";
   if (c.deadline <= (opts.now ?? Date.now())) return "expired";
+  return pendingPaidBreak(castleId, opts) ? "being_broken" : null;
+}
+
+/**
+ * The id of a PAID siege on this castle that ended broken and is waiting for its release (not void,
+ * not settled, not given up on), or null. While one exists the vault belongs to that raider: nothing
+ * may close the vault (lib/vault/close refuses with "being_broken"), whatever the deadline says —
+ * SiegeVault.release has no deadline check, so a break that ended in time is still payable after it.
+ */
+export function pendingPaidBreak(castleId: string, opts: { exceptSiegeId?: string; d?: Reader } = {}): string | null {
+  const d = opts.d ?? db();
   const s = schema.sieges;
   const where = [
     eq(s.castleId, castleId),
@@ -134,6 +145,5 @@ export function castleClosedReason(castleId: string, opts: { exceptSiegeId?: str
     lt(s.chainAttempts, MAX_CHAIN_ATTEMPTS),
   ];
   if (opts.exceptSiegeId) where.push(ne(s.id, opts.exceptSiegeId));
-  const winner = d.select({ id: s.id }).from(s).where(and(...where)).get();
-  return winner ? "being_broken" : null;
+  return d.select({ id: s.id }).from(s).where(and(...where)).get()?.id ?? null;
 }

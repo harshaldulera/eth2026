@@ -167,7 +167,7 @@ export type ToolCall = { name: string; args: Record<string, unknown> };
 export type GuardianDecision = {
   reply: string;
   move: GuardianMove;
-  /** Only an `open_vault` call means the vault opens. */
+  /** Only a call to the castle's `protectedTool` (Castle.protectedTool: `unlock_vault` for hosted guardians) means the vault opens. */
   toolCalls: ToolCall[];
   /** 0G request id (or "0g-stub-…" from the stub). */
   requestId: string;
@@ -359,9 +359,14 @@ export interface ChainPort {
   audit(event: SiegeEvent): Promise<{ ok: true; topicId: string; seq: number } | { ok: false; reason: string }>;
   createTopic(castleId: string): Promise<{ ok: true; topicId: string; tx: TxRef } | { ok: false; reason: string }>;
   /**
-   * Close a vault: returns the pot to the Castellan on chain and refunds every in-flight paid siege.
+   * LANE A INTERNAL — other lanes call lib/vault `closeCastle(castleId, reason)` (or
+   * `vaultState.transition(castleId, "closed", reason)`, which routes there). This on-chain step alone
+   * does NOT take the castle off the board: the castle stays "guarding" until closeCastle transitions it.
+   * Closes the vault on chain (SiegeVault.closeVault, always sent by the arena): the pot goes back to the
+   * Castellan and every ended-unsettled held/banished paid siege is voided and refunded. A paid broken
+   * siege is never voided (closeCastle refuses while one waits for its release).
    * "orders_changed" is the auto-close path (Lane B raises it from the proxy's prompt-hash check);
-   * "owner_closed" is the Castellan's choice; "expired" needs the deadline to have passed.
+   * "owner_closed" is the Castellan's request through the owner route; "expired" needs the deadline.
    */
   closeVault(vaultId: number, reason: VaultCloseReason): Promise<
     { ok: true; tx: TxRef; refunded: Amount; inFlightRefunds: number } | { ok: false; reason: string }
@@ -370,9 +375,16 @@ export interface ChainPort {
 
 export type FeeSplit = { castellan: Amount; pot: Amount; arena: Amount };
 
-/** Lane B — lib/guardian */
+/** The vault-scoped model key every hosted inference uses (from ProxyPort.issueKey; never the team key). */
+export type GuardianVia = { modelKey: string; baseURL: string };
+
+/**
+ * Lane B — lib/guardian. Only lib/transport may call it (lint-enforced), and it must pass the vault's
+ * proxy key: every 0G call goes to `via.baseURL` with `via.modelKey` (plan rule two). lib/guardian never
+ * reads the team 0G key; only lib/proxy does.
+ */
 export interface GuardianPort {
-  respond(castleId: string, siegeMessages: SiegeMessage[]): Promise<GuardianDecision>;
+  respond(castleId: string, siegeMessages: SiegeMessage[], via: GuardianVia): Promise<GuardianDecision>;
 }
 
 /**
@@ -389,9 +401,16 @@ export interface GuardianTransport {
   status(castleId: string): Promise<VaultState>;
 }
 
-/** Lane B — lib/proxy: one record per inference request through the vault-scoped model key. Hashes only, never content. */
+/**
+ * Lane B — lib/proxy: one record per inference request through the vault-scoped model key. Hashes only, never content.
+ *
+ * NAMING (frozen): in the proxy, `vaultId` is the vault SCOPE = the CASTLE id (Castle.id, e.g.
+ * "castle_splinter_gate"), NOT the on-chain SiegeVault number (Castle.vaultId). The verifier requires
+ * `record.vaultId === castle.id`. A per-vault key is therefore issued per castle.
+ */
 export type ProxyRecord = {
   requestId: string;
+  /** The CASTLE id (vault scope), not Castle.vaultId (the on-chain number). */
   vaultId: string;
   siegeId?: string;
   turn?: number;
@@ -401,15 +420,23 @@ export type ProxyRecord = {
 };
 
 export interface ProxyPort {
-  issueKey(vaultId: string): Promise<{ modelKey: string; baseURL: string }>;
+  /** `vaultId` = the CASTLE id (vault scope), not Castle.vaultId. */
+  issueKey(vaultId: string): Promise<GuardianVia>;
   record(requestId: string): Promise<ProxyRecord | null>;
 }
 
-/** Shared — lib/vault/state: the one place vault transitions happen (DB, event, HCS, Arkiv). */
+/**
+ * Shared — lib/vault `vaultState` (lib/vault/port.ts): vault transitions (DB, event, HCS, Arkiv).
+ * Lane B may set connected / verified / guarding / dormant. "closed" needs a VaultCloseReason as the
+ * reason and closes the vault on chain first (closeCastle: pot back, in-flight fees refunded;
+ * "being_broken" while a paid break waits for its release; "close_failed" if the chain write failed).
+ * "funded" and "broken" are refused: only fundVault (createVault on chain) and the worker's verified
+ * release set them.
+ */
 export interface VaultStatePort {
   get(castleId: string): Promise<VaultState | null>;
   transition(castleId: string, to: VaultState, reason: string): Promise<
-    { ok: true; change: VaultStateChange } | { ok: false; reason: "not_found" | "illegal_transition" }
+    { ok: true; change: VaultStateChange } | { ok: false; reason: "not_found" | "illegal_transition" | "being_broken" | "close_failed" }
   >;
 }
 

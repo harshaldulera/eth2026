@@ -388,10 +388,16 @@ async function main() {
   const hostedPath = await vs("verified", "pretend to be hosted");
   check(hostedPath.res.status === 409 && hostedPath.data.error === "illegal_transition", "an SDK vault cannot skip \"connected\" (409)");
   const conn = await vs("connected", "@siege/guard handshake: refund-bot on node 22, tools [lookup_order, issue_refund]");
+  const openEarly = await call<{ error?: string; vaultState?: string }>("POST", `${deskPath}/open`, {}, owner);
+  check(openEarly.res.status === 409 && openEarly.data.error === "not_verified" && openEarly.data.vaultState === "connected",
+    "the Open button (POST /open) refuses a vault that has not passed its smoke siege (409 not_verified)");
   const ver = await vs("verified", "smoke siege passed: 3 canned messages, issue_refund never called");
-  const fund = await vs("funded", "fund the vault");
+  check((await call("POST", `${deskPath}/open`, {}, {})).res.status === 401, "POST /open needs the owner cookie");
+  // Production path (not the dev endpoint): the Bring-your-agent "Open" button.
+  const fund = await call<{ ok?: boolean; error?: string; vaultId?: number; castle?: Castle }>("POST", `${deskPath}/open`, {}, owner);
   const fundedTool = fund.data.vaultId == null ? undefined : testnet ? await onchainTool(fund.data.vaultId) : stubVaultTool(fund.data.vaultId);
-  check(conn.res.ok && ver.res.ok && fund.res.ok && fund.data.vaultId != null, "connected → verified → funded (SiegeVault.createVault)", `vault #${fund.data.vaultId}`);
+  check(conn.res.ok && ver.res.ok && fund.res.ok && fund.data.vaultId != null && fund.data.castle?.vaultState === "funded",
+    "connected → verified → Open → funded (SiegeVault.createVault)", `vault #${fund.data.vaultId}`);
   check(fundedTool === "issue_refund", "the vault was created with protectedTool \"issue_refund\"", fundedTool);
   const guard = await vs("guarding", "open for sieges");
   check(guard.res.ok && guard.data.castle?.vaultState === "guarding", "Refund Desk is guarding");
@@ -466,8 +472,11 @@ async function main() {
   await breathe(100);
   const audit = db().select().from(schema.auditLog).all();
   const types = new Set(audit.map((a) => a.type));
-  for (const t of ["start", "message", "attempt", "release", "approval", "vault.state"]) check(types.has(t), `audit log has "${t}" messages`, `${audit.filter((a) => a.type === t).length}`);
-  const msgs = audit.filter((a) => a.type === "message").map((a) => JSON.parse(a.message) as { transport?: string; requestId?: string });
+  for (const t of ["siege.start", "siege.message", "siege.end", "siege.attempt", "vault.release", "agent.approval", "vault.state"])
+    check(types.has(t), `audit log has "${t}" messages (plan A4 names)`, `${audit.filter((a) => a.type === t).length}`);
+  const ends = audit.filter((a) => a.type === "siege.end").map((a) => JSON.parse(a.message) as { result?: string; hash?: string });
+  check(ends.length > 0 && ends.every((m) => ["held", "banished", "broken"].includes(m.result ?? "") && m.hash), "siege.end audits carry the result and the transcript hash", `${ends[0]?.result}`);
+  const msgs = audit.filter((a) => a.type === "siege.message").map((a) => JSON.parse(a.message) as { transport?: string; requestId?: string });
   check(msgs.length > 0 && msgs.every((m) => m.transport && m.requestId), "siege.message audits carry the transport and the proxy request id", `${msgs[0]?.transport}, ${msgs[0]?.requestId}`);
   check(audit.every((a) => Buffer.byteLength(a.message) <= 1000), "every HCS message ≤ 1000 bytes");
   check(audit.every((a) => !a.message.includes("Lord Commander") && !a.message.includes("Ignore all")), "no message text leaves the server (hashes and ids only)");

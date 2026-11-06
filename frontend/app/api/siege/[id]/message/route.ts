@@ -2,6 +2,8 @@ import { keccak256, stringToBytes } from "viem";
 import { z } from "zod";
 import { castleClosedReason } from "@/lib/castles";
 import { siege, siegeRow } from "@/lib/siege";
+import { TransportUnavailableError } from "@/lib/transport";
+import { vaultStateOf } from "@/lib/vault";
 import { auditLater, err, errorMessage, json, readBody } from "../../../_lib/http";
 
 /**
@@ -31,6 +33,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     r = await siege.message(id, body.data.text);
   } catch (e) {
     console.error(`[siege/message] guardian failed for ${id}:`, errorMessage(e));
+    // The castle's guardian is gone (an SDK harness went dormant): not a transient error, the vault is not guarding.
+    if (e instanceof TransportUnavailableError)
+      return err(409, "not_guarding", {
+        vaultState: vaultStateOf(e.castleId),
+        message: "The guardian is offline, so this castle is not taking turns. Your turn was not used; a paid fee is refunded if the vault goes dormant.",
+      });
     return err(502, "guardian_unavailable", { message: "The guardian did not answer. Your turn was not used; try again." });
   }
   if (!r.ok) return err(r.reason === "not_found" ? 404 : 409, r.reason);
@@ -57,7 +65,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       turn,
       transport,
       requestId: decision.requestId,
-      payload: { transcriptHash: s.transcriptHash, requestId: decision.requestId },
+      // Plan A4: siege.end carries the result and the transcript hash.
+      payload: { result: s.status, transcriptHash: s.transcriptHash, requestId: decision.requestId },
     });
   }
 

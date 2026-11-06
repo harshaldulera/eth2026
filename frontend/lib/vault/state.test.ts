@@ -167,9 +167,12 @@ describe("vaultState.transition", () => {
   });
 
   it("status sync: broken -> broken, closed -> closed", async () => {
-    expect((await vaultState.transition(WOOD, "broken", "paid out to 0.0.1")).ok).toBe(true);
+    // broken is the worker's (verified release); the port refuses it
+    expect(await vaultState.transition(WOOD, "broken", "paid out to 0.0.1")).toEqual({ ok: false, reason: "illegal_transition" });
+    expect((await transitionVault(WOOD, "broken", "paid out to 0.0.1")).ok).toBe(true);
     expect(castle(WOOD)).toMatchObject({ vaultState: "broken", status: "broken" });
-    expect(await vaultState.transition(WOOD, "closed", "x")).toEqual({ ok: false, reason: "illegal_transition" });
+    expect(await transitionVault(WOOD, "closed", "x")).toEqual({ ok: false, reason: "illegal_transition" });
+    expect(await vaultState.transition(WOOD, "closed", "owner_closed")).toEqual({ ok: false, reason: "illegal_transition" });
     expect((await vaultState.transition("castle_granite_hold", "closed", "owner_closed")).ok).toBe(true);
     expect(castle("castle_granite_hold")).toMatchObject({ vaultState: "closed", status: "closed" });
     expect(siegeBlockedReason("castle_granite_hold")).toBe("closed");

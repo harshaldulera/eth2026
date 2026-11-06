@@ -3,7 +3,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { emit } from "@/lib/events/bus";
-import { castleClosedReason, castleRow } from "@/lib/castles";
+import { castleClosedReason, castleRow, getCastle } from "@/lib/castles";
 import { transportFor } from "@/lib/transport";
 import { arkiv } from "@/lib/arkiv";
 import { swarm } from "@/lib/swarm";
@@ -131,6 +131,9 @@ async function start(i: StartInput): Promise<Siege> {
     },
   });
   await quietly("arkiv.writeSiege", () => arkiv.writeSiege(siege));
+  // siegeCount moved: keep the board's castle entity current (Lane C reads castles from Arkiv).
+  const c = getCastle(i.castleId);
+  if (c) await quietly("arkiv.writeCastle", () => arkiv.writeCastle(c));
   return siege;
 }
 

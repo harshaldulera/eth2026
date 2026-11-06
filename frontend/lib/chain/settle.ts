@@ -187,15 +187,34 @@ export function auditCastle(d: DB, event: SiegeEvent): CastleRow | null {
 const str = (v: unknown, max = 120): string | undefined =>
   typeof v === "string" && v.length > 0 ? v.slice(0, max) : undefined;
 
-/** HCS message type for an event: vault transitions are "vault.state"; siege events keep their event type. */
+/**
+ * HCS message types (plan A4, frozen — Lane C's replay / mirror readers filter on these exact strings):
+ *   vault.state  vault lifecycle transition {from,to,reason}
+ *   siege.start / siege.message / siege.decision / siege.end (end carries `result` and the transcript hash)
+ *   siege.attempt  fee split recorded on chain (held/banished)
+ *   vault.release  pot paid out on chain (tx id)
+ *   agent.approval raider-agent approval requested / decided
+ */
+export const AUDIT_TYPES = {
+  vault_state: "vault.state",
+  start: "siege.start",
+  message: "siege.message",
+  decision: "siege.decision",
+  end: "siege.end",
+  attempt: "siege.attempt",
+  release: "vault.release",
+  approval: "agent.approval",
+} as const satisfies Record<SiegeEvent["type"], string>;
+
 export function auditType(event: SiegeEvent): string {
-  return event.type === "vault_state" ? "vault.state" : event.type;
+  return AUDIT_TYPES[event.type] ?? event.type;
 }
 
 /**
  * Compact audit JSON (<= 1000 bytes). Only ids and hashes leave the server; message text and orders never do.
- *   siege events: {v:1,type,siegeId,castleId,turn?,transport?,hash?,requestId?,txId?,at}
- *                 (transport + requestId = which guardian transport answered and the proxy request id, plan A4)
+ *   siege events: {v:1,type,siegeId,castleId,turn?,transport?,result?,hash?,requestId?,txId?,at}
+ *                 (type = auditType(event); transport + requestId = which guardian transport answered and
+ *                 the proxy request id; result = held | banished | broken on siege.end, plan A4)
  *   vault_state:  {v:1,type:"vault.state",castleId,from,to,reason,at}
  */
 export function auditMessage(event: SiegeEvent, castleId: string): string {
@@ -220,13 +239,15 @@ export function auditMessage(event: SiegeEvent, castleId: string): string {
   }
   const tx = p.tx as { txId?: unknown } | undefined;
   const transport = event.transport ?? p.transport;
+  const result = str(p.result, 20) ?? (event.type === "end" ? str(p.status, 20) : undefined);
   const msg: Record<string, unknown> = {
     v: 1,
-    type: event.type,
+    type: auditType(event),
     siegeId: str(event.siegeId, 80) ?? "",
     castleId: castleId.slice(0, 80),
     turn: typeof event.turn === "number" ? event.turn : undefined,
     transport: transport === "hosted" || transport === "sdk" ? transport : undefined,
+    result,
     hash: str(p.transcriptHash) ?? str(p.hash),
     requestId: str(event.requestId) ?? str(p.requestId),
     txId: str(p.txId) ?? str(tx?.txId),
