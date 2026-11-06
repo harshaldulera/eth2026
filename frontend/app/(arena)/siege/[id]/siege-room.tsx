@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Bot, DoorClosed, DoorOpen, Gift, Loader2, RotateCcw, SendHorizontal, Shield, Wand2 } from "lucide-react";
+import { ArrowLeft, Bot, DoorClosed, DoorOpen, Fingerprint, Gift, Loader2, RotateCcw, SendHorizontal, Shield, Wand2 } from "lucide-react";
 import { motion } from "motion/react";
 import type { Castle, FeeSplit as FeeSplitT, Siege, StoredSiegeEvent } from "@/lib/types";
 import { MAX_TURNS } from "@/lib/types";
@@ -297,7 +297,7 @@ function Room({
         </Card>
       </div>
 
-      {ended ? <Outcome siege={siege} castle={castle} events={events} /> : null}
+      {ended ? <Outcome siege={siege} castle={castle} events={events} demo={mode === "demo"} /> : null}
     </div>
   );
 }
@@ -319,14 +319,21 @@ function LiveDot({ mode }: { mode: SiegeView["mode"] }) {
   );
 }
 
-function Outcome({ siege, castle, events }: { siege: Siege; castle: Castle; events: StoredSiegeEvent[] }) {
+function Outcome({ siege, castle, events, demo = false }: { siege: Siege; castle: Castle; events: StoredSiegeEvent[]; demo?: boolean }) {
   const { config } = useConfig();
   const fee = siege.receipt && !siege.receipt.free ? siege.receipt.amount : castle.fee;
   const settlement = siege.settlement;
   const replay = (
-    <Link href={`/castle/${castle.id}`} className="inline-flex items-center gap-1.5 text-sm text-stone underline decoration-arena-line underline-offset-4 hover:text-parchment">
-      <RotateCcw className="size-3.5" /> Lay another siege on {castle.name}
-    </Link>
+    <span className="inline-flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+      {demo ? null : (
+        <Link href={`/replay/${siege.id}`} className="inline-flex items-center gap-1.5 text-sm text-gold underline decoration-gold/30 underline-offset-4 hover:text-gold">
+          <Fingerprint className="size-3.5" /> Replay and proof
+        </Link>
+      )}
+      <Link href={`/castle/${castle.id}`} className="inline-flex items-center gap-1.5 text-sm text-stone underline decoration-arena-line underline-offset-4 hover:text-parchment">
+        <RotateCcw className="size-3.5" /> Lay another siege on {castle.name}
+      </Link>
+    </span>
   );
 
   if (settlement?.state === "void") {
