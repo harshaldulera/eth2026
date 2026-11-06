@@ -110,7 +110,7 @@ export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; cl
         <Row k="On chain">
           {proof.release ? (
             <span className="inline-flex flex-wrap items-center gap-2">
-              <HashscanLink tx={proof.release} label="Broken ↗" />
+              <HashscanLink tx={proof.release} label="Breached ↗" />
               <span className="text-money">
                 paid {formatAmount(proof.release.amount, castle.asset)} to {shortAccount(siege.raider)}
               </span>

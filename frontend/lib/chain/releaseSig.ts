@@ -4,24 +4,25 @@ import { env } from "@/lib/config/env";
 
 /**
  * EIP-712 Release, byte-for-byte what SiegeVault.release() checks:
- *   domain  { name: "SiegeVault", version: "1", chainId, verifyingContract: vault }
- *   Release(uint256 vaultId,address raider,bytes32 transcriptHash,bytes32 siegeId)
+ *   domain  { name: "SiegeVault", version: "2", chainId, verifyingContract: vault }
+ *   Release(uint256 vaultId,address operator,bytes32 transcriptHash,bytes32 opId)
+ * Version 2 is the game-vocabulary contract; a version-1 signature never verifies against it.
  */
 
 export const RELEASE_TYPES = {
   Release: [
     { name: "vaultId", type: "uint256" },
-    { name: "raider", type: "address" },
+    { name: "operator", type: "address" },
     { name: "transcriptHash", type: "bytes32" },
-    { name: "siegeId", type: "bytes32" },
+    { name: "opId", type: "bytes32" },
   ],
 } as const;
 
 export type ReleaseTypedData = {
-  domain: { name: "SiegeVault"; version: "1"; chainId: number; verifyingContract: `0x${string}` };
+  domain: { name: "SiegeVault"; version: "2"; chainId: number; verifyingContract: `0x${string}` };
   types: typeof RELEASE_TYPES;
   primaryType: "Release";
-  message: { vaultId: bigint; raider: `0x${string}`; transcriptHash: `0x${string}`; siegeId: `0x${string}` };
+  message: { vaultId: bigint; operator: `0x${string}`; transcriptHash: `0x${string}`; opId: `0x${string}` };
 };
 
 /** Anvil key #1. Stub mode ONLY, when VERIFIER_KEY is unset. Never fund its address. */
@@ -30,8 +31,8 @@ export const DEV_VERIFIER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7
 /** Stand-in vault address for stub mode (no contract deployed). */
 export const STUB_VAULT_ADDRESS = "0x5e1e6e0000000000000000000000000000000001" as const;
 
-/** DB siege id -> the bytes32 the contract sees. */
-export function siegeIdToBytes32(id: string): `0x${string}` {
+/** The app's op (siege) id -> the bytes32 opId the contract sees. */
+export function opIdToBytes32(id: string): `0x${string}` {
   return keccak256(toBytes(id));
 }
 
@@ -39,19 +40,20 @@ export function releaseTypedData(p: {
   chainId: number;
   vault: `0x${string}`;
   vaultId: bigint;
-  raider: `0x${string}`;
+  operator: `0x${string}`;
   transcriptHash: `0x${string}`;
-  siegeId: string;
+  /** The app's op (siege) id; hashed to the contract's bytes32 opId. */
+  opId: string;
 }): ReleaseTypedData {
   return {
-    domain: { name: "SiegeVault", version: "1", chainId: p.chainId, verifyingContract: p.vault },
+    domain: { name: "SiegeVault", version: "2", chainId: p.chainId, verifyingContract: p.vault },
     types: RELEASE_TYPES,
     primaryType: "Release",
     message: {
       vaultId: p.vaultId,
-      raider: p.raider,
+      operator: p.operator,
       transcriptHash: p.transcriptHash,
-      siegeId: siegeIdToBytes32(p.siegeId),
+      opId: opIdToBytes32(p.opId),
     },
   };
 }

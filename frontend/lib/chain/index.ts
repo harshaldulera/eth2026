@@ -11,7 +11,7 @@ import { stubChain } from "./stub";
 
 export * from "./hashscan";
 export * from "./units";
-export { siegeIdToBytes32, releaseTypedData, verifierAddress, signRelease, type ReleaseTypedData } from "./releaseSig";
+export { opIdToBytes32, releaseTypedData, verifierAddress, signRelease, type ReleaseTypedData } from "./releaseSig";
 export { drainAudit, auditBacklog, syncAuditFromEvents, type DrainReport, type HcsPort } from "./outbox";
 
 /**
@@ -63,7 +63,7 @@ export const chain: ChainPort = {
  */
 export async function prepareRelease(
   siegeId: string,
-): Promise<{ ok: true; typedData: ReleaseTypedData; raider: `0x${string}`; vaultId: number } | { ok: false; reason: string }> {
+): Promise<{ ok: true; typedData: ReleaseTypedData; operator: `0x${string}`; vaultId: number } | { ok: false; reason: string }> {
   try {
     const d = db();
     const r = loadSettle(d, siegeId);

@@ -47,7 +47,7 @@ Built at ETHGlobal Mumbai 2026. Three lanes:
         │
         ├─ held   ──worker: recordAttempt{value: fee}──────────────▶ SiegeVault   AttemptRecorded: 80 / 15 / 5 split
         └─ broken ──worker: verify → EIP-712 sign → release{value: fee}──▶ SiegeVault ──pot + fee──▶ Raider
-                                                                          Broken(vaultId, siegeId, raider, hash, amount)
+                                                                          Breached(vaultId, opId, operator, hash, amount)
 
  every step ──▶ the castle's HCS topic (ids + hashes; siege.start … siege.end, siege.attempt, vault.release, agent.approval)
  cap hit    ──▶ approval on the owner's phone ──approve──▶ top-up TransferTransaction treasury → agent account
@@ -88,10 +88,10 @@ The payment's transaction id starts with `0.0.9185802` because the facilitator i
 | On HashScan | What it means |
 |---|---|
 | A `CRYPTOTRANSFER` whose id starts with `0.0.9185802` | An **x402 settlement**. The facilitator (`0.0.9185802`, x402.org) paid the network fee. The transfer list shows the payer −fee and the treasury `0.0.11329863` +fee. |
-| Contract call `recordAttempt(vaultId, siegeId, raider)` | A siege **held**. The arena forwards exactly the fee it received over x402 (`msg.value == fee`, or the call reverts `WrongFee`). |
-| Event `AttemptRecorded(vaultId, siegeId, raider, castellanCut, potCut, arenaCut, newPot, streak)` | The on-chain fee split. **Amounts are tinybars** (1 ℏ = 100,000,000), because Hedera's EVM counts in tinybars. A 1 ℏ fee shows as `80000000 / 15000000 / 5000000`. The transaction's "value" field may show the relay's 18-decimal weibar form instead. |
-| Contract call `release(vaultId, raider, transcriptHash, siegeId, sig)` | A siege **broke**. It carries the verifier's EIP-712 signature over the transcript hash. The contract checks it, pays out and marks the siege id consumed, so it cannot be paid twice. |
-| Event `Broken(vaultId, siegeId, raider, transcriptHash, amount)` | The payout: `amount` = the whole pot + that siege's fee, in tinybars, sent to the raider. |
+| Contract call `recordAttempt(vaultId, opId, operator)` | A siege **held**. The arena forwards exactly the fee it received over x402 (`msg.value == fee`, or the call reverts `WrongFee`). |
+| Event `AttemptRecorded(vaultId, opId, operator, ownerCut, potCut, arenaCut, newPot, streak)` | The on-chain fee split. **Amounts are tinybars** (1 ℏ = 100,000,000), because Hedera's EVM counts in tinybars. A 1 ℏ fee shows as `80000000 / 15000000 / 5000000`. The transaction's "value" field may show the relay's 18-decimal weibar form instead. |
+| Contract call `release(vaultId, operator, transcriptHash, opId, sig)` | A siege **broke**. It carries the verifier's EIP-712 signature over the transcript hash. The contract checks it, pays out and marks the siege id consumed, so it cannot be paid twice. |
+| Event `Breached(vaultId, opId, operator, transcriptHash, amount)` | The payout: `amount` = the whole pot + that siege's fee, in tinybars, sent to the raider. |
 | "Relay account" `0.0.7314364` on a contract call | Hashio, the JSON-RPC relay that submitted the EVM transaction. The sender is the arena operator's EVM address, the only address allowed to call `recordAttempt` and `release` (`onlyArena`). |
 | `CONSENSUSSUBMITMESSAGE` on a castle's topic | The audit log. The message is JSON with ids and hashes only (`{"type":"siege.end","siegeId":…,"result":"held","hash":…}`). |
 | `CRYPTOTRANSFER` treasury → agent account | An **approved top-up**: the owner said yes on the phone. |
@@ -227,7 +227,7 @@ The video script is in [`docs/demo-script.md`](docs/demo-script.md).
 Raider ──x402 TransferTransaction──▶ arena treasury (X402_PAY_TO)      HashScan: settlement tx
              (facilitator co-signs, pays the network fee)
 held   ──worker: recordAttempt{value: fee}──▶ SiegeVault               HashScan: AttemptRecorded(80/15/5)
-broken ──worker: verify → EIP-712 sign → release{value: fee}──▶ Raider HashScan: Broken(pot + fee)
+broken ──worker: verify → EIP-712 sign → release{value: fee}──▶ Raider HashScan: Breached(pot + fee)
 every step ──▶ the castle's HCS topic (ids and hashes only, never prose)
 ```
 
