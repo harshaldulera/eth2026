@@ -50,7 +50,7 @@ curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: appli
 | Entity | Expires | What the user sees |
 |---|---|---|
 | `vault`, `vaultStatus` | the vault deadline | Each vault card shows "expires in 2d 21h". When the vault closes, it leaves The Grid because the query stops returning it. |
-| `op` | 10 min after its last write | While an op is live, its vault card lights a red **LIVE** light on The Grid and in the operator's target picker, so an Owner sending an agent can avoid a vault already being hit. Ten minutes after the op ends, the claim disappears with no cleanup code. |
+| `op` | 10 min after its last write | While an op is live, its vault card lights a red **LIVE** light on The Grid, and the operator's target picker adds "OP LIVE NOW" to that vault, so an Owner sending an agent can avoid a vault already being hit. Ten minutes after the op ends, the claim disappears with no cleanup code. |
 | profiles | ~182 days, refreshed | A guard's and an operator's record stays queryable all season, from any app. The Hall's boards on our site are computed from the server's copy today; the same ranking is one Arkiv query (`ORDER BY breaches:u64 DESC`). |
 
 `permissionlessExtension` on the listing lets the arena push its expiry out when a vault is re-armed, without taking ownership back.
