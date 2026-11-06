@@ -65,15 +65,17 @@ Built at ETHGlobal Mumbai 2026. Three lanes:
 
 ### Proof: a settled x402 payment on testnet
 
-> Provisional: these links come from a testnet run on 2026-11-06. If `docs/golden-run.md` is committed, its links supersede them. That run's guardian was the deterministic **stub** guardian (request ids `0g-stub-…`), not 0G.
+> Provisional: if `docs/golden-run.md` is committed, its links supersede these. The first two rows are the current `SiegeVault` (redeployed 2026-11-06 for the game-vocabulary contract): a breach of Splinter Gate typed in the browser against the **0G** guardian. The rows marked *previous contract* come from an earlier run on the first deployment (`0xc907…d6a3`, also verified on Sourcify) with the deterministic stub guardian; their links stay valid.
 
 | What | Hedera transaction |
 |---|---|
-| x402 payment settled by the facilitator (raider −1 ℏ, arena +1 ℏ) | [`0.0.9185802@1793953665.572012306`](https://hashscan.io/testnet/transaction/0.0.9185802-1793953665-572012306) |
+| x402 payment for the breach op (raider −0.5 ℏ, arena +0.5 ℏ), settled by the facilitator | [`0.0.9185802@1794002006.848937588`](https://hashscan.io/testnet/transaction/0.0.9185802-1794002006-848937588) |
+| `release` on the breach (5.5 ℏ = pot + fee to the operator; event `Breached`), current contract | [`0xa6c6d8f6…6518790`](https://hashscan.io/testnet/transaction/0xa6c6d8f6308cfdb019e9c22f3ae089d82ee396c76d80d4fb0e58ce0256518790) |
+| x402 payment settled by the facilitator (raider −1 ℏ, arena +1 ℏ), previous contract run | [`0.0.9185802@1793953665.572012306`](https://hashscan.io/testnet/transaction/0.0.9185802-1793953665-572012306) |
 | **The agent pays its own siege over x402**, no human approval (Night Sapper `0.0.11336492` −1 ℏ, arena +1 ℏ) | [`0.0.9185802@1793953760.343073449`](https://hashscan.io/testnet/transaction/0.0.9185802-1793953760-343073449) |
 | Night Sapper's own account (created with `AccountCreateTransaction`, funded 10 ℏ; its four x402 payments are in its history) | [`0.0.11336492`](https://hashscan.io/testnet/account/0.0.11336492) |
-| `recordAttempt` on a hold (split 0.8 / 0.15 / 0.05 ℏ) | [`0x3caa0162…6b6213`](https://hashscan.io/testnet/transaction/0x3caa016246a080842abf770888349ca7291d53c8832292c6ffe072c2105b6213) |
-| `release` on a break (5.5 ℏ = pot + fee to the raider) | [`0x583692ee…c40f452`](https://hashscan.io/testnet/transaction/0x583692eecbec3d5a0eab404e125c8092f2a011f2e3ec19a9f6f5b9b9bc40f452) |
+| `recordAttempt` on a hold (split 0.8 / 0.15 / 0.05 ℏ), previous contract | [`0x3caa0162…6b6213`](https://hashscan.io/testnet/transaction/0x3caa016246a080842abf770888349ca7291d53c8832292c6ffe072c2105b6213) |
+| `release` on a break (5.5 ℏ = pot + fee to the raider), previous contract | [`0x583692ee…c40f452`](https://hashscan.io/testnet/transaction/0x583692eecbec3d5a0eab404e125c8092f2a011f2e3ec19a9f6f5b9b9bc40f452) |
 | Agent top-up after the owner approved | [`0.0.11329863@1793953786.108314691`](https://hashscan.io/testnet/transaction/0.0.11329863-1793953786-108314691) |
 | HCS audit topics: Splinter Gate, Granite Hold | [`0.0.11336468`](https://hashscan.io/testnet/topic/0.0.11336468), [`0.0.11336472`](https://hashscan.io/testnet/topic/0.0.11336472) |
 
@@ -83,7 +85,7 @@ The payment's transaction id starts with `0.0.9185802` because the facilitator i
 
 ### Where to look on HashScan
 
-`SiegeVault` is at [`0xc907f3a0d65cc56b76ffdb4c2f283860a83ed6a3`](https://hashscan.io/testnet/contract/0.0.11336461) (contract `0.0.11336461`). It is **verified on Sourcify (exact match)**, so HashScan decodes its calls and events.
+`SiegeVault` is at [`0xf5180ccbad368410b3912a41768ddff119944274`](https://hashscan.io/testnet/contract/0.0.11345981) (contract `0.0.11345981`, deployed in [`0xc830bab6…`](https://hashscan.io/testnet/transaction/0xc830bab62b1e89907b73b801bd23ec02b0369a8ea354de81f1a22458341c5169)). It is **verified on Sourcify (exact runtime match)**, so HashScan decodes its calls and events (`VaultCreated`, `AttemptRecorded`, `Breached`, `VaultClosed`). The first deployment, [`0xc907f3a0…d6a3`](https://hashscan.io/testnet/contract/0.0.11336461), is retired: its vaults were closed and their pots refunded before the redeploy.
 
 | On HashScan | What it means |
 |---|---|

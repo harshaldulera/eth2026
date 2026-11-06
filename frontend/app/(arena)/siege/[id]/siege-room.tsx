@@ -179,6 +179,10 @@ function Room({
   const calm = useCalmMotion();
   const fork = useFork(castle.id);
   const demo = mode === "demo";
+  // The scripted DEMO LINE is a stub-mode convenience. On testnet ops are typed for real; a replay forked
+  // into this vault (FORK INTO A NEW OP) still offers its own lines.
+  const { config: roomConfig } = useConfig();
+  const demoLinesOn = Boolean(fork) || roomConfig?.chain.mode !== "testnet";
 
   const ended = ENDED.has(siege.status) || siege.settlement?.state === "void";
   const voided = siege.settlement?.state === "void";
@@ -369,10 +373,14 @@ function Room({
         busy={Boolean(sending) || !waiting || ended}
         turn={siege.turn}
         onSend={() => void send(draft)}
-        onDemo={() => {
-          setDraft(demoLine);
-          inputRef.current?.focus();
-        }}
+        onDemo={
+          demoLinesOn
+            ? () => {
+                setDraft(demoLine);
+                inputRef.current?.focus();
+              }
+            : undefined
+        }
       />
     );
   }
@@ -453,7 +461,7 @@ function Composer({
   busy: boolean;
   turn: number;
   onSend: () => void;
-  onDemo: () => void;
+  onDemo?: () => void;
 }) {
   const left = MAX_TURNS - turn;
   return (
@@ -492,16 +500,20 @@ function Composer({
         </PixelButton>
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
-        <PixelButton
-          variant="ghost"
-          size="sm"
-          disabled={busy || left <= 0}
-          onClick={onDemo}
-          title="Fill the next line of the scripted demo op"
-          className="max-sm:min-h-11 max-sm:px-3 max-sm:text-[13px]"
-        >
-          {BUTTONS.demoLine}
-        </PixelButton>
+        {onDemo ? (
+          <PixelButton
+            variant="ghost"
+            size="sm"
+            disabled={busy || left <= 0}
+            onClick={onDemo}
+            title="Fill the next line of the scripted demo op"
+            className="max-sm:min-h-11 max-sm:px-3 max-sm:text-[13px]"
+          >
+            {BUTTONS.demoLine}
+          </PixelButton>
+        ) : (
+          <span />
+        )}
         <span className="shrink-0 font-ui text-[11px] tracking-[0.1em] text-ink-dim">
           {left === 1 ? "1 MESSAGE LEFT" : `${left} MESSAGES LEFT`}
           <span className="hidden sm:inline"> · ENTER SENDS</span>
