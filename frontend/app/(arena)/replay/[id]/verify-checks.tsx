@@ -80,7 +80,13 @@ export function TranscriptSource({ transcript }: { transcript: ReplayData["trans
       </span>
       {transcript.ref ? (
         <span className="truncate font-mono text-[11px] text-ink-dim" title={transcript.ref}>
-          swarm ref {shortHex(transcript.ref.replace(/^swarm-stub:/, ""), 10)}
+          {transcript.url ? (
+            <a href={transcript.url} target="_blank" rel="noreferrer" className="underline-offset-4 hover:text-accent hover:underline" title="The sealed bytes on the Swarm gateway">
+              swarm ref {shortHex(transcript.ref, 10)} ↗
+            </a>
+          ) : (
+            <>swarm ref {shortHex(transcript.ref.replace(/^swarm-stub:/, ""), 10)}</>
+          )}
         </span>
       ) : null}
     </span>

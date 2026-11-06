@@ -17,7 +17,7 @@ import { verifier } from "@/lib/siege";
 import { getSiege, messageRows } from "@/lib/siege/read";
 import { reasonText, refundText, verifyText } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
-import { swarm } from "@/lib/swarm";
+import { REFERENCE_RE, swarm, swarmLinks, swarmPending } from "@/lib/swarm";
 import { swarmRefFor } from "@/lib/swarm/refs";
 import type { SiegeMessage } from "@/lib/types";
 import type { HcsEntry, ReplayCheck, ReplayData, ReplayTurn } from "./types";
@@ -112,6 +112,10 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
       source = ref.startsWith("swarm-stub:") ? "swarm-stub" : "swarm";
     }
   }
+  /** A live reference is openable on the gateway (the bytes are the sealed envelope, not the text). */
+  const refUrl = ref && REFERENCE_RE.test(ref) ? swarmLinks.bytes(ref) : undefined;
+  /** Sealed at siege end, but the upload has not landed yet: the worker is retrying it. */
+  const uploadPending = !ref && swarmPending(siegeId);
   const recomputedHash = transcriptHash(messages);
   const storedHash = siege.transcriptHash;
   const transcriptMatches = storedHash ? storedHash.toLowerCase() === recomputedHash.toLowerCase() : null;
@@ -244,12 +248,15 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   checks.push({
     key: "transcript",
     label: source === "swarm" ? "Transcript read from Swarm" : source === "swarm-stub" ? "Transcript read from the Swarm store (local stand-in)" : "Transcript read from the arena database",
-    state: ref ? (source === "database" ? "fail" : "pass") : ended ? "na" : "pending",
+    state: ref ? (source === "database" ? "fail" : "pass") : uploadPending || !ended ? "pending" : "na",
     detail: ref
       ? `reference ${short(ref.replace(/^swarm-stub:/, ""))}${source === "database" ? ", but the transcript could not be read from it" : ""}`
-      : ended
-        ? "no Swarm reference recorded for this op"
-        : "uploaded when the op ends",
+      : uploadPending
+        ? "sealed, upload to Swarm pending (the worker retries it)"
+        : ended
+          ? "no Swarm reference recorded for this op"
+          : "uploaded when the op ends",
+    ...(refUrl && source === "swarm" ? { href: refUrl } : {}),
   });
   checks.push({
     key: "hash",
@@ -397,7 +404,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   return {
     siege: siegeMeta,
     castle,
-    transcript: { source, ref, recomputedHash, storedHash, matches: transcriptMatches },
+    transcript: { source, ref, url: refUrl, recomputedHash, storedHash, matches: transcriptMatches },
     turns,
     hcs: { topicId: noTopic ? null : topicId, topicUrl: realTopic && topicId ? topicUrl(topicId) : undefined, stub: stubTopic, noTopic, entries, endHash: end?.hash, mirror, retrying },
     verdict,

@@ -67,6 +67,8 @@ export type ReplayData = {
     /** Where the transcript shown here was read from. */
     source: "swarm" | "swarm-stub" | "database";
     ref?: string;
+    /** A live reference's bytes on the gateway (the sealed envelope: the text is encrypted). */
+    url?: string;
     recomputedHash: `0x${string}`;
     storedHash?: string;
     /** The transcript's recomputed hash equals the siege's stored hash. */

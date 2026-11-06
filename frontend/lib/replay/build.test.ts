@@ -16,6 +16,7 @@ import { STUB_PAYMENT_HEADER } from "@/lib/pay";
 import { siege } from "@/lib/siege";
 import { voidHeadline } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
+import { rememberUpload } from "@/lib/swarm/store";
 import { transitionVault } from "@/lib/vault/state";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { SDK_FIXTURE_CASTLE, sdkFixtureCastleRow } from "@/lib/fixtures/castles";
@@ -260,6 +261,26 @@ describe("tampering and odd shapes", () => {
     const r = await buildReplay(id);
     expect(r!.transcript.source).toBe("database");
     expect(check(r, "transcript")?.state).toBe("fail");
+    expect(r!.transcript.url).toBeUndefined();
+  });
+
+  it("a live Swarm reference carries its gateway link, even when the read fails", async () => {
+    const id = await free(WOOD, WOODEN_BREAK);
+    const ref = "2b527e58fbaaab506f66bfcb558c5b39264a9fce549c720ec6e3c1e63ab7d65d";
+    db().run(`UPDATE swarm_refs SET ref = '${ref}' WHERE siege_id = '${id}'`);
+    const r = await buildReplay(id);
+    expect(r!.transcript).toMatchObject({ source: "database", ref, url: `https://api.gateway.ethswarm.org/bytes/${ref}` });
+    expect(check(r, "transcript")).toMatchObject({ state: "fail", detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, but the transcript could not be read from it` });
+    expect(check(r, "transcript")?.href).toBeUndefined();
+  });
+
+  it("a sealed transcript whose upload has not landed is a pending transcript check, not N/A", async () => {
+    const id = await free(WOOD, WOODEN_BREAK);
+    db().run("DELETE FROM swarm_refs");
+    rememberUpload(id, new Uint8Array([1, 2, 3]), "0xabc");
+    const r = await buildReplay(id);
+    expect(r!.transcript.source).toBe("database");
+    expect(check(r, "transcript")).toMatchObject({ state: "pending", detail: "sealed, upload to Swarm pending (the worker retries it)" });
   });
 
   it("held siege: five turns, no tool call, no verifier", async () => {
