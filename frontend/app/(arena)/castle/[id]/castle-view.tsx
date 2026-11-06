@@ -21,6 +21,8 @@ import { SiegeStatusBadge, Streak, TIER_DEFENSES, TierBadge } from "@/components
 import { ProtectedTool, TransportBadge, VaultSetupSteps, VaultStateBadge } from "@/components/arena/vault-state";
 import { ArkivCard } from "@/components/arena/arkiv-card";
 
+const ENDED_SIEGE = new Set(["held", "broken", "banished"]);
+
 /** Fallback until /api/config arrives (the contract default). */
 const DEFAULT_SPLIT_BPS = { castellan: 8000, pot: 1500, arena: 500 };
 const pct = (bps: number) => `${Number((bps / 100).toFixed(2))}%`;
@@ -281,7 +283,11 @@ function RecentSieges({ sieges, castle }: { sieges: Siege[]; castle: Castle }) {
         <ul className="divide-y divide-arena-line">
           {sieges.map((s) => (
             <li key={s.id}>
-              <Link href={`/siege/${s.id}`} className="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-white/[0.02]">
+              <Link
+                href={ENDED_SIEGE.has(s.status) ? `/replay/${s.id}` : `/siege/${s.id}`}
+                title={ENDED_SIEGE.has(s.status) ? "Replay and proof" : "Watch live"}
+                className="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-white/[0.02]"
+              >
                 <SiegeStatusBadge status={s.status} className="w-24 justify-center" />
                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-parchment/80">
                   {s.raider}

@@ -42,10 +42,13 @@ export function GuardianBubble({
   guardianName,
   exposed,
   fresh,
+  provider = "0G",
 }: {
   message: SiegeMessage;
   guardianName?: string;
   exposed?: string;
+  /** Who answered: "0G" by default; the replay passes the recorded provider (e.g. "anthropic"). */
+  provider?: string;
   /** Just landed: the request id glows in. */
   fresh?: boolean;
 }) {
@@ -80,7 +83,7 @@ export function GuardianBubble({
             title="Request id of this reply, recorded by the arena's model proxy (hashes only)"
           >
             <Cpu className="size-3" aria-hidden />
-            0G {m.requestId}
+            {provider} {m.requestId}
           </motion.span>
         ) : null}
       </div>

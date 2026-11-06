@@ -1,3 +1,4 @@
+import type { ReplayData } from "@/lib/replay/types";
 import type {
   ApprovalRequest,
   ApprovalStatus,
@@ -223,6 +224,8 @@ export const api = {
     request<PlayStartResponse>("/api/play/start", { method: "POST", json: body }),
 
   siege: (id: string) => request<SiegeDetail>(`/api/siege/${enc(id)}`),
+  /** A siege turn by turn, with the transcript, hash, HCS and inference checks recomputed. */
+  replay: (id: string) => request<ReplayData>(`/api/replay/${enc(id)}`),
   sendMessage: (id: string, text: string) =>
     request<MessageResponse>(`/api/siege/${enc(id)}/message`, { method: "POST", json: { text } }),
 
