@@ -48,6 +48,7 @@ describe("migrations: a DB migrated with a pre-merge 0003", () => {
     const cols = (after.prepare("PRAGMA table_info(proxy_records)").all() as { name: string }[]).map((c) => c.name);
     expect(cols).toContain("castle_id");
     expect(cols).not.toContain("vault_id");
+    expect(cols).toContain("provider"); // 0006 runs after 0004 and 0005 on upgrade
     after.close();
   });
 

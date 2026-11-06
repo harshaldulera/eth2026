@@ -1,0 +1,1 @@
+ALTER TABLE `proxy_records` ADD `provider` text DEFAULT '0g' NOT NULL;

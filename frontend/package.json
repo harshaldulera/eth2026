@@ -26,6 +26,7 @@
     "guardian:fixtures": "tsx scripts/guardian-fixtures.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
     "@arkiv-network/sdk": "^1.0.1",
     "@hiero-ledger/sdk": "^2.90.1",
     "@x402/core": "^2.30.0",

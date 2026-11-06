@@ -65,7 +65,10 @@ let cached: Env | null = null;
 
 export function env(): Env {
   if (!cached) {
-    const r = schema.safeParse(process.env);
+    // An empty `KEY=` line in .env means "not set": treat it as unset so defaults apply (an empty
+    // DATABASE_URL used to resolve to the project directory).
+    const vars = Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== ""));
+    const r = schema.safeParse(vars);
     if (!r.success) {
       throw new Error(`Invalid environment: ${r.error.issues.map((i) => `${i.path.join(".") || "env"}: ${i.message}`).join("; ")}`);
     }
