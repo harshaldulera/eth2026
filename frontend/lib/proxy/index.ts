@@ -17,7 +17,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { zgConfig } from "./config";
 import { mockChat } from "./mock";
-import { chat as zgChat, type Billing, type ChatRequest, type ChatResult } from "./zg";
+import { chat as zgChat, ZgError, type Billing, type ChatRequest, type ChatResult } from "./zg";
 
 export { zgConfig } from "./config";
 export type { Billing, ChatMessage, ChatRequest, ChatResult, ToolDef } from "./zg";
@@ -72,7 +72,22 @@ export function record(requestId: string): ProxyRecord | null {
   return db().select().from(schema.proxyRecords).where(eq(schema.proxyRecords.requestId, requestId)).get() ?? null;
 }
 
-export type ProxyResult = { ok: true; result: ChatResult; record: ProxyRecord } | { ok: false; status: number; error: string };
+export type ProxyResult =
+  | { ok: true; result: ChatResult; record: ProxyRecord }
+  /** The upstream model refused the request (e.g. a provider content filter). Recorded; counts as no tool call. */
+  | { ok: false; status: 422; error: "upstream_rejected"; record: ProxyRecord }
+  | { ok: false; status: number; error: string };
+
+/** 0G returns a request id even when the upstream provider rejects the prompt. */
+function rejectedRequestId(e: unknown): string | null {
+  if (!(e instanceof ZgError) || e.status !== 400 || !e.body) return null;
+  try {
+    const j = JSON.parse(e.body) as { error?: { code?: string }; x_0g_trace?: { request_id?: string } };
+    return j.error?.code === "bad_response_status_code" ? (j.x_0g_trace?.request_id ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Forward one chat completion for a castle's key. ctx tags it with siege + turn. Billing picks whose
@@ -84,23 +99,28 @@ export async function chat(key: string, req: ChatRequest, ctx: { siegeId?: strin
 
   const billing = ctx.billing ?? { kind: "team" };
   const mock = zgConfig.mock && billing.kind === "team";
-  const result = mock ? mockChat(req, vk.protectedTool) : await zgChat(req, billing);
+  const base = { castleId: vk.castleId, siegeId: ctx.siegeId ?? null, turn: ctx.turn ?? null, model: req.model, promptHash: systemPromptHash(req.messages), mock, at: new Date().toISOString() };
+
+  let result: ChatResult;
+  try {
+    result = mock ? mockChat(req, vk.protectedTool) : await zgChat(req, billing);
+  } catch (e) {
+    const rid = rejectedRequestId(e);
+    if (!rid) throw e;
+    const rec: ProxyRecord = { ...base, requestId: rid, responseHash: sha256((e as ZgError).body ?? ""), protectedToolCalled: false, toolCalls: "[]", costUsdMicro: null };
+    db().insert(schema.proxyRecords).values(rec).onConflictDoNothing().run();
+    return { ok: false, status: 422, error: "upstream_rejected", record: rec };
+  }
   if (!result.requestId) return { ok: false, status: 502, error: "0G response had no request id" };
 
   const toolNames = (result.message.tool_calls ?? []).map((c) => c.function.name);
   const rec: ProxyRecord = {
+    ...base,
     requestId: result.requestId,
-    castleId: vk.castleId,
-    siegeId: ctx.siegeId ?? null,
-    turn: ctx.turn ?? null,
-    model: req.model,
-    promptHash: systemPromptHash(req.messages),
     responseHash: sha256(JSON.stringify(canonical(result.raw))),
     protectedToolCalled: toolNames.includes(vk.protectedTool),
     toolCalls: JSON.stringify(toolNames),
     costUsdMicro: result.costUsdMicro ?? null,
-    mock,
-    at: new Date().toISOString(),
   };
   db().insert(schema.proxyRecords).values(rec).onConflictDoNothing().run();
   return { ok: true, result, record: rec };

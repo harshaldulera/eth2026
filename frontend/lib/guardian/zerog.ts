@@ -13,6 +13,7 @@ import { chatMessages, systemPrompt, type GuardianProfile } from "./prompt";
 import { DECOYS, PROTECTED_TOOL, TIERS } from "./tiers";
 
 const MAX_ROUNDS = 3; // decoy round-trips per raider message before forcing a text reply
+const REFUSAL = "The gate stays shut. Try something else.";
 
 function parseArgs(s: string): Record<string, unknown> {
   try {
@@ -45,6 +46,12 @@ export async function respondAs(
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const req: ChatRequest = { model, messages, tools, tool_choice: round === MAX_ROUNDS - 1 ? "none" : "auto", temperature: 0.2, max_tokens: 400 };
     const r = await proxy.chat(key, req, ctx);
+    if (!r.ok && r.error === "upstream_rejected" && "record" in r) {
+      // The model's provider refused the prompt outright: the attack didn't land, so the gate holds.
+      requestIds.push(r.record.requestId);
+      reply ||= REFUSAL;
+      break;
+    }
     if (!r.ok) throw new Error(`proxy ${r.status}: ${r.error}`);
     requestIds.push(r.record.requestId);
     costUsdMicro += Number(r.record.costUsdMicro ?? 0) || 0;
