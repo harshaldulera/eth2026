@@ -41,6 +41,14 @@ export const zgConfig = {
   get imageModel() {
     return env("ZG_IMAGE_MODEL") || "bytedance/seedream-5.0-flash";
   },
+  /**
+   * Guardian reply budget. Reasoning models spend part of it thinking before they answer, and a
+   * reply cut off mid-thought has no tool call, so keep headroom (0gm-1.0 failed at 400).
+   */
+  get maxTokens() {
+    const n = Number(env("ZG_MAX_TOKENS"));
+    return Number.isInteger(n) && n > 0 ? n : 1500;
+  },
   /** "verified" | "private" | "" (standard). Sent as X-0G-Provider-Trust-Mode. verified/private 503 today. */
   get trustMode() {
     return env("ZG_TRUST_MODE");
