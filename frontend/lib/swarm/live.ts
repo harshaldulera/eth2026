@@ -84,10 +84,11 @@ export function createLiveSwarm(config: SwarmConfig, deps: LiveDeps = {}): LiveS
     return ref;
   }
 
-  function open(row: { body: Uint8Array } | null): Transcript | null {
+  // An arrow, not a hoisted declaration, so the `secret` guard above narrows it to a string here.
+  const open = (row: { body: Uint8Array } | null): Transcript | null => {
     const env = row && parseEnvelope(row.body);
     return env ? openTranscript(env, secret) : null;
-  }
+  };
 
   return {
     async put(transcript) {
