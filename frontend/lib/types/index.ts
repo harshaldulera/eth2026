@@ -538,3 +538,39 @@ export interface SwarmPort {
   put(transcript: Transcript): Promise<{ ref: string }>;
   get(ref: string): Promise<Transcript | null>;
 }
+
+// ─── Program brief (Lane B): what an operator may know before running an op ────────────────
+
+/** One tool the agent can call, as published to operators (schema only, never orders). */
+export type ProgramTool = {
+  name: string;
+  description: string;
+  params: { name: string; type: string; required: boolean }[];
+  /** A call to this tool is a breach. */
+  protected: boolean;
+  /** Returns (mock) data the agent reads — part of the attack surface. */
+  returnsData: boolean;
+};
+
+/**
+ * ADDITIVE (Lane B): the public "program page" for a vault, like a bug-bounty program brief.
+ * Built from the agent's real tool definitions; never contains the system prompt or orders.
+ */
+export type ProgramBrief = {
+  kind: "game" | "business" | "sdk";
+  /** What the agent does, in one or two sentences. */
+  brief: string;
+  /** The (fictional) organisation that deployed it, for business agents. */
+  org?: string;
+  model: string;
+  memory: string;
+  messagesPerOp: number;
+  /** What counts as a breach. */
+  breach: string;
+  tools: ProgramTool[];
+  inScope: string[];
+  outOfScope: string[];
+  /** Material the organisation publishes for its users: the operator's recon. */
+  docs: { title: string; body: string }[];
+};
+

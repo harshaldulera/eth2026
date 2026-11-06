@@ -1,5 +1,6 @@
 import { and, eq, isNotNull } from "drizzle-orm";
-import { getCastle } from "@/lib/castles";
+import { castleRow, getCastle } from "@/lib/castles";
+import { publicProgram } from "@/lib/transport";
 import { auditTrail } from "@/lib/chain";
 import { env } from "@/lib/config/env";
 import { db, schema } from "@/lib/db";
@@ -25,7 +26,7 @@ function earningsOf(castle: Castle): NonNullable<Castle["earnings"]> {
 }
 
 /**
- * GET /api/castles/[id] — castle, its 20 most recent sieges and its HCS audit trail.
+ * GET /api/castles/[id] — castle, its 20 most recent sieges, its HCS audit trail and its public program brief.
  * The castle carries `earnings { heldOps, ownerCut, potNow }` and, for a guard with a 0G key,
  * `zg { connected, kind, calls, costUsdMicro }` (the balance is at GET /api/zg/usage). Never orders,
  * tool results or keys.
@@ -40,5 +41,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     const u = zgUsage(`castle:${id}`);
     castle.zg = { ...castle.zg, calls: u.calls, costUsdMicro: u.costUsdMicro };
   }
-  return json({ castle, sieges: listSieges({ castleId: id, limit: 20 }), audit: auditTrail(id) });
+  const row = castleRow(id);
+  return json({ castle, sieges: listSieges({ castleId: id, limit: 20 }), audit: auditTrail(id), ...(row ? { program: publicProgram(row) } : {}) });
 }

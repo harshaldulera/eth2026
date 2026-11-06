@@ -34,6 +34,7 @@ import { EmptyState, ErrorState, Loading } from "@/components/ui/state";
 import { TIER_DEFENSES, TierPips } from "@/components/arena/tier";
 import { ProtectedTool, TransportBadge, VaultSetupSteps, setupProgress, vaultStateLed } from "@/components/arena/vault-state";
 import { ArkivCard } from "@/components/arena/arkiv-card";
+import { ProgramBriefPanel } from "@/components/arena/program-brief";
 import { RankChevrons } from "@/components/grid/guard-post";
 import { MonitorPortrait } from "@/components/grid/monitor";
 import { PotDigits } from "@/components/grid/vault-card";
@@ -230,7 +231,7 @@ const opLabel = (s: Siege) => (s.status === "in_progress" && s.settlement?.state
 // ─── the page ─────────────────────────────────────────────────────────────────────────────
 
 function Briefing({ detail, refresh }: { detail: CastleDetail; refresh: () => void }) {
-  const { castle: c, sieges, audit } = detail;
+  const { castle: c, sieges, audit, program } = detail;
   const op = useOpStart(c, refresh);
   const now = useNow(15_000);
   const liveOp = sieges.find(isLiveOp);
@@ -250,7 +251,9 @@ function Briefing({ detail, refresh }: { detail: CastleDetail; refresh: () => vo
       {/* phone: one column in reading order (display:contents + order); desktop: two columns */}
       <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-start lg:gap-7">
         <div className="contents lg:flex lg:flex-col lg:gap-5">
-          <Identity castle={c} live={Boolean(liveOp)} now={now} className="order-1" />
+          <Identity castle={c} live={Boolean(liveOp)} now={now} brief={program?.brief} className="order-1" />
+          {/* phone: right after the dossier, before RUN OP — recon comes before the op */}
+          {program ? <ProgramBriefPanel program={program} className="order-3" /> : null}
           <div className="order-6">
             <ArkivCard castleId={c.id} />
           </div>
@@ -312,7 +315,7 @@ function ForkNote({ castleId }: { castleId: string }) {
 
 // ─── identity: portrait, name, rank, tier, voice, protects, defenses ─────────────────────
 
-function Identity({ castle: c, live, now, className }: { castle: Castle; live: boolean; now: number; className?: string }) {
+function Identity({ castle: c, live, now, brief, className }: { castle: Castle; live: boolean; now: number; brief?: string; className?: string }) {
   const state = vaultStateOf(c);
   const transport = c.transport ?? "hosted";
   const rank = guardRank(c.title || c.streak);
@@ -365,7 +368,7 @@ function Identity({ castle: c, live, now, className }: { castle: Castle; live: b
             ))}
           </ul>
         ) : null}
-        <p className="max-w-md text-sm leading-relaxed text-ink-dim max-sm:hidden">{TIER_DEFENSES[c.tier]}</p>
+        <p className="max-w-md text-sm leading-relaxed text-ink-dim max-sm:hidden">{brief ?? TIER_DEFENSES[c.tier]}</p>
         <StateLine castle={c} now={now} />
       </div>
     </section>

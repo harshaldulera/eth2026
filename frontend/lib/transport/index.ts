@@ -30,3 +30,5 @@ export { lastRaiderTurn, TransportUnavailableError, type RespondContext, type Si
 
 /** What the verifier needs from the hosted runtime, without lib/siege importing lib/guardian. */
 export { guardianMode, PROTECTED_TOOL, systemPrompt } from "@/lib/guardian";
+/** The public program brief for a vault (tools, scope, docs — never orders), for the castle API. */
+export { publicProgram } from "@/lib/guardian/program";
