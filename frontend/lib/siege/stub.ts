@@ -1,9 +1,9 @@
-// STUB — Lane B replaces with the 0G-backed siege engine; keep the signature (SiegePort).
+// Siege engine (Lane B): turns, transcript, status and events. Guardians are reached only through lib/transport.
 import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { emit } from "@/lib/events/bus";
 import { castleClosedReason, castleRow } from "@/lib/castles";
-import { guardian } from "@/lib/guardian";
+import { transportFor } from "@/lib/transport";
 import { arkiv } from "@/lib/arkiv";
 import { swarm } from "@/lib/swarm";
 import { newId, nowIso } from "@/lib/util/ids";
@@ -174,7 +174,7 @@ async function message(siegeId: string, text: string): Promise<MessageResult> {
 
   let decision: GuardianDecision;
   try {
-    decision = await guardian.respond(row.castleId, messageRows(siegeId).map(toSiegeMessage));
+    decision = await transportFor(row.castleId).respond(row.castleId, messageRows(siegeId).map(toSiegeMessage), { siegeId, turn });
   } catch (err) {
     // Guardian unavailable: give the raider their turn back rather than burning a paid turn.
     db().transaction((tx) => {

@@ -317,6 +317,15 @@ export type FeeSplit = { castellan: Amount; pot: Amount; arena: Amount };
  */
 export type GuardianContext = { siegeId?: string; turn?: number };
 
+/** ADDITIVE (Lane B): where a guardian runs — our hosted runtime, or an external harness (B9). */
+export type TransportKind = "hosted" | "sdk";
+
+/** ADDITIVE (Lane B): the only thing lib/siege calls for guardian replies (lib/transport). */
+export interface GuardianTransport {
+  kind: TransportKind;
+  respond(castleId: string, siegeMessages: SiegeMessage[], ctx?: GuardianContext): Promise<GuardianDecision>;
+}
+
 /** Lane B — lib/guardian */
 export interface GuardianPort {
   respond(castleId: string, siegeMessages: SiegeMessage[], ctx?: GuardianContext): Promise<GuardianDecision>;

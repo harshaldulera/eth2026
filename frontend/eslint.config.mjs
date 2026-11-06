@@ -34,6 +34,32 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  // Lane B boundaries (tech plan): lib/siege reaches guardians only through lib/transport, and only
+  // lib/proxy may call the raw 0G client (every guardian request goes through the vault-scoped key).
+  {
+    files: ["lib/siege/**/*.ts"],
+    ignores: ["**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            { group: ["@/lib/guardian", "@/lib/guardian/*", "**/guardian", "**/guardian/*"], message: "lib/siege must call guardians through lib/transport (GuardianTransport)." },
+            { group: ["@/lib/proxy/zg", "@/lib/proxy/mock", "**/proxy/zg", "**/proxy/mock"], message: "Only lib/proxy may call the 0G client." },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["lib/guardian/**/*.ts", "lib/transport/**/*.ts", "worker/**/*.ts", "scripts/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { patterns: [{ group: ["@/lib/proxy/zg", "@/lib/proxy/mock", "**/proxy/zg", "**/proxy/mock"], message: "Go through lib/proxy (vault-scoped key), never the raw 0G client." }] },
+      ],
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
