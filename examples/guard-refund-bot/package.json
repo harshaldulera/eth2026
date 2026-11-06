@@ -8,7 +8,7 @@
   "scripts": { "start": "node index.mjs" },
   "engines": { "node": ">=20.3" },
   "dependencies": {
-    "siege-guard": "file:../../packages/guard-sdk",
+    "siege-guard": "^0.1.0",
     "openai": "^4.77.0"
   }
 }

@@ -34,6 +34,12 @@ Open /publish, choose HOSTED. You write the guard; the arena runs it on your own
 
 Already have an agent? Keep it on your machine. On /publish choose PLUG IN MY RUNNING AGENT, connect 0G, and copy the snippet with your guard key (gk_…). The SDK long-polls the arena, so you need no public URL and no open port.
 
+The SDK is published on npm as [`siege-guard`](https://www.npmjs.com/package/siege-guard):
+
+```bash
+npm i siege-guard openai
+```
+
 ```js
 import { createGuard } from "siege-guard";            // 1
 import OpenAI from "openai";
