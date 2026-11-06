@@ -37,6 +37,25 @@ const base = z.object({
 
   RAIDER_OPERATOR_ID: z.string().optional(),
   RAIDER_OPERATOR_KEY: z.string().optional(),
+  /**
+   * STUB ONLY. "1": POST /api/play/start may still pay a browser op from the arena's stub demo raider
+   * (no unit given), for npm run demo / qa:op / record-demo. "0": every paid op must be paid from the
+   * caller's own account (a unit or operator account + its rk_ key, or BYO x402). Unset: on in stub, off
+   * on testnet. CHAIN_MODE=testnet refuses "1" at boot (superRefine below): on real money every op is
+   * paid from the operator's own wallet, with no override. true/false, yes/no, on/off are read too.
+   */
+  DEMO_WALLET_OPS: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined || v === "") return undefined;
+      if (["1", "true", "yes", "on"].includes(v)) return true;
+      if (["0", "false", "no", "off"].includes(v)) return false;
+      ctx.addIssue({ code: "custom", message: `DEMO_WALLET_OPS must be 0 or 1 (got "${v.slice(0, 16)}").` });
+      return z.NEVER;
+    }),
   FREE_SIEGES_PER_DAY: z.coerce.number().int().default(1),
 
   FEE_SPLIT_CASTELLAN_BPS: z.coerce.number().int().default(8000),
@@ -90,6 +109,14 @@ const schema = base.superRefine((e, ctx) => {
       message: `CHAIN_MODE=testnet needs OWNER_SECRET set to a private value of at least ${MIN_TESTNET_OWNER_SECRET} characters (not the dev default).`,
     });
   }
+  // Real money: every op is paid from the operator's own wallet. The demo-wallet hatch is stub-only.
+  if (e.CHAIN_MODE === "testnet" && e.DEMO_WALLET_OPS === true) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["DEMO_WALLET_OPS"],
+      message: "DEMO_WALLET_OPS=1 is stub-only: on CHAIN_MODE=testnet every op is paid from the operator's own account. Remove it.",
+    });
+  }
 }).transform((e) => ({ ...e, ZG_ROUTER_URL: (e.ZG_ROUTER_URL ?? e.ZG_BASE_URL ?? DEFAULT_ZG_ROUTER_URL).replace(/\/+$/, "") }));
 
 export type Env = z.infer<typeof schema>;
@@ -125,3 +152,13 @@ export function required<K extends keyof Env>(key: K): NonNullable<Env[K]> {
 }
 
 export const isStub = () => env().CHAIN_MODE === "stub";
+
+/**
+ * May a paid browser op still be paid from the arena's stub demo raider? Stub only: DEMO_WALLET_OPS wins
+ * when set, unset = on. Testnet: always false (DEMO_WALLET_OPS=1 is refused at boot there), so every
+ * paid op pays from the operator's own account.
+ */
+export const demoWalletOps = (): boolean => {
+  if (!isStub()) return false;
+  return env().DEMO_WALLET_OPS ?? true;
+};

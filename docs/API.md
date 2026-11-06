@@ -11,8 +11,10 @@ A vault holds a pot of test HBAR behind an AI guard. An operator pays a small fe
 | J1 Publish a guard | owner, no code | /publish |
 | J2 Plug in your agent | owner, you run the agent | /publish, then the SDK |
 | J3 Run a unit | operator, hosted agent | /raider |
-| J4 Type ops yourself | operator, in the browser | an Op room |
+| J4 Type ops yourself | operator, in the browser | any vault page, FUND YOUR OPERATOR ACCOUNT |
 | J5 Attack from your agent | developer, any language | this page, section J5 |
+
+> Every paid op is paid from your own account: a unit (J3), an operator account you fund to type ops by hand (J4), or your own x402 client (J5). The arena's wallet pays for nobody's op, and a breach pays out to the account that paid. Recon is free, once a day, and never pays out.
 
 > Note: This is not trustless. The arena fronts and custodies every pot, and the verifier and the inference proxy are ours. The honest claims list is at the end of this page.
 
@@ -58,7 +60,7 @@ guard.serve(async ({ messages }) => runMyAgent(openai, messages));  // 3
 - Dormant rule: no poll for 30 seconds turns a guarding vault DORMANT. Live ops are voided and refunded. Restart the process and it returns to GUARDING (the smoke op re-runs if the lease changed).
 - One lease: the newest process wins; an older one gets 409 lease_lost and should stop. Rotate the key with POST /api/castles/<id>/guard-key (owner only).
 
-## J3 · J4: Units, operator keys and 0G credits
+## J3 · J4: Units, operator accounts, keys and 0G credits
 
 A unit is a hosted attacking agent with its own Hedera account. You fund it from your wallet, it pays every op fee from its own balance, and its attack messages are written by a model on your own 0G credits. Nothing is funded by the arena.
 
@@ -68,7 +70,10 @@ A unit is a hosted attacking agent with its own Hedera account. You fund it from
 4. DEPLOY on a vault. A cap hit radios the pager. A policy cap APPROVE raises the cap and moves no HBAR; a budget ask shows another deposit.
 5. WITHDRAW sends the unit's balance, minus a fee reserve, back to the wallet that funded it and revokes the unit's 0G key. Payouts from breaches land in the unit.
 
-- J4: with a unit in your browser, RUN OP on any vault is paid from that unit, so a hand-typed op's payout is yours.
+- J4, type ops yourself: every paid op is paid from your own account. With a unit or an operator account in your browser, RUN OP on any vault reads PAY FROM <CALLSIGN> and is paid from it, so a hand-typed op's payout is yours. Without one, RUN OP reads FUND YOUR OPERATOR ACCOUNT: an amount (default 5 ℏ) and an optional callsign, the same memo deposit, the rk_ key shown once, then the op runs from it and its BALANCE shows next to the button.
+- Operator account by API: POST /api/agents {"kind":"manual","budget":"500000000","name":"Glass Fox"} needs no 0G key and no strategy. It returns {draft, deposit, operatorKey} like a unit. Pay from it with POST /api/play/start {"castleId","agentId"} and the header x-siege-operator-key. It cannot DEPLOY (409 needs_0g: connect 0G to let it run on its own); WITHDRAW works like a unit's.
+- An operator account has no per-vault or daily cap and no stop rule: it spends what it holds (its deposit plus every breach payout released into it), so winnings are spendable. Short of the fee, POST /api/play/start answers 409 cap_reached {reason: "budget", manual: true, balance, fee}; fund another account (or WITHDRAW) to go on.
+- POST /api/play/start without an agentId (a paid op with no account of your own) answers 403 own_account_required. Free recon (free: true) is unchanged.
 - Credits: the unit card and the vault header show 0G CREDITS dropping per call. Compute is billed to your own key and recorded per unit (billed_to agent:<id>); no HBAR is charged for it.
 - Handles: POST /api/operators {"handle":"night-owl"} with an operator key claims a public handle (3 to 20 of a-z, 0-9, _ or -) for the account behind your units. The Hall shows it instead of the account id. 409 handle_taken if it is in use; GET /api/operators/<account> is public.
 
@@ -112,6 +117,7 @@ curl -s -X POST $SIEGE_URL/api/siege/$SIEGE_ID/message \
 | 402 | payment required | start without a valid payment: sign and retry |
 | 401 | turn_token_required | message without the siege's turn token (or a wrong one). The token is shown once; a lost token cannot be recovered |
 | 403 | recon_requires_visitor | free recon is for browser visitors on the Grid, not for API clients |
+| 403 | own_account_required | POST /api/play/start: a paid op needs your own account (agentId + x-siege-operator-key). Fund an operator account first, or pay /api/siege/start with your own x402 client |
 | 409 | not_guarding | the vault is not taking ops (checked before any payment is asked for) |
 | 409 | castle_not_open | the vault already fell or closed; if you paid, the fee is refunded (receiptId in the body) |
 | 409 | payment_already_used | one settled transaction buys exactly one op |

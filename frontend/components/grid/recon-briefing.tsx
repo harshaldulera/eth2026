@@ -9,7 +9,8 @@ import type { Castle } from "@/lib/types";
 import { ApiError, api, describeError, isNotGuarding } from "@/lib/api/client";
 import { formatAmount } from "@/lib/money/format";
 import { vaultStateOf } from "@/lib/money/vault";
-import { BUTTONS, EMPTY, TOASTS, tierLevel } from "@/lib/vocab";
+import { BUTTONS, EMPTY, TOASTS, UNITS, tierLevel } from "@/lib/vocab";
+import { useHasOperatorKeys } from "@/lib/agents/use-operator-keys";
 import { Dialog } from "@/components/pixel/dialog";
 import { PixelButton, pixelButtonVariants } from "@/components/pixel/button";
 import { Sprite } from "@/components/pixel/sprite";
@@ -37,7 +38,8 @@ export function isReconUsed(e: unknown): boolean {
 /**
  * The QR landing (`/?recon=1`): YOU ARE AN OPERATOR, one sentence, one button. Tap → free recon on
  * the lowest-tier guarding vault → the Op room. A spent recon flips the card to RECON USED TODAY
- * with the paid op one tap away. Bottom sheet on phones, centred card on desktop.
+ * with the paid op one tap away: the vault page's FUND YOUR OPERATOR ACCOUNT flow (`?fund=1`), since
+ * every paid op is paid from the visitor's own account. Bottom sheet on phones, centred card on desktop.
  *
  * @example <ReconBriefing open={params.get("recon") === "1"} castles={guarding} onClose={dropParam} />
  */
@@ -60,6 +62,8 @@ export function ReconBriefing({
   const target = reconTarget(castles);
   const [busy, setBusy] = useState(false);
   const [used, setUsed] = useState(false);
+  // An operator key in this browser = an account of their own to pay from (no fund step needed).
+  const hasAccount = useHasOperatorKeys();
 
   const primary = useRef<HTMLButtonElement>(null);
 
@@ -114,8 +118,8 @@ export function ReconBriefing({
         <div className="min-w-0 flex-1 space-y-4">
           {used ? (
             <p className="text-[15px] leading-relaxed text-ink">
-              Today&apos;s free recon is spent. Pick a vault and pay {target ? <span className="text-money">{fee}</span> : "the fee"} to run a real op: if you
-              talk the guard into it, the vault pays you.
+              Today&apos;s free recon is spent. Fund your own account and pay {target ? <span className="text-money">{fee}</span> : "the fee"} from it to run a
+              real op: if you talk the guard into it, the vault pays you.
             </p>
           ) : (
             <p className="text-[15px] leading-relaxed text-ink">
@@ -141,11 +145,13 @@ export function ReconBriefing({
 
           {used && target ? (
             <Link
-              href={`/castle/${target.id}`}
+              // Every paid op is paid from your own account: with one in this browser the vault page's RUN OP
+              // pays from it; without one, the vault page opens FUND YOUR OPERATOR ACCOUNT (`?fund=1`).
+              href={hasAccount ? `/castle/${target.id}` : `/castle/${target.id}?fund=1`}
               onClick={() => playCue("ui_blip")}
               className={cn(pixelButtonVariants({ variant: "money", size: "xl" }), "w-full")}
             >
-              {`PAY ${fee} ON ${target.name.toUpperCase()} ▶`}
+              {hasAccount ? UNITS.reconUsedPay(fee, target.name) : UNITS.reconUsedFund(target.name)}
             </Link>
           ) : (
             <PixelButton

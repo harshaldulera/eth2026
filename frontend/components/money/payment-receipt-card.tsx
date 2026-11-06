@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Asset, FreeReceipt, PaidReceipt, PaymentReceipt } from "@/lib/types";
 import { HBAR } from "@/lib/money/format";
 import { cn } from "@/lib/utils";
+import { UNITS } from "@/lib/vocab";
 import { Amount } from "./amount";
 import { HashscanLink } from "./hashscan-link";
 
@@ -23,6 +24,8 @@ export type PaymentReceiptCardProps = {
   asset?: Asset;
   /** Render as a one-line chip that expands on click (op room header). */
   compact?: boolean;
+  /** The payer is this browser's own account (a unit or operator account): `Paid 0.5 ℏ from GLASS FOX via x402`. */
+  payerName?: string;
   className?: string;
 };
 
@@ -42,7 +45,7 @@ function StubTag() {
  * @example <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} />
  * @example <PaymentReceiptCard receipt={siege.receipt} compact />
  */
-export function PaymentReceiptCard({ receipt, castleName, asset, compact, className }: PaymentReceiptCardProps) {
+export function PaymentReceiptCard({ receipt, castleName, asset, compact, payerName, className }: PaymentReceiptCardProps) {
   const [open, setOpen] = useState(false);
 
   if (receipt.free) {
@@ -73,7 +76,8 @@ export function PaymentReceiptCard({ receipt, castleName, asset, compact, classN
       >
         <span className="font-ui text-[10px] tracking-[0.12em] text-money uppercase">receipt</span>
         <span>
-          Paid <Amount amount={receipt.amount} asset={a} size="xs" animate={false} /> via x402
+          Paid <Amount amount={receipt.amount} asset={a} size="xs" animate={false} />
+          {payerName ? <> from {payerName.toUpperCase()}</> : null} via x402
         </span>
         {receipt.stub ? <StubTag /> : null}
         <span aria-hidden className="font-ui text-[10px] text-ink-dim">▾</span>
@@ -89,7 +93,7 @@ export function PaymentReceiptCard({ receipt, castleName, asset, compact, classN
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="flex items-center gap-2 font-ui text-[11px] tracking-[0.14em] text-money uppercase">
-              Paid via x402 {receipt.stub ? <StubTag /> : null}
+              {payerName ? <>Paid from {payerName} via x402</> : "Paid via x402"} {receipt.stub ? <StubTag /> : null}
             </p>
             {castleName ? <p className="mt-1 truncate text-xs text-ink-dim">op fee · {castleName}</p> : null}
           </div>
@@ -111,6 +115,7 @@ export function PaymentReceiptCard({ receipt, castleName, asset, compact, classN
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 border-t-2 border-dashed border-line pt-2.5 text-xs">
           <dt className="font-ui text-[10px] tracking-[0.12em] text-ink-dim uppercase">Payer</dt>
           <dd className="min-w-0 justify-self-end">
+            {payerName ? <span className="mr-2 font-ui text-[10px] tracking-[0.1em] text-money uppercase">{UNITS.payoutToYou(payerName)}</span> : null}
             <HashscanLink accountId={receipt.payer} />
           </dd>
           <dt className="font-ui text-[10px] tracking-[0.12em] text-ink-dim uppercase">Network</dt>

@@ -7,7 +7,8 @@
  *
  *   (a) GET /api/config (must say chain.mode "testnet"), the SiegeVault address and its Sourcify status,
  *       and the unpaid POST /api/siege/start 402 challenge
- *   (b) a paid HOLD: POST /api/play/start on a stone castle + the five MUST_NOT_BREAK messages,
+ *   (b) a paid HOLD: POST /api/siege/start on a stone castle, paid over x402 from the script's own
+ *       operator account (the demo raider, RAIDER_OPERATOR_ID/KEY), + the five MUST_NOT_BREAK messages,
  *       then poll GET /api/siege/[id] until the worker's recordAttempt lands
  *   (c) a paid BREAK: the same on the wooden castle with WOODEN_BREAK, poll until release lands
  *   (d) --agent: owner cookie, run Night Sapper on a stone castle, approve its first cap request
@@ -24,6 +25,10 @@
  *   --require-0g          refuse unless GET /api/config says the guardian is 0G (not the stub)
  *   --out <path>          report path (default ../docs/golden-run.md)
  *
+ * Every paid op is paid from the operator's own account: this script's account is the demo raider
+ * (RAIDER_OPERATOR_ID/KEY, read from its own env), and it pays exactly like an outside agent (J5) does,
+ * with its own x402 client against /api/siege/start. POST /api/play/start no longer pays for an op
+ * with no unit on testnet (DEMO_WALLET_OPS off).
  * Spends REAL testnet HBAR: the demo raider pays the two siege fees, the agent pays from its own
  * account, the treasury sends the top-up. Every step aborts the run cleanly on failure; nothing is
  * written then (the partial log with the links so far is printed), so a good docs/golden-run.md is
@@ -37,6 +42,7 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { formatHbar } from "@/lib/chain/units";
+import { createPayerFetch } from "@/lib/pay/client";
 import { accountUrl, contractUrl, isStubRef, topicUrl, txUrl } from "@/lib/chain/hashscan";
 import type { AgentDetail, ArkivReadMeta, CastleDetail, ConfigResponse, SiegeDetail } from "@/lib/api/client";
 import type { ApprovalRequest, Castle, RaiderAgent, Siege } from "@/lib/types";
@@ -169,12 +175,39 @@ function waitSettled(siegeId: string, what: string): Promise<Siege> {
   });
 }
 
-async function playSiege(castle: Castle, msgs: readonly string[]): Promise<{ siegeId: string; receiptTx?: string; siege: Siege }> {
-  const r = await call<{ siegeId?: string; receipt?: { txId?: string; payer?: string; amount?: string }; error?: string; message?: string }>(
-    "POST", "/api/play/start", { castleId: castle.id }, { timeoutMs: 180_000 });
-  if (r.status !== 200 || !r.data?.siegeId) {
-    throw new Abort(`POST /api/play/start on ${castle.name} -> ${r.status} ${JSON.stringify(r.data).slice(0, 400)}`);
+/**
+ * One paid op, paid from the script's OWN operator account (the demo raider) with its own x402 client:
+ * POST /api/siege/start -> 402 -> sign -> retry, spend-capped at the castle's fee. Stub (--allow-stub):
+ * the stub payer header, as "0.0.stub-raider" unless RAIDER_OPERATOR_ID is set.
+ */
+async function startPaid(castle: Castle): Promise<{ siegeId: string; turnToken?: string; receipt?: { txId?: string; payer?: string; amount?: string } }> {
+  const accountId = process.env.RAIDER_OPERATOR_ID || (ALLOW_STUB ? "0.0.stub-raider" : "");
+  const privateKey = process.env.RAIDER_OPERATOR_KEY || undefined;
+  if (!accountId || (!ALLOW_STUB && !privateKey)) {
+    throw new Abort("Set RAIDER_OPERATOR_ID / RAIDER_OPERATOR_KEY: the golden run pays its ops from that account over x402.");
   }
+  const payer = createPayerFetch({ accountId, privateKey, perPaymentCap: castle.fee });
+  let res: Response;
+  try {
+    res = await payer(`${APP}/api/siege/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ castleId: castle.id }),
+      signal: AbortSignal.timeout(180_000),
+    });
+  } catch (e) {
+    throw new Abort(`x402 payment for ${castle.name} failed: ${e instanceof Error ? e.message : e}`);
+  }
+  const data = (await res.json().catch(() => null)) as { siegeId?: string; turnToken?: string; receipt?: { txId?: string; payer?: string; amount?: string } } | null;
+  if (res.status !== 200 || !data?.siegeId) {
+    throw new Abort(`POST /api/siege/start on ${castle.name} -> ${res.status} ${JSON.stringify(data).slice(0, 400)}`);
+  }
+  if (data.turnToken) turnTokens.set(data.siegeId, data.turnToken);
+  return { siegeId: data.siegeId, turnToken: data.turnToken, receipt: data.receipt };
+}
+
+async function playSiege(castle: Castle, msgs: readonly string[]): Promise<{ siegeId: string; receiptTx?: string; siege: Siege }> {
+  const r = { data: await startPaid(castle) };
   const siegeId = r.data.siegeId;
   let last: Siege | undefined;
   for (const text of msgs) {

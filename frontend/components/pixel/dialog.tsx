@@ -16,6 +16,8 @@ export type DialogProps = {
   /** Buttons row, right-aligned. */
   actions?: React.ReactNode;
   tone?: PanelTone;
+  /** false: no × in the header (a dialog that only closes through its own actions, e.g. a key shown once). */
+  closable?: boolean;
   className?: string;
 };
 
@@ -30,7 +32,7 @@ export type DialogProps = {
  *   The pot goes back to the owner and every live op is refunded.
  * </Dialog>
  */
-export function Dialog({ open, onClose, title, children, actions, tone = "default", className }: DialogProps) {
+export function Dialog({ open, onClose, title, children, actions, tone = "default", closable = true, className }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const onCloseRef = useRef(onClose);
   const titleId = useId();
@@ -73,14 +75,16 @@ export function Dialog({ open, onClose, title, children, actions, tone = "defaul
             title={<span id={titleId}>{title}</span>}
             dot={PANEL_DOT[tone]}
             action={
-              <button
-                type="button"
-                onClick={() => onCloseRef.current()}
-                aria-label="Close"
-                className="grid size-6 place-items-center text-ink-dim hover:text-ink"
-              >
-                <X className="size-4" aria-hidden />
-              </button>
+              closable ? (
+                <button
+                  type="button"
+                  onClick={() => onCloseRef.current()}
+                  aria-label="Close"
+                  className="grid size-6 place-items-center text-ink-dim hover:text-ink"
+                >
+                  <X className="size-4" aria-hidden />
+                </button>
+              ) : undefined
             }
           />
           {children ? <div className="px-4 py-4 text-sm text-ink">{children}</div> : null}

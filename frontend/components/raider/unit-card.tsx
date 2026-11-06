@@ -10,6 +10,7 @@ import { AgentStatusPill, Gauge, LossLeds, liveStatus, unitGauges } from "./agen
 import { FundedTag, hbarShort, zgKeyRejected } from "./unit-funds";
 import { ZgCredits } from "@/components/money/zg-credits";
 import { UNITS } from "@/lib/vocab";
+import { isManualUnit } from "@/lib/agents/manual";
 
 export type UnitCardProps = {
   agent: RaiderAgent;
@@ -38,6 +39,8 @@ export function UnitCard({ agent, detail: given, pending, selected, onSelect, cl
   const now = useNow(1000, status === "waiting");
   const wait = status === "waiting" && waitingSince && now > 0 ? mmss((now - Date.parse(waitingSince)) / 1000) : undefined;
   const g = unitGauges(a, detail?.sieges, approvals);
+  // An operator account has no caps or stop rule (it spends what it holds): no gauges, no LOSSES row.
+  const manual = isManualUnit(a);
 
   return (
     <div
@@ -64,8 +67,8 @@ export function UnitCard({ agent, detail: given, pending, selected, onSelect, cl
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate font-ui text-sm tracking-[0.04em] text-ink uppercase">{a.name}</span>
-          <span className="mt-0.5 block truncate text-[11px] text-ink-dim">strategy {a.strategy}</span>
-          <AgentStatusPill status={status} waitingFor={wait} className="mt-1.5 whitespace-normal [&>span:last-child]:leading-tight" />
+          <span className="mt-0.5 block truncate text-[11px] text-ink-dim">{manual ? UNITS.accountTag.toLowerCase() : `strategy ${a.strategy}`}</span>
+          <AgentStatusPill status={status} waitingFor={wait} stoppedLabel={manual ? UNITS.withdrawn : undefined} className="mt-1.5 whitespace-normal [&>span:last-child]:leading-tight" />
         </span>
       </span>
       <span className="pointer-events-none relative flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -78,12 +81,14 @@ export function UnitCard({ agent, detail: given, pending, selected, onSelect, cl
         {zgKeyRejected(approvals, a.id) ? <span className="font-ui text-[10px] tracking-[0.08em] text-threat uppercase">{UNITS.keyRejected}</span> : null}
       </span>
       {a.zg?.connected ? <ZgCredits agentId={a.id} className="pointer-events-none relative text-[10px]" /> : null}
-      <div className="pointer-events-none relative flex flex-col gap-1.5">
-        <Gauge label="Per-vault" spent={g.perVault.spent} cap={g.perVault.cap} />
-        <Gauge label="Daily" spent={g.daily.spent} cap={g.daily.cap} />
-        <Gauge label="Total" spent={g.total.spent} cap={g.total.cap} />
-        <LossLeds losses={a.consecutiveLosses} stopAfter={a.stopAfterLosses} />
-      </div>
+      {manual ? null : (
+        <div className="pointer-events-none relative flex flex-col gap-1.5">
+          <Gauge label="Per-vault" spent={g.perVault.spent} cap={g.perVault.cap} />
+          <Gauge label="Daily" spent={g.daily.spent} cap={g.daily.cap} />
+          <Gauge label="Total" spent={g.total.spent} cap={g.total.cap} />
+          <LossLeds losses={a.consecutiveLosses} stopAfter={a.stopAfterLosses} />
+        </div>
+      )}
     </div>
   );
 }

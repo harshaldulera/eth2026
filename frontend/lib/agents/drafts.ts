@@ -10,6 +10,7 @@ import { createIntent, LATE_GRACE_MS, noteIntent, onDepositConfirmed, type Depos
 import { connectZg, revokeZg } from "@/lib/zg/connect";
 import { newId, nowIso } from "@/lib/util/ids";
 import { activeAgentCount, AGENT_DEFAULTS, createAgent, getAgent } from "./accounts";
+import { isManualUnit, MANUAL_STRATEGY, randomCallsign } from "./manual";
 
 /**
  * Units funded by the red teamer (onboarding 2b, J3).
@@ -20,12 +21,20 @@ import { activeAgentCount, AGENT_DEFAULTS, createAgent, getAgent } from "./accou
  *
  * No secrets leave here except the operator key, once, in createUnitDraft's result. The draft row
  * holds the 0G keys; `publicDraft` is what routes return.
+ *
+ * `kind: "manual"` = an OPERATOR ACCOUNT: the same draft, deposit, rk_ key and unit row, but only a
+ * budget (+ callsign). No 0G key, no strategy (strategy "manual"), caps = the budget, no stop rule.
+ * It pays the ops its operator types by hand (POST /api/play/start); it never runs on its own
+ * (POST /api/agents/[id]/run answers 409 needs_0g).
  */
 
 export const MAX_OPEN_UNIT_DRAFTS = 20;
+export { MANUAL_STRATEGY, isManualUnit } from "./manual";
 const tinybars = z.string().regex(/^\d+$/, "integer string of tinybars").max(16);
 
 export const UnitDraftInput = z.object({
+  /** "unit" (default): a hosted agent that thinks on your 0G key. "manual": an operator account for typed ops. */
+  kind: z.enum(["unit", "manual"]).optional(),
   name: z.string().trim().min(1).max(40).optional(),
   strategy: z.enum(STRATEGY_KEYS as [string, ...string[]]).or(z.literal("custom")).optional(),
   /** Free-text attack strategy: the system prompt for the unit's brain. Used when strategy is "custom". */
@@ -34,8 +43,8 @@ export const UnitDraftInput = z.object({
   perCastleCap: tinybars.optional(),
   dailyCap: tinybars.optional(),
   stopAfterLosses: z.number().int().min(0).max(1000).optional(),
-  /** The red teamer's pc.0g.ai key (mk- or sk-). Used server-side only; never echoed. */
-  zgKey: z.string().min(1).max(512),
+  /** The red teamer's pc.0g.ai key (mk- or sk-). Required for a unit, ignored for an operator account. Never echoed. */
+  zgKey: z.string().min(1).max(512).optional(),
 });
 export type UnitDraftInput = z.infer<typeof UnitDraftInput>;
 
@@ -43,6 +52,7 @@ export type UnitDraftError =
   | { code: "over_limit"; fields: string[]; max: string }
   | { code: "budget_too_small"; min: string }
   | { code: "strategy_text_required" }
+  | { code: "zg_key_required"; message: string }
   | { code: "too_many_agents"; max: number }
   | { code: "too_many_drafts"; max: number }
   | { code: "units_unavailable" }
@@ -146,23 +156,32 @@ export type CreatedUnitDraft = {
  */
 export async function createUnitDraft(input: UnitDraftInput): Promise<CreatedUnitDraft> {
   const e = env();
+  const manual = input.kind === "manual";
   const budget = BigInt(input.budget ?? AGENT_DEFAULTS.budget);
-  const perCastle = BigInt(input.perCastleCap ?? AGENT_DEFAULTS.perCastleCap);
-  const daily = BigInt(input.dailyCap ?? AGENT_DEFAULTS.dailyCap);
+  // An operator account spends only on ops its operator types: its caps are its budget, no stop rule.
+  const perCastle = manual ? budget : BigInt(input.perCastleCap ?? AGENT_DEFAULTS.perCastleCap);
+  const daily = manual ? budget : BigInt(input.dailyCap ?? AGENT_DEFAULTS.dailyCap);
   const max = BigInt(e.AGENT_MAX_BUDGET);
   const asked = { budget, perCastleCap: perCastle, dailyCap: daily };
   const over = (["budget", "perCastleCap", "dailyCap"] as const).filter((k) => asked[k] > max);
   if (over.length) throw new UnitDraftRejected({ code: "over_limit", fields: [...over], max: String(e.AGENT_MAX_BUDGET) });
   if (budget < BigInt(e.UNIT_MIN_BUDGET)) throw new UnitDraftRejected({ code: "budget_too_small", min: String(e.UNIT_MIN_BUDGET) });
-  const strategy = input.strategy ?? (input.strategyText ? "custom" : AGENT_DEFAULTS.strategy);
+  const strategy = manual ? MANUAL_STRATEGY : (input.strategy ?? (input.strategyText ? "custom" : AGENT_DEFAULTS.strategy));
   if (strategy === "custom" && !input.strategyText) throw new UnitDraftRejected({ code: "strategy_text_required" });
+  if (!manual && !input.zgKey) {
+    throw new UnitDraftRejected({ code: "zg_key_required", message: "A unit thinks on your own 0G credits: connect your 0G key. To type ops by hand, open an operator account (kind \"manual\") instead." });
+  }
   if (!operatorUnitsAvailable()) throw new UnitDraftRejected({ code: "units_unavailable" });
   if (activeAgentCount() >= e.AGENT_MAX_COUNT) throw new UnitDraftRejected({ code: "too_many_agents", max: e.AGENT_MAX_COUNT });
   if (openUnitDraftCount() >= MAX_OPEN_UNIT_DRAFTS) throw new UnitDraftRejected({ code: "too_many_drafts", max: MAX_OPEN_UNIT_DRAFTS });
 
   const id = newId("udraft");
-  const zg = await connectZg({ key: input.zgKey, label: `unit:${id}` });
-  if (!zg.ok) throw new UnitDraftRejected({ code: "zg_failed", reason: zg.reason });
+  // An operator account has no brain, so no 0G key is asked for or stored.
+  const zg = manual ? null : await connectZg({ key: input.zgKey!, label: `unit:${id}` });
+  if (zg && !zg.ok) throw new UnitDraftRejected({ code: "zg_failed", reason: zg.reason });
+  const zgKeys = zg?.ok
+    ? { zgApiKey: zg.inferenceKey, zgMgmtKey: zg.kind === "mk" ? zg.mgmtKey : null, zgKeyId: zg.kind === "mk" ? zg.keyId : null }
+    : { zgApiKey: null, zgMgmtKey: null, zgKeyId: null };
 
   const operatorKey = newKey("rk");
   db()
@@ -170,17 +189,16 @@ export async function createUnitDraft(input: UnitDraftInput): Promise<CreatedUni
     .values({
       id,
       intentId: "pending",
-      name: input.name?.trim() || "Unit",
+      // An operator account opened without a name gets a callsign, never "Unit" (its button reads PAY FROM <NAME>).
+      name: input.name?.trim() || (manual ? randomCallsign() : "Unit"),
       strategy,
       strategyText: strategy === "custom" ? (input.strategyText ?? null) : null,
       budgetTinybar: Number(budget),
       perCastleCapTinybar: Number(perCastle),
       dailyCapTinybar: Number(daily),
-      stopAfterLosses: input.stopAfterLosses ?? AGENT_DEFAULTS.stopAfterLosses,
+      stopAfterLosses: manual ? 0 : (input.stopAfterLosses ?? AGENT_DEFAULTS.stopAfterLosses),
       operatorKeyHash: hashKey(operatorKey),
-      zgApiKey: zg.inferenceKey,
-      zgMgmtKey: zg.kind === "mk" ? zg.mgmtKey : null,
-      zgKeyId: zg.kind === "mk" ? zg.keyId : null,
+      ...zgKeys,
       state: "awaiting",
       createdAt: nowIso(),
     })
@@ -191,7 +209,7 @@ export async function createUnitDraft(input: UnitDraftInput): Promise<CreatedUni
   } catch (x) {
     // No deposit window: drop the draft (it would hold a draft slot forever) and the 0G key minted for it.
     db().delete(schema.unitDrafts).where(eq(schema.unitDrafts.id, id)).run();
-    await revokeZg({ mgmtKey: zg.kind === "mk" ? zg.mgmtKey : null, keyId: zg.kind === "mk" ? zg.keyId : null }).catch(() => false);
+    await revokeZg({ mgmtKey: zgKeys.zgMgmtKey, keyId: zgKeys.zgKeyId }).catch(() => false);
     throw x;
   }
   db().update(schema.unitDrafts).set({ intentId: intent.intentId }).where(eq(schema.unitDrafts.id, id)).run();
@@ -250,8 +268,9 @@ export async function fundUnitFromDeposit(intent: DepositIntent): Promise<void> 
       strategy: draft.strategy,
       strategyText: draft.strategyText,
       budget: String(received),
-      perCastleCap: String(draft.perCastleCapTinybar),
-      dailyCap: String(draft.dailyCapTinybar),
+      // An operator account's caps follow what actually arrived (its caps are its budget).
+      perCastleCap: String(isManualUnit(draft) ? received : draft.perCastleCapTinybar),
+      dailyCap: String(isManualUnit(draft) ? received : draft.dailyCapTinybar),
       stopAfterLosses: draft.stopAfterLosses,
       owner: intent.payer ?? undefined,
       operatorKeyHash: draft.operatorKeyHash,

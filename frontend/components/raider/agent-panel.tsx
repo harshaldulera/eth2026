@@ -26,6 +26,7 @@ import { AgentStatusPill, liveStatus, unitGauges } from "./agent-bits";
 import { MissionLog } from "./mission-log";
 import { UnitFunds } from "./unit-funds";
 import { useOwnerGate } from "./owner-gate";
+import { isManualUnit } from "@/lib/agents/manual";
 
 export type AgentPanelProps = {
   agentId: string;
@@ -161,6 +162,63 @@ function OpRow({ s, vault }: { s: Siege; vault: string }) {
   );
 }
 
+/** `NEW UNIT ▶`: scrolls to the create form on the agents page. */
+function NewUnitLink() {
+  return (
+    <a
+      href="#new-unit"
+      className="font-ui text-xs tracking-[0.1em] text-accent uppercase underline-offset-4 hover:underline"
+      onClick={(e) => {
+        const el = document.getElementById("new-unit");
+        if (!el) return;
+        e.preventDefault();
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }}
+    >
+      {UNITS.newUnitLink}
+    </a>
+  );
+}
+
+/**
+ * An operator account's slim panel (typed ops only, no 0G brain): BALANCE as the hero, WITHDRAW, and
+ * the line that a unit with 0G connected is what runs on its own. No budget, targeting, ops or DEPLOY:
+ * it spends what it holds, on the ops its operator types on a vault page.
+ */
+function ManualAccount({ detail, idle, refresh, canDrive }: { detail: AgentDetail; idle: boolean; refresh: () => void; canDrive: boolean }) {
+  const a = detail.agent;
+  return (
+    <>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0 space-y-1 text-sm text-ink-dim">
+          <p>
+            <span className="font-ui text-xs text-money uppercase">{UNITS.accountTag}</span>
+          </p>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            own account <HashscanLink accountId={a.accountId} />
+          </p>
+        </div>
+        <div className="text-right" data-testid="account-balance-hero">
+          <p className="font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">{UNITS.accountBalanceHero}</p>
+          <Amount amount={detail.balance ?? "0"} size="xl" />
+        </div>
+      </div>
+      <UnitFunds detail={detail} idle={idle} refresh={refresh} hideBalance />
+      <p className="text-sm text-ink-dim">{UNITS.accountPanelHint}</p>
+      {canDrive ? (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-dim" data-testid="needs-0g">
+          <span className="min-w-0 flex-1">
+            <span className="font-ui text-xs text-warn uppercase">{UNITS.needs0g}</span> · {UNITS.needs0gBody}
+          </span>
+          <NewUnitLink />
+        </p>
+      ) : (
+        <p className="text-sm text-ink-dim">{UNITS.notYourUnitBody}</p>
+      )}
+    </>
+  );
+}
+
 const field =
   "min-h-11 w-full border-2 border-line bg-bg px-2.5 font-term text-[20px] leading-none text-ink focus:border-accent focus:outline-none disabled:opacity-60";
 
@@ -184,6 +242,8 @@ export function MissionPanel({
   const { agent: a, approvals, events, sieges } = detail;
   // Only this unit's operator (its rk_ key) or the arena owner may drive it; the server says which.
   const canDrive = Boolean(detail.access);
+  // An operator account (no 0G key) pays the ops its operator types; it never runs on its own.
+  const manual = isManualUnit(a);
   const status = liveStatus(a, approvals);
   const pending = approvals.find((x) => x.status === "pending");
   // Only guarding vaults take ops.
@@ -243,86 +303,81 @@ export function MissionPanel({
       <PixelPanel
         tone={status === "waiting" ? "warn" : status === "running" ? "threat" : "accent"}
         title={`Mission · ${a.name}`}
-        action={<AgentStatusPill status={status} />}
+        action={<AgentStatusPill status={status} stoppedLabel={manual ? UNITS.withdrawn : undefined} />}
         bodyClassName="space-y-4 p-4"
       >
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0 space-y-1 text-sm text-ink-dim">
-            <p>
-              strategy <span className="font-ui text-xs text-ink uppercase">{a.strategy}</span>
-            </p>
-            <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              own account <HashscanLink accountId={a.accountId} />
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Budget left</p>
-            <Amount amount={left.toString()} size="xl" />
-          </div>
-        </div>
-
-        <UnitFunds detail={detail} idle={!active} refresh={refresh} />
-
-        <div className="min-w-0 space-y-2 border-2 border-dashed border-line p-3 [&_[role=group]>div]:flex-wrap">
-          <p className="font-ui text-[11px] tracking-[0.12em] text-ink-dim uppercase">Targeting</p>
-          {targeting}
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <label className="min-w-0 flex-1">
-            <span className="mb-1 block font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Target vault</span>
-            <select value={castleId} onChange={(e) => setTarget(e.target.value)} disabled={openCastles.length === 0 || active} className={field}>
-              {openCastles.length === 0 ? <option value="">{EMPTY.noVaultTaking.title}</option> : null}
-              {openCastles.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name.toUpperCase()} · {tierLabel(c.tier, c.transport)}
-                  {underSiege?.has(c.id) ? " · OP LIVE NOW" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="sm:w-24">
-            <span className="mb-1 block font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Ops</span>
-            <input value={maxSieges} onChange={(e) => setMaxSieges(e.target.value)} inputMode="numeric" disabled={active} className={cn(field, "tabular")} />
-          </label>
-          {!canDrive ? (
-            <PixelButton variant="outline" size="lg" className="sm:min-w-36" disabled data-testid="not-your-unit">
-              {UNITS.notYourUnit}
-            </PixelButton>
-          ) : active ? (
-            <PixelButton variant="threatOutline" size="lg" className="sm:min-w-36" onClick={() => void stop()} disabled={busy !== null}>
-              {busy === "stop" ? <Loader2 className="animate-spin" /> : null}
-              {BUTTONS.stop}
-            </PixelButton>
-          ) : (
-            <PixelButton variant="threat" size="lg" cue="deploy" className="sm:min-w-36" onClick={() => void run()} disabled={busy !== null || !castleId}>
-              {busy === "run" ? <Loader2 className="animate-spin" /> : null}
-              {BUTTONS.deploy}
-            </PixelButton>
-          )}
-        </div>
-        {!canDrive ? (
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-dim">
-            <span className="min-w-0 flex-1">{UNITS.notYourUnitBody}</span>
-            <a
-              href="#new-unit"
-              className="font-ui text-xs tracking-[0.1em] text-accent uppercase underline-offset-4 hover:underline"
-              onClick={(e) => {
-                const el = document.getElementById("new-unit");
-                if (!el) return;
-                e.preventDefault();
-                el.scrollIntoView({ behavior: "smooth", block: "start" });
-              }}
-            >
-              {UNITS.newUnitLink}
-            </a>
-          </p>
-        ) : openCastles.length === 0 ? (
-          <p className="text-sm text-ink-dim">
-            <span className="font-ui text-xs text-warn uppercase">{EMPTY.noVaultTaking.title}</span> · {EMPTY.noVaultTaking.body}
-          </p>
+        {manual ? (
+          <ManualAccount detail={detail} idle={!active} refresh={refresh} canDrive={canDrive} />
         ) : (
-          <p className="text-xs text-ink-dim">Each op pays the vault fee from the unit&apos;s own account. A cap hit pauses the unit and radios the owner.</p>
+          <>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="min-w-0 space-y-1 text-sm text-ink-dim">
+                <p>
+                  strategy <span className="font-ui text-xs text-ink uppercase">{a.strategy}</span>
+                </p>
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  own account <HashscanLink accountId={a.accountId} />
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Budget left</p>
+                <Amount amount={left.toString()} size="xl" />
+              </div>
+            </div>
+
+            <UnitFunds detail={detail} idle={!active} refresh={refresh} />
+
+            <div className="min-w-0 space-y-2 border-2 border-dashed border-line p-3 [&_[role=group]>div]:flex-wrap">
+              <p className="font-ui text-[11px] tracking-[0.12em] text-ink-dim uppercase">Targeting</p>
+              {targeting}
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="min-w-0 flex-1">
+                <span className="mb-1 block font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Target vault</span>
+                <select value={castleId} onChange={(e) => setTarget(e.target.value)} disabled={openCastles.length === 0 || active} className={field}>
+                  {openCastles.length === 0 ? <option value="">{EMPTY.noVaultTaking.title}</option> : null}
+                  {openCastles.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name.toUpperCase()} · {tierLabel(c.tier, c.transport)}
+                      {underSiege?.has(c.id) ? " · OP LIVE NOW" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="sm:w-24">
+                <span className="mb-1 block font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">Ops</span>
+                <input value={maxSieges} onChange={(e) => setMaxSieges(e.target.value)} inputMode="numeric" disabled={active} className={cn(field, "tabular")} />
+              </label>
+              {!canDrive ? (
+                <PixelButton variant="outline" size="lg" className="sm:min-w-36" disabled data-testid="not-your-unit">
+                  {UNITS.notYourUnit}
+                </PixelButton>
+              ) : active ? (
+                <PixelButton variant="threatOutline" size="lg" className="sm:min-w-36" onClick={() => void stop()} disabled={busy !== null}>
+                  {busy === "stop" ? <Loader2 className="animate-spin" /> : null}
+                  {BUTTONS.stop}
+                </PixelButton>
+              ) : (
+                <PixelButton variant="threat" size="lg" cue="deploy" className="sm:min-w-36" onClick={() => void run()} disabled={busy !== null || !castleId}>
+                  {busy === "run" ? <Loader2 className="animate-spin" /> : null}
+                  {BUTTONS.deploy}
+                </PixelButton>
+              )}
+            </div>
+            {!canDrive ? (
+              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-dim">
+                <span className="min-w-0 flex-1">{UNITS.notYourUnitBody}</span>
+                <NewUnitLink />
+              </p>
+            ) : openCastles.length === 0 ? (
+              <p className="text-sm text-ink-dim">
+                <span className="font-ui text-xs text-warn uppercase">{EMPTY.noVaultTaking.title}</span> · {EMPTY.noVaultTaking.body}
+              </p>
+            ) : (
+              <p className="text-xs text-ink-dim">Each op pays the vault fee from the unit&apos;s own account. A cap hit pauses the unit and radios the owner.</p>
+            )}
+          </>
         )}
       </PixelPanel>
 
@@ -338,7 +393,7 @@ export function MissionPanel({
       {!pending && resolution ? <ResolutionLine r={resolution} running={status === "running"} /> : null}
 
       <PixelPanel title="Mission log" bodyClassName="p-0">
-        <MissionLog events={events} vaultName={vaultName} empty="no traffic yet · pick a vault and DEPLOY ▶" className="border-0" />
+        <MissionLog events={events} vaultName={vaultName} empty={manual ? UNITS.accountLogEmpty : "no traffic yet · pick a vault and DEPLOY ▶"} className="border-0" />
       </PixelPanel>
 
       {sieges.length ? (

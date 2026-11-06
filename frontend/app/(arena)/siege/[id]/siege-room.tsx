@@ -23,7 +23,8 @@ import { opMoney } from "@/lib/scene/money";
 import { playCue } from "@/components/pixel/sfx-link";
 import { usePlayer } from "@/lib/scene/usePlayer";
 import type { SceneFrame } from "@/lib/scene/player";
-import { BUTTONS, EMPTY, LED as LED_TEXT, MONEY, OPERATOR_RANKS, TOASTS } from "@/lib/vocab";
+import { BUTTONS, EMPTY, LED as LED_TEXT, MONEY, OPERATOR_RANKS, TOASTS, UNITS } from "@/lib/vocab";
+import { useMyUnitName, useMyUnits } from "@/components/raider/unit-picker";
 import { FeeSplit } from "@/components/money/fee-split";
 import { VaultPayout } from "@/components/money/vault-payout";
 import { HashscanLink } from "@/components/money/hashscan-link";
@@ -189,6 +190,8 @@ function Room({
   // A unit's own run is watched; an op this browser typed by hand and paid from a unit (J4) is played.
   const handOp = useHandOp(siege.id);
   const agentDriven = Boolean(siege.agentId) && !handOp;
+  // Paid from one of this browser's own accounts: say so on the receipt and the payout.
+  const myAccount = useMyUnitName(siege.agentId);
   // The pot as the op found it: from the op's own settle event when there is one, else the vault as
   // it was when this room opened. The header never jumps ahead of the fee rail / payout.
   const [potAtOpen] = useState(openingPot ?? castle.pot);
@@ -338,7 +341,7 @@ function Room({
   if (showOutcome) {
     dock = (
       <div className="space-y-3">
-        <Outcome siege={siege} castle={castle} events={events} frame={frame} />
+        <Outcome siege={siege} castle={castle} events={events} frame={frame} myAccount={myAccount} />
         {frame.ended || voided ? (
           <FrozenBar frame={frame} opId={siege.id} noReplay={demo || (voided && !frame.ended)}>
             <Link href={`/castle/${castle.id}`} className={pixelButtonVariants({ variant: "outline", size: "lg" })}>
@@ -407,7 +410,7 @@ function Room({
           {demo || (!frame.ended && !voided) ? <LiveMode mode={mode} /> : null}
           {!ended ? <SoundStrip /> : null}
           {castle.published ? <ZgCredits castleId={castle.id} intervalMs={3000} className="border-2 border-line bg-bg/60 px-2 py-1" /> : null}
-          {siege.receipt ? <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} asset={castle.asset} compact /> : null}
+          {siege.receipt ? <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} asset={castle.asset} payerName={myAccount} compact /> : null}
         </div>
       }
       aside={
@@ -539,7 +542,38 @@ function AgentStrip({ agentId, asset }: { agentId: string; asset: Castle["asset"
   );
 }
 
-function Outcome({ siege, castle, events, frame }: { siege: Siege; castle: Castle; events: StoredSiegeEvent[]; frame: SceneFrame }) {
+/**
+ * Under a finished recon: the next step toward a real op. With an account in this browser, its vault
+ * page pays from it; without one (and no stub demo wallet), the vault page opens FUND YOUR ACCOUNT.
+ */
+function ReconNext({ castle }: { castle: Castle }) {
+  const { config } = useConfig();
+  const { units } = useMyUnits();
+  const account = units[0];
+  const demo = !account && config?.demoWalletOps === true;
+  const href = account || demo ? `/castle/${castle.id}` : `/castle/${castle.id}?fund=1`;
+  const label = account ? UNITS.reconNextPay(account.name) : demo ? BUTTONS.runOp(formatAmount(castle.fee, castle.asset)) : UNITS.reconNextFund;
+  return (
+    <Link href={href} data-testid="recon-next" className={cn(pixelButtonVariants({ variant: "money", size: "lg" }), "mt-3 w-full")}>
+      {label}
+    </Link>
+  );
+}
+
+function Outcome({
+  siege,
+  castle,
+  events,
+  frame,
+  myAccount,
+}: {
+  siege: Siege;
+  castle: Castle;
+  events: StoredSiegeEvent[];
+  frame: SceneFrame;
+  /** The paying account's callsign when it is this browser's own. */
+  myAccount?: string;
+}) {
   const { config } = useConfig();
   const fee = siege.receipt && !siege.receipt.free ? siege.receipt.amount : castle.fee;
   const settlement = siege.settlement;
@@ -583,10 +617,8 @@ function Outcome({ siege, castle, events, frame }: { siege: Siege; castle: Castl
       return (
         <PixelPanel tone="money" className="px-4 py-4" role="status">
           <p className="font-pixel text-[14px] leading-snug text-money">RECON BREACH · NO PAYOUT</p>
-          <p className="mt-2 text-base text-ink">You found the sentence — pay {formatAmount(castle.fee, castle.asset)} and do it for real.</p>
-          <Link href={`/castle/${castle.id}`} className={cn(pixelButtonVariants({ variant: "money", size: "lg" }), "mt-3")}>
-            {BUTTONS.runOp(formatAmount(castle.fee, castle.asset))}
-          </Link>
+          <p className="mt-2 text-base text-ink">You found the sentence — pay {formatAmount(castle.fee, castle.asset)} from your own account and do it for real.</p>
+          <ReconNext castle={castle} />
         </PixelPanel>
       );
     }
@@ -596,6 +628,7 @@ function Outcome({ siege, castle, events, frame }: { siege: Siege; castle: Castl
         raider={siege.raider}
         tx={siege.release}
         pending={!siege.release}
+        toName={myAccount}
         asset={castle.asset}
       >
         {siege.release ? <p className="font-ui text-[11px] tracking-[0.14em] text-accent uppercase">Breach landed in the Hall</p> : null}
@@ -622,7 +655,10 @@ function Outcome({ siege, castle, events, frame }: { siege: Siege; castle: Castl
             : "The guard ended the op early. Your fee splits all the same."}
       </OutcomeHeadline>
       {siege.free ? (
-        <p className="border-2 border-dashed border-line px-3 py-2 font-ui text-[11px] tracking-[0.08em] text-ink-dim uppercase">Recon never touches the chain.</p>
+        <div>
+          <p className="border-2 border-dashed border-line px-3 py-2 font-ui text-[11px] tracking-[0.08em] text-ink-dim uppercase">Recon never touches the chain.</p>
+          <ReconNext castle={castle} />
+        </div>
       ) : splitFailed ? (
         <PixelPanel tone="threat" className="px-4 py-3 text-sm" role="alert">
           <p className="font-ui text-xs tracking-[0.1em] text-threat uppercase">Fee not split on chain</p>

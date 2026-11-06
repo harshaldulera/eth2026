@@ -1,20 +1,21 @@
 "use client";
 
 import { visitorId } from "@/lib/hooks/useVisitor";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type * as React from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import type { Castle, Siege, SiegeStatus } from "@/lib/types";
+import type { Castle, RaiderAgent, Siege, SiegeStatus } from "@/lib/types";
 import { HOSTED_PROTECTED_TOOL } from "@/lib/types";
-import { ApiError, api, describeError, isNotGuarding, type CastleDetail, type CloseCastleResponse } from "@/lib/api/client";
+import { ApiError, api, describeError, isNotGuarding, isOwnAccountRequired, type CastleDetail, type CloseCastleResponse } from "@/lib/api/client";
 import { usePolling, useNow } from "@/lib/hooks/usePolling";
 import { useConfig } from "@/lib/hooks/useConfig";
 import { formatAmount, shortAccount, timeAgo, toUnits } from "@/lib/money/format";
 import { isTerminal, vaultStateOf } from "@/lib/money/vault";
 import { BUTTONS, EMPTY, LED as LED_TEXT, MONEY, PUBLISH, TOASTS, UNITS, guardRank, guardRankLevel, statusLabel } from "@/lib/vocab";
 import { UnitPicker, useMyUnits } from "@/components/raider/unit-picker";
+import { FundOperatorAccount } from "@/components/raider/fund-operator-account";
 import { rememberHandOp } from "@/lib/agents/hand-ops";
 import { useOwnerDevice } from "@/lib/publish/store";
 import { PlugInAgent } from "@/components/owner/plug-in-agent";
@@ -89,20 +90,60 @@ type StartState = {
   refused: string | null;
   reconUsed: boolean;
   start: (free: boolean) => void;
-  /** Onboarding J4: the red teamer's unit that pays this op (its operator key is in the browser); absent = the demo wallet. */
-  payFrom?: { id: string; name: string };
+  /** The red teamer's unit or operator account that pays this op (its operator key is in the browser). */
+  payFrom?: { id: string; name: string; balance?: string };
+  /**
+   * No account in this browser and the server takes no demo-wallet ops (testnet): RUN OP becomes
+   * FUND YOUR OPERATOR ACCOUNT. False while /api/config is loading (the server decides on click).
+   */
+  needsAccount: boolean;
+  /** The demo wallet may pay an op with no account picked (DEMO_WALLET_OPS hatch, stub). */
+  demoWallet: boolean;
+  /**
+   * The paying account holds less than this vault's fee: RUN OP becomes FUND A NEW ACCOUNT (an operator
+   * account only spends what it holds; lib/pay/caps).
+   */
+  short: boolean;
+  /** The inline FUND YOUR OPERATOR ACCOUNT panel is open. */
+  funding: boolean;
+  /** Bumped on every request to show the fund panel, so a second tap scrolls to it again. */
+  fundNonce: number;
+  /** Open (and scroll to) the fund panel: no account, a short one, or + NEW ACCOUNT. */
+  openFunding: () => void;
+  setFunding: (open: boolean) => void;
+  /** A new operator account was funded and its key saved: pay the next op from it. */
+  accountFunded: (account: RaiderAgent) => void;
   units: ReturnType<typeof useMyUnits>;
 };
 
 /**
- * `api.playStart` with the x402 three-light sequence (402 → SIGN → SETTLE). The server does the
- * whole round trip in one call, so the lights pace themselves and the last one holds until it
- * lands. Sounds: `coin_pay` on settle, `recon_start` for a free op.
+ * The op start with the x402 three-light sequence (402 → SIGN → SETTLE). The server does the whole
+ * round trip in one call, so the lights pace themselves and the last one holds until it lands.
+ * Every paid op is paid from the operator's own account (`api.playStartFromUnit`); with none in this
+ * browser, RUN OP opens FUND YOUR OPERATOR ACCOUNT instead. Only the stub hatch (config.demoWalletOps)
+ * still pays an op with no account from the demo wallet. Sounds: `coin_pay` on settle, `recon_start` for a free op.
  */
 function useOpStart(c: Castle, onRefused: () => void): StartState {
   const router = useRouter();
+  const { config } = useConfig();
   const units = useMyUnits();
-  const payFrom = units.unit ? { id: units.unit.id, name: units.unit.name } : undefined;
+  // Just funded, its key saved, but the next units poll hasn't returned it yet: it already pays.
+  const [fresh, setFresh] = useState<{ id: string; name: string } | null>(null);
+  const freshPays = fresh !== null && !units.units.some((u) => u.id === fresh.id);
+  const payFrom = units.unit
+    ? { id: units.unit.id, name: units.unit.name, balance: units.unit.balance }
+    : freshPays
+      ? { id: fresh.id, name: fresh.name }
+      : undefined;
+  const demoWallet = config?.demoWalletOps === true;
+  const needsAccount = !payFrom && config?.demoWalletOps === false;
+  const short = payFrom?.balance !== undefined && toUnits(payFrom.balance) < toUnits(c.fee);
+  const [funding, setFunding] = useState(false);
+  const [fundNonce, setFundNonce] = useState(0);
+  const openFunding = useCallback(() => {
+    setFunding(true);
+    setFundNonce((n) => n + 1);
+  }, []);
   const [busy, setBusy] = useState<Busy>(null);
   const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
   const [refused, setRefused] = useState<string | null>(null);
@@ -137,6 +178,10 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
   }, [busy]);
 
   async function start(free: boolean) {
+    if (!free && (needsAccount || short)) {
+      openFunding();
+      return;
+    }
     setBusy(free ? "free" : "paid");
     setStep(free ? 0 : 1);
     setRefused(null);
@@ -149,11 +194,14 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
           : await api.playStart({ castleId: c.id });
       // Stub payments land in a blink: hold the three lights long enough to read (≈1.2 s total).
       if (!free) await new Promise((r) => setTimeout(r, Math.max(0, PAY_FLOOR_MS - (Date.now() - t0))));
-      if (!free && payFrom) rememberHandOp(res.siegeId);
+      if (!free && payFrom) {
+        rememberHandOp(res.siegeId);
+        void units.refresh();
+      }
       const opHref = `/siege/${res.siegeId}?go=1`;
       if (!shown.current) {
         // they left mid-payment: the op is theirs, but say so instead of yanking them back
-        toast.success(free ? TOASTS.reconStarted.title : TOASTS.paid(formatAmount(c.fee, c.asset)).title, {
+        toast.success(free ? TOASTS.reconStarted.title : paidToast(formatAmount(c.fee, c.asset), payFrom?.name).title, {
           description: `Your op on ${c.name} is open.`,
           action: { label: "WATCH ▶", onClick: () => router.push(opHref) },
         });
@@ -165,7 +213,7 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
       } else {
         setStep(3);
         playCue("coin_pay");
-        const t = TOASTS.paid(formatAmount(c.fee, c.asset));
+        const t = paidToast(formatAmount(c.fee, c.asset), payFrom?.name);
         const url = res.receipt && "hashscanUrl" in res.receipt ? res.receipt.hashscanUrl : undefined;
         toast.success(t.title, {
           description: t.body,
@@ -176,7 +224,11 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
     } catch (e) {
       setBusy(null);
       setStep(0);
-      if (isReconUsed(e)) {
+      if (isOwnAccountRequired(e)) {
+        // The server takes no demo-wallet ops: fund your own account first.
+        playCue("deny");
+        openFunding();
+      } else if (isReconUsed(e)) {
         setReconUsed(true);
         playCue("deny");
         toast.error(TOASTS.reconUsed.title, { description: TOASTS.reconUsed.body });
@@ -189,9 +241,17 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
         playCue("deny");
         toast.error(TOASTS.paymentRefused(why).title, { description: why });
       } else if (e instanceof ApiError && e.code === "cap_reached") {
-        const why = String((e.body as { reason?: unknown } | null)?.reason ?? "spend").replace("_", "-");
+        const b = (e.body ?? {}) as { reason?: unknown; manual?: unknown; balance?: unknown };
         playCue("deny");
-        toast.error(UNITS.capReached(why));
+        if (b.manual === true) {
+          // An operator account is only ever short of money: say so and open the fund panel.
+          const left = typeof b.balance === "string" ? formatAmount(b.balance, c.asset) : undefined;
+          toast.error(UNITS.accountShortTitle(payFrom?.name ?? UNITS.yourAccount), { description: UNITS.accountShort(left, formatAmount(c.fee, c.asset)) });
+          void units.refresh();
+          openFunding();
+        } else {
+          toast.error(UNITS.capReached(String(b.reason ?? "spend").replace("_", "-")));
+        }
       } else if (e instanceof ApiError && (e.code === "awaiting_approval" || e.code === "unit_stopped")) {
         playCue("deny");
         toast.error(e.code === "unit_stopped" ? UNITS.unitStopped : UNITS.unitBusy);
@@ -200,7 +260,35 @@ function useOpStart(c: Castle, onRefused: () => void): StartState {
     }
   }
 
-  return { busy, step, refused, reconUsed, start: (free) => void start(free), payFrom, units };
+  function accountFunded(account: RaiderAgent) {
+    setFresh({ id: account.id, name: account.name });
+    units.setSelected(account.id);
+    setFunding(false);
+    void units.refresh();
+  }
+
+  return {
+    busy,
+    step,
+    refused,
+    reconUsed,
+    start: (free) => void start(free),
+    payFrom,
+    needsAccount,
+    demoWallet,
+    short,
+    funding,
+    fundNonce,
+    openFunding,
+    setFunding,
+    accountFunded,
+    units,
+  };
+}
+
+/** `PAID 0.5 ℏ FROM GLASS FOX VIA x402` when the op is paid from the operator's own account. */
+function paidToast(fee: string, from?: string) {
+  return from ? UNITS.paidFrom(fee, from) : TOASTS.paid(fee);
 }
 
 /** Why the RUN OP button is off, in the copy deck's words (null while guarding). */
@@ -237,6 +325,12 @@ function Briefing({ detail, refresh }: { detail: CastleDetail; refresh: () => vo
   const liveOp = sieges.find(isLiveOp);
   const reason = disabledReason(c, sieges, now);
   const ownsThisVault = useOwnerDevice(c.id).owner;
+  // `?fund=1` (the QR briefing once recon is spent): open FUND YOUR OPERATOR ACCOUNT right away.
+  const fundParam = useSearchParams().get("fund") === "1";
+  const { needsAccount, openFunding } = op;
+  useEffect(() => {
+    if (fundParam && needsAccount) openFunding();
+  }, [fundParam, needsAccount, openFunding]);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pt-5 pb-32 sm:px-6 sm:pt-8 lg:pb-12">
@@ -514,15 +608,37 @@ function RunOpButton({ castle: c, op, reason, className }: { castle: Castle; op:
       className={cn("w-full max-sm:text-[13px]", className)}
       disabled={Boolean(reason) || op.busy !== null}
       aria-live="polite"
+      data-testid="run-op"
       onClick={() => op.start(false)}
     >
-      {op.busy === "paid" ? <PayingLights step={op.step} /> : reason ? reason.text.toUpperCase() : op.payFrom ? `RUN OP — ${UNITS.payFrom(op.payFrom.name)} (${fee})` : BUTTONS.runOp(fee)}
+      {op.busy === "paid" ? (
+        <PayingLights step={op.step} />
+      ) : reason ? (
+        reason.text.toUpperCase()
+      ) : op.payFrom && op.short ? (
+        UNITS.fundAnother
+      ) : op.payFrom ? (
+        `RUN OP — ${UNITS.payFrom(op.payFrom.name)} (${fee})`
+      ) : op.needsAccount ? (
+        UNITS.fundAccount
+      ) : (
+        BUTTONS.runOp(fee)
+      )}
     </PixelButton>
   );
 }
 
 function OpConsole({ castle: c, op, reason, liveOp, className }: { castle: Castle; op: StartState; reason: { text: string; href?: string } | null; liveOp?: Siege; className?: string }) {
   const { config } = useConfig();
+  // The phone's sticky RUN OP opens the panel below the fold: bring it on screen. Keyed on the nonce too,
+  // so every tap scrolls (a second sticky tap after scrolling back up used to do nothing).
+  const fundRef = useRef<HTMLDivElement>(null);
+  const showFund = op.funding && !reason;
+  useEffect(() => {
+    if (!showFund) return;
+    const id = requestAnimationFrame(() => fundRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    return () => cancelAnimationFrame(id);
+  }, [showFund, op.fundNonce]);
   return (
     <PixelPanel
       title="Run an op"
@@ -531,8 +647,17 @@ function OpConsole({ castle: c, op, reason, liveOp, className }: { castle: Castl
       className={className}
       bodyClassName="flex flex-col gap-3 p-4"
     >
-      <UnitPicker units={op.units.units} selected={op.units.selected} onSelect={op.units.setSelected} disabled={op.busy !== null} />
+      <UnitPicker
+        units={op.units.units}
+        selected={op.units.selected}
+        onSelect={op.units.setSelected}
+        onNewAccount={op.openFunding}
+        disabled={op.busy !== null}
+        allowDemo={op.demoWallet}
+      />
       <RunOpButton castle={c} op={op} reason={reason} className="max-lg:hidden" />
+      {op.payFrom?.balance !== undefined ? <AccountBalance name={op.payFrom.name} balance={op.payFrom.balance} asset={c.asset} /> : null}
+      {showFund ? <FundOperatorAccount panelRef={fundRef} onFunded={op.accountFunded} onCancel={() => op.setFunding(false)} /> : null}
       <PixelButton variant="outline" size="lg" cue={null} className="w-full" disabled={Boolean(reason) || op.busy !== null || op.reconUsed} onClick={() => op.start(true)}>
         {op.busy === "free" ? "STARTING RECON…" : op.reconUsed ? "RECON USED TODAY" : BUTTONS.recon}
       </PixelButton>
@@ -557,7 +682,15 @@ function OpConsole({ castle: c, op, reason, liveOp, className }: { castle: Castl
         </p>
       ) : (
         <p className="text-xs leading-relaxed text-ink-dim">
-          Five messages. {op.payFrom ? `${op.payFrom.name} pays from its own account over x402, so a breach pays out to it.` : "The server pays from the arena's demo wallet over x402, so there is no wallet to connect."} Recon is free
+          Five messages.{" "}
+          {op.payFrom && op.short && op.payFrom.balance !== undefined
+            ? UNITS.accountShort(formatAmount(op.payFrom.balance, c.asset), formatAmount(c.fee, c.asset))
+            : op.payFrom
+              ? UNITS.paysFromOwn(op.payFrom.name)
+              : op.demoWallet
+                ? UNITS.demoWalletPays
+                : UNITS.needAccount}{" "}
+          Recon is free
           {config ? ` (${config.freeSiegesPerDay} a day)` : ""} and never pays out.
         </p>
       )}
@@ -571,6 +704,18 @@ function OpConsole({ castle: c, op, reason, liveOp, className }: { castle: Castl
         </Link>
       ) : null}
     </PixelPanel>
+  );
+}
+
+/** BALANCE of the account that pays the next op (after an op, its fee is gone; after a breach, the payout is in). */
+function AccountBalance({ name, balance, asset }: { name: string; balance: string; asset: Castle["asset"] }) {
+  return (
+    <p className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-2 border-dashed border-line px-3 py-2" data-testid="account-balance">
+      <span className="min-w-0 truncate font-ui text-[10px] tracking-[0.14em] text-ink-dim uppercase">
+        {UNITS.balance} · {name}
+      </span>
+      <Digits value={formatAmount(balance, asset, { symbol: false })} unit="ℏ" tone="money" size="sm" />
+    </p>
   );
 }
 

@@ -53,10 +53,11 @@ export function hbarShort(tinybar: string): string {
 /**
  * The unit's money line in the mission panel: funded-by tag, BALANCE (its own account), the live
  * 0G CREDITS line, WITHDRAW (a unit you funded, idle only), and the 0G KEY REJECTED state.
+ * `hideBalance`: the caller shows BALANCE itself (an operator account's hero number).
  *
  * @example <UnitFunds detail={detail} idle={!active} refresh={refresh} />
  */
-export function UnitFunds({ detail, idle, refresh }: { detail: AgentDetail; idle: boolean; refresh: () => void }) {
+export function UnitFunds({ detail, idle, refresh, hideBalance }: { detail: AgentDetail; idle: boolean; refresh: () => void; hideBalance?: boolean }) {
   const a = detail.agent;
   const [busy, setBusy] = useState(false);
   const rejected = zgKeyRejected(detail.approvals, a.id);
@@ -84,7 +85,7 @@ export function UnitFunds({ detail, idle, refresh }: { detail: AgentDetail; idle
     <div className="space-y-2" data-testid="unit-funds">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <FundedTag agent={a} />
-        {detail.balance !== undefined ? (
+        {detail.balance !== undefined && !hideBalance ? (
           <span className="font-ui text-[11px] tracking-[0.1em] text-money uppercase tabular">
             {UNITS.balance} <span data-testid="unit-balance">{hbarShort(detail.balance)}</span>
           </span>

@@ -1,4 +1,4 @@
-import { env, isStub } from "@/lib/config/env";
+import { demoWalletOps, env, isStub } from "@/lib/config/env";
 import { chainInfo } from "@/lib/chain";
 import { asset } from "@/lib/pay";
 import { guardianMode } from "@/lib/transport";
@@ -18,5 +18,10 @@ export async function GET() {
     feeSplitBps: { castellan: e.FEE_SPLIT_CASTELLAN_BPS, pot: e.FEE_SPLIT_POT_BPS, arena: e.FEE_SPLIT_ARENA_BPS },
     // Which guardian answers sieges in this process: "0g" or the deterministic "stub" (the golden run records it).
     guardianMode: guardianMode(),
+    // Every paid op is paid from the operator's own account. True only with the DEMO_WALLET_OPS hatch
+    // (stub default): RUN OP may still pay from the arena's demo wallet when no unit is chosen.
+    demoWalletOps: demoWalletOps(),
+    // Smallest deposit (tinybar) that opens a unit or an operator account.
+    unitMinBudget: String(e.UNIT_MIN_BUDGET),
   });
 }

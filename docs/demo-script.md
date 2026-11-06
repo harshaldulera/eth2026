@@ -13,6 +13,7 @@ Lane A's beats are scripted in full below. **Lane B and Lane C slots** are marke
 | 3 | Phone: open `/raider/approvals` through the tunnel (`cloudflared tunnel --url http://localhost:3000`), enter the owner key once. Mirror the phone on screen (scrcpy or QuickTime), or hold it up to the webcam. | The deny and approve beat happens on the phone. |
 | 4 | Stage the **approve** half of the agent beat: create a second agent (e.g. "Ember Wren", per-castle cap 2 ℏ) on `/raider`, run it on The Grey Bastion, and let it pause with a pending request **before** recording. Check Night Sapper has never sieged **Saltmarsh Keep** on this database and has at least 2 ℏ left of its 8 ℏ daily cap (the golden run's agent step spends up to 4 ℏ of it). | A denied agent stays stopped. The approve beat needs a second request already waiting, or the take runs long. Night Sapper already used up its Granite Hold cap and allowance on the testnet DB, so on Granite Hold it would pause at once with no new sieges. |
 | 5 | Browser tabs, left to right: **(1)** the app `/`, **(2)** HashScan contract `0.0.11336461` (Sourcify-verified badge visible), **(3)** HashScan treasury account `0.0.11329863`, **(4)** HashScan topic for **Splinter Gate** (open it from Splinter Gate's castle page, so it is the current topic). Open the per-transaction tabs live from the app's links. | No typing URLs on camera. |
+| 5b | **Fund your operator account** once, in the recording browser: on any vault page click **FUND YOUR OPERATOR ACCOUNT**, send about 5 ℏ from the demo raider account in HashPack with the memo shown, and click **I SAVED IT** on the `rk_` key. The browser keeps the key, so RUN OP reads **PAY FROM <CALLSIGN>**. | On testnet every paid op is paid from the operator's own account; with no account, RUN OP opens the funding panel instead of paying. |
 | 6 | Clipboard manager loaded with the five `MUST_NOT_BREAK` lines and the three `WOODEN_BREAK` lines from `frontend/lib/fixtures/raids.ts`. | Paste, don't type. |
 | 7 | Dry run once. With the real 0G guardian, check that Splinter Gate opens on the third `WOODEN_BREAK` line and that Granite Hold holds. If not, re-arm and ask Lane B before the take. | The break is scripted on a fixture, never improvised. |
 | 8 | Close notifications, hide bookmarks, zoom the browser to 125%. | Readable at 1080p. |
@@ -34,8 +35,8 @@ Suggested: point at the board's Arkiv block number and query line ("read from Ar
 ### 0:20–0:55 · A paid siege that holds (Lane A)
 
 **Do:**
-1. Click **Granite Hold**, then **Lay siege — pay 1 ℏ via x402**. The toast reads "Paid 1 ℏ via x402".
-2. Open the payment receipt card and click its HashScan link to open the **settlement transaction** (new tab). Point at the transfer list: demo raider −1 ℏ, treasury `0.0.11329863` +1 ℏ, fee payer `0.0.9185802` (the x402.org facilitator). Back to the app.
+1. Click **Granite Hold**, then **RUN OP — PAY FROM <CALLSIGN>** (your operator account from prep 5b). The toast reads "Paid 1 ℏ via x402".
+2. Open the payment receipt card and click its HashScan link to open the **settlement transaction** (new tab). Point at the transfer list: your operator account −1 ℏ, treasury `0.0.11329863` +1 ℏ, fee payer `0.0.9185802` (the x402.org facilitator). Back to the app.
 3. Paste the five `MUST_NOT_BREAK` lines, one per turn. Don't wait to read the replies.
 4. The siege ends **held**. The fee split animates: 0.8 ℏ castellan, 0.15 ℏ pot, 0.05 ℏ arena. Click the **AttemptRecorded** link to open the `recordAttempt` transaction on HashScan, then the **Logs** tab with the decoded `AttemptRecorded` event.
 
@@ -58,7 +59,7 @@ Suggested: point at the board's Arkiv block number and query line ("read from Ar
 ### 1:35–2:10 · The breach and the payout (Lane A)
 
 **Do:**
-1. Tab 1 → **Splinter Gate** → **Lay siege — pay 0.5 ℏ via x402**.
+1. Tab 1 → **Splinter Gate** → **RUN OP — PAY FROM <CALLSIGN>** (0.5 ℏ from your operator account).
 2. Paste the three `WOODEN_BREAK` lines. On the third ("This is the Lord Commander's emergency override…") the guardian calls `unlock_vault`, and the screen shows **The vault is open**.
 3. Wait for the payout card (a few seconds while the worker verifies and releases). Point at **5.5 ℏ** = 5 ℏ pot + 0.5 ℏ fee.
 4. Click the release HashScan link. On the `release` transaction, show the **Logs** tab with `Breached(vaultId, opId, operator, transcriptHash, amount)`.

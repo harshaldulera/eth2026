@@ -10,6 +10,8 @@ import { Digits } from "@/components/pixel/digits";
 import { Sprite } from "@/components/pixel/sprite";
 import { CoinFountain, money } from "@/components/scene/coin-fountain";
 import { HashscanLink } from "./hashscan-link";
+import Link from "next/link";
+import { UNITS } from "@/lib/vocab";
 
 export type VaultPayoutProps = {
   /** Amount paid to the operator (pot + this op's fee). */
@@ -20,6 +22,11 @@ export type VaultPayoutProps = {
   tx?: TxRef;
   /** The release has not landed yet: `PAYING OUT…` instead of `PAID … TO …`. */
   pending?: boolean;
+  /**
+   * The paid account is this browser's own (a unit or operator account): `PAID 5.50 ℏ TO GLASS FOX ·
+   * YOUR ACCOUNT (0.0.…)` and a WITHDRAW link to the agents page.
+   */
+  toName?: string;
   asset?: Asset;
   /** Extra lines under the receipt (e.g. `BREACH LANDED IN THE HALL`). */
   children?: ReactNode;
@@ -33,7 +40,7 @@ export type VaultPayoutProps = {
  *
  * @example <VaultPayout amount={siege.release.amount} raider={siege.raider} tx={siege.release} />
  */
-export function VaultPayout({ amount, raider, tx, pending = false, asset = HBAR, children, className }: VaultPayoutProps) {
+export function VaultPayout({ amount, raider, tx, pending = false, toName, asset = HBAR, children, className }: VaultPayoutProps) {
   const calm = useCalmMotion();
   const shown = money(amount, asset);
   const [num, unit] = [shown.slice(0, shown.lastIndexOf(" ")), shown.slice(shown.lastIndexOf(" ") + 1)];
@@ -67,11 +74,15 @@ export function VaultPayout({ amount, raider, tx, pending = false, asset = HBAR,
       <div className="relative mt-3 flex flex-col items-center gap-1.5">
         {pending ? (
           <p className="font-ui text-xs tracking-[0.12em] text-money uppercase">
-            <span className="animate-blink">▮</span> Paying out to <HashscanLink accountId={raider} className="text-xs" />
+            <span className="animate-blink">▮</span> Paying out to {toName ? <>{UNITS.payoutToYou(toName)} (</> : null}
+            <HashscanLink accountId={raider} className="text-xs" />
+            {toName ? ")" : null}
           </p>
         ) : (
-          <p className="font-ui text-xs tracking-[0.12em] text-money uppercase">
-            Paid {shown} to <HashscanLink accountId={raider} className="text-xs" />
+          <p className="font-ui text-xs tracking-[0.12em] text-money uppercase" data-testid="payout-to">
+            Paid {shown} to {toName ? <>{UNITS.payoutToYou(toName)} (</> : null}
+            <HashscanLink accountId={raider} className="text-xs" />
+            {toName ? ")" : null}
           </p>
         )}
         {tx ? (
@@ -81,6 +92,11 @@ export function VaultPayout({ amount, raider, tx, pending = false, asset = HBAR,
         ) : (
           <p className="font-term text-lg leading-none text-ink-dim">verifier signed · settling on Hedera…</p>
         )}
+        {toName ? (
+          <Link href="/raider" className="font-ui text-[11px] tracking-[0.12em] text-accent uppercase underline-offset-4 hover:underline">
+            {UNITS.payoutWithdraw}
+          </Link>
+        ) : null}
         {children}
       </div>
     </div>

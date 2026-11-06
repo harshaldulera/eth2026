@@ -18,6 +18,7 @@ import { PixelPanel } from "@/components/pixel/panel";
 import { Sprite } from "@/components/pixel/sprite";
 import { playCue } from "@/components/pixel/sfx-link";
 import { cn } from "@/lib/utils";
+import { suggestCallsign } from "@/lib/agents/manual";
 
 const field =
   "min-h-11 w-full border-2 border-line bg-bg px-2.5 font-term text-[20px] leading-none text-ink focus:border-accent focus:outline-none";
@@ -43,13 +44,7 @@ function HbarInput({ label, value, onChange, hint }: { label: string; value: str
   );
 }
 
-const CALLSIGNS = ["Night Sapper", "Iron Mole", "Glass Fox", "Red Lantern", "Quiet Wire", "Salt Hound"] as const;
-
-/** The first demo callsign no unit has; "Unit N" once they are all taken. */
-export function suggestCallsign(taken: readonly string[] = []): string {
-  const used = new Set(taken.map((t) => t.trim().toLowerCase()));
-  return CALLSIGNS.find((c) => !used.has(c.toLowerCase())) ?? `Unit ${taken.length + 1}`;
-}
+export { suggestCallsign };
 
 // The owner flag the pager page sets after a successful owner-key entry (an arena operator's device).
 const OWNER_FLAG = "siege.ownerAuthed";

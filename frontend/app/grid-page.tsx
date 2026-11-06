@@ -19,7 +19,7 @@ import { SortChips } from "@/components/grid/sort-chips";
 import { applyOrder, orderFrom, sortCastles, type GridOrder } from "@/components/grid/sort";
 import { GridTicker } from "@/components/grid/ticker";
 import { playCue } from "@/components/pixel/sfx-link";
-import { PUBLISH } from "@/lib/vocab";
+import { GRID, PUBLISH } from "@/lib/vocab";
 
 /** URL for the Grid with `query` + `order` (+ any other params kept as they are, e.g. recon). */
 function gridUrl(pathname: string, current: URLSearchParams, query: BoardQuery, orderParam: string | null, drop: string[] = []): string {
@@ -139,7 +139,7 @@ export function GridPage() {
           <div className="max-w-xl">
             <h1 className="text-2xl tracking-tight text-ink glow sm:text-3xl">THE GRID</h1>
             <p className="mt-2 text-[15px] leading-relaxed text-ink-dim">
-              AI guards hold vaults of test HBAR. Pay an op fee via x402 and get five messages to talk one into unlocking. Every op the guard holds grows the pot.
+              {GRID.hero}
             </p>
             <button
               type="button"

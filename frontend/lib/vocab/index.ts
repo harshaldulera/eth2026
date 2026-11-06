@@ -202,7 +202,7 @@ export type ToastCopy = { title: string; body?: string };
 export const TOASTS = Object.freeze({
   paid: (fee = "1 ℏ"): ToastCopy => ({ title: `PAID ${fee} VIA x402`, body: "The gate's listening. 5 messages." }),
   reconStarted: { title: "RECON STARTED", body: "Free, once a day, no payout." } as ToastCopy,
-  reconUsed: { title: "RECON USED TODAY", body: "Pay the fee to run an op." } as ToastCopy,
+  reconUsed: { title: "RECON USED TODAY", body: "Pay the fee from your own account to run an op." } as ToastCopy,
   paymentRefused: (reason?: string): ToastCopy => ({ title: "PAYMENT REFUSED", body: reason }),
   notDelivered: { title: "NOT DELIVERED", body: "Your turn was not used. Try again." } as ToastCopy,
   noMessagesLeft: { title: "NO MESSAGES LEFT" } as ToastCopy,
@@ -232,6 +232,11 @@ export const EMPTY = Object.freeze({
 });
 
 // ─── navigation ───────────────────────────────────────────────────────────────────────────
+
+/** The Grid's header line (the first screen a newcomer reads). */
+export const GRID = Object.freeze({
+  hero: `AI ${VOCAB.guard.toLowerCase()}s hold ${VOCAB.vault.toLowerCase()}s of test HBAR. Fund your own account, pay an ${VOCAB.op.toLowerCase()} fee from it via x402, and get five messages to talk one into unlocking: a ${VOCAB.breach.toLowerCase()} pays out into your account. Every ${VOCAB.op.toLowerCase()} the ${VOCAB.guard.toLowerCase()} holds grows the pot.`,
+});
 
 export const NAV = Object.freeze({
   grid: "GRID",
@@ -532,6 +537,52 @@ export const UNITS = Object.freeze({
   settling: "settling on Hedera…",
   noHbarMoved: "no HBAR moved",
   keyApproveHint: "Check your 0G credits, then resume.",
+  // operator account: the red teamer's own money for ops typed by hand (no 0G, never deployed)
+  fundAccount: `FUND YOUR ${VOCAB.operator.toUpperCase()} ACCOUNT ▶`,
+  accountTitle: `YOUR ${VOCAB.operator.toUpperCase()} ACCOUNT`,
+  accountHint: `Every paid ${VOCAB.op.toLowerCase()} is paid from your own account. Send HBAR from your wallet: each ${VOCAB.op.toLowerCase()} fee comes out of it, a ${VOCAB.breach.toLowerCase()} pays out into it, and WITHDRAW sends the rest back.`,
+  accountAmount: "AMOUNT",
+  accountMin: (min: string) => `at least ${min}, from the wallet you want paid out to`,
+  accountCallsign: "CALLSIGN (OPTIONAL)",
+  openAccount: "OPEN DEPOSIT ▶",
+  accountCancel: "NOT NOW",
+  accountFunded: "ACCOUNT FUNDED",
+  accountDepositHint: "Send the amount from the wallet you want paid out to. Your account opens when it lands.",
+  accountTag: `${VOCAB.operator.toUpperCase()} ACCOUNT`,
+  accountReady: (name: string) => `${name.toUpperCase()} is funded. RUN OP pays from it.`,
+  keyBodyAccount: `This key pays your ${VOCAB.op.toLowerCase()}s from this account and withdraws it. Save it now: we only keep a hash.`,
+  /** Op console copy under RUN OP. */
+  paysFromOwn: (name: string) => `${name} pays from your own account over x402, so a ${VOCAB.breach.toLowerCase()} pays out to it.`,
+  demoWalletPays: "Demo mode: with no account picked, the arena's demo wallet pays over x402.",
+  needAccount: `Every paid ${VOCAB.op.toLowerCase()} is paid from your own account: fund one from your wallet first.`,
+  /** RUN OP paid from the operator's own account (the toast on the vault page, also seen in the op room). */
+  paidFrom: (fee: string, name: string): ToastCopy => ({ title: `PAID ${fee} FROM ${name.toUpperCase()} VIA x402`, body: "Your own account paid. The gate's listening. 5 messages." }),
+  /** The paying account holds less than the fee (an operator account spends only what it holds). */
+  accountShortTitle: (name: string) => `${name.toUpperCase()} IS SHORT`,
+  accountShort: (left: string | undefined, fee: string) =>
+    `${left ? `Your account has ${left} left` : "Your account is short"}; this ${VOCAB.op.toLowerCase()} costs ${fee}. Fund an account to keep going.`,
+  yourAccount: "Your account",
+  fundAnother: "FUND A NEW ACCOUNT ▶",
+  newAccountOption: "+ NEW ACCOUNT",
+  /** Back out of an open deposit window: the key stays saved, a late deposit still opens the account. */
+  depositLater: "I'LL DEPOSIT LATER",
+  /** A withdrawn operator account's status light. */
+  withdrawn: "WITHDRAWN",
+  accountBalanceHero: "Balance",
+  accountLogEmpty: `no ${VOCAB.op.toLowerCase()}s yet · RUN OP on a ${VOCAB.vault.toLowerCase()} page pays from it`,
+  accountPanelHint: `Pays the ${VOCAB.op.toLowerCase()}s you type on a ${VOCAB.vault.toLowerCase()} page (RUN OP — PAY FROM it). A ${VOCAB.breach.toLowerCase()} pays out into it; WITHDRAW sends the rest to the wallet that funded it.`,
+  /** The breach payout and the receipt, when the account is this browser's own. */
+  payoutToYou: (name: string) => `${name.toUpperCase()} · YOUR ACCOUNT`,
+  payoutWithdraw: "WITHDRAW FROM AGENTS ▶",
+  /** Under a finished recon: the next step toward a real op. */
+  reconNextFund: `RUN A REAL ${VOCAB.op.toUpperCase()} — FUND YOUR ACCOUNT ▶`,
+  reconNextPay: (name: string) => `RUN A REAL ${VOCAB.op.toUpperCase()} — PAY FROM ${name.toUpperCase()} ▶`,
+  /** The QR briefing once recon is spent. */
+  reconUsedFund: (vault: string) => `FUND YOUR ACCOUNT TO PLAY ${vault.toUpperCase()} ▶`,
+  reconUsedPay: (fee: string, vault: string) => `PAY ${fee} ON ${vault.toUpperCase()} ▶`,
+  /** DEPLOY on an operator account (409 needs_0g). */
+  needs0g: "Connect 0G to let it run on its own",
+  needs0gBody: `This ${VOCAB.operator.toLowerCase()} account pays the ${VOCAB.op.toLowerCase()}s you type. To let a unit run on its own, build one with NEW UNIT and connect 0G.`,
 });
 
 /** Foundation — 0G connect field and credits lines (components/money/zg-connect.tsx). Owner: foundation team. */

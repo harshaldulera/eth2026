@@ -54,6 +54,11 @@ export function isNotGuarding(err: unknown): err is ApiError {
   return err instanceof ApiError && err.notGuarding !== undefined;
 }
 
+/** POST /api/play/start refused a paid op with no unit: fund an operator account first (403). */
+export function isOwnAccountRequired(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.code === "own_account_required";
+}
+
 function errorMessage(body: unknown): string | undefined {
   if (!body || typeof body !== "object") return typeof body === "string" && body ? body.slice(0, 200) : undefined;
   const b = body as { error?: unknown; message?: unknown; reason?: unknown; vaultState?: unknown };
@@ -125,6 +130,13 @@ export type ConfigResponse = {
   freeSiegesPerDay: number;
   /** The on-chain fee split (basis points, sum 10000). */
   feeSplitBps: FeeSplitBps;
+  /**
+   * True only with the DEMO_WALLET_OPS hatch (stub default): a paid op with no unit may still be paid
+   * from the arena's demo wallet. False (testnet): every paid op needs the operator's own account.
+   */
+  demoWalletOps?: boolean;
+  /** Smallest deposit (tinybar) that opens a unit or an operator account. */
+  unitMinBudget?: Amount;
 };
 
 /** Where GET /api/castles read from: Arkiv (with the block number) or the server's SQLite copy. */
@@ -232,7 +244,10 @@ export const api = {
    */
   startSiege: (body: StartSiegeBody, headers?: Record<string, string>) =>
     request<StartSiegeResponse>("/api/siege/start", { method: "POST", json: body, headers }),
-  /** Browser "Lay siege": the server pays from the arena's demo raider wallet. 409 `not_guarding` as above. */
+  /**
+   * Paid op with no unit: only with the DEMO_WALLET_OPS hatch (stub), paid from the arena's demo wallet.
+   * Otherwise 403 `own_account_required` (use playStartFromUnit). 409 `not_guarding` as above.
+   */
   playStart: (body: { castleId: string; free?: boolean }) =>
     request<PlayStartResponse>("/api/play/start", { method: "POST", json: body }),
 
@@ -252,7 +267,7 @@ export const api = {
 
   /** `{mine: true}`: only the units whose operator keys this browser holds (2b); otherwise every unit. */
   agents: (q: { mine?: boolean } = {}) =>
-    request<{ agents: RaiderAgent[] }>(`/api/agents${q.mine ? "?mine=1" : ""}`, q.mine ? { headers: allUnitHeaders() } : {}),
+    request<{ agents: MyUnit[] }>(`/api/agents${q.mine ? "?mine=1" : ""}`, q.mine ? { headers: allUnitHeaders() } : {}),
   createAgent: (body: CreateAgentBody) => request<{ agent: RaiderAgent }>("/api/agents", { method: "POST", json: body }),
   agent: (id: string) => request<AgentDetail>(`/api/agents/${enc(id)}`, { headers: unitHeaders(id) }),
   runAgent: (id: string, body: { castleId: string; maxSieges?: number }) =>
@@ -551,7 +566,15 @@ export type DryRunResponse = { reply: string; move: "hold" | "open" | "expose" |
 // ── part 2b ──
 
 /** POST /api/agents body. A red teamer's unit needs `zgKey`; `strategy: "custom"` needs `strategyText`. Amounts are tinybar strings. */
-export type CreateUnitBody = CreateAgentBody & { strategyText?: string; zgKey?: string };
+export type CreateUnitBody = CreateAgentBody & {
+  strategyText?: string;
+  zgKey?: string;
+  /** "manual": an operator account for typing ops by hand (budget + callsign only, no 0G key, cannot DEPLOY). */
+  kind?: "unit" | "manual";
+};
+
+/** GET /api/agents?mine=1 rows: the unit plus (mine only) its account balance, tinybar string. */
+export type MyUnit = RaiderAgent & { balance?: Amount };
 
 export type UnitDraft = {
   id: string;

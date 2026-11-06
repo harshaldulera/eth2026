@@ -11,7 +11,7 @@ import { PixelButton } from "@/components/pixel/button";
  *
  * @example <OperatorKeyDialog open operatorKey={rk} onSaved={() => setOpen(false)} />
  */
-export function OperatorKeyDialog({ open, operatorKey, onSaved }: { open: boolean; operatorKey: string; onSaved: () => void }) {
+export function OperatorKeyDialog({ open, operatorKey, onSaved, body }: { open: boolean; operatorKey: string; onSaved: () => void; body?: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -32,6 +32,7 @@ export function OperatorKeyDialog({ open, operatorKey, onSaved }: { open: boolea
       open={open}
       // Esc and the backdrop do nothing: the key is shown once, leaving takes a deliberate click.
       onClose={() => undefined}
+      closable={false}
       title={`${UNITS.keyTitle} · ${UNITS.keyShownOnce}`}
       tone="warn"
       actions={
@@ -45,7 +46,7 @@ export function OperatorKeyDialog({ open, operatorKey, onSaved }: { open: boolea
         </>
       }
     >
-      <p className="text-sm leading-relaxed text-ink-dim">{UNITS.keyBody}</p>
+      <p className="text-sm leading-relaxed text-ink-dim">{body ?? UNITS.keyBody}</p>
       <p data-testid="operator-key" className="mt-3 border-2 border-warn bg-bg px-2.5 py-2 font-term text-[20px] leading-tight break-all text-ink select-all">
         {operatorKey}
       </p>

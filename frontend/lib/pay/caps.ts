@@ -1,7 +1,8 @@
-import { and, asc, eq, like, ne, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, like, ne, sql } from "drizzle-orm";
 import type { Amount, CapReason, CapResult } from "@/lib/types";
 import { db, schema } from "@/lib/db";
 import { newId, nowIso, utcDay } from "@/lib/util/ids";
+import { MANUAL_STRATEGY } from "@/lib/agents/manual";
 
 /**
  * Raider-agent spend caps. Everything that decides "may this agent pay?" runs inside ONE
@@ -12,6 +13,9 @@ import { newId, nowIso, utcDay } from "@/lib/util/ids";
  *   per_castle -> that castle's cap for this agent, daily -> today's cap,
  *   budget -> topUpAgent already raised the budget, stop_rule -> the loss counter is reset.
  * An allowance row is marked `consumed` once spend has eaten all of it.
+ *
+ * Operator accounts (strategy "manual", lib/agents/manual) have none of those caps: they spend what
+ * they hold (deposits + breach payouts - spent - reserved), refused as `budget` when short.
  */
 
 const s = schema.agentSpend;
@@ -68,6 +72,22 @@ export async function checkCaps(agentId: string, castleId: string, amount: Amoun
       .orderBy(asc(ap.resolvedAt))
       .all();
     const total = (rows: ApprovalRow[]) => rows.reduce((t, r) => t + r.amountTinybar, 0);
+
+    if (a.strategy === MANUAL_STRATEGY) {
+      // An operator account (typed ops only): no per-vault / daily cap and no stop rule. It may spend
+      // what it holds: every deposit (budget) plus every breach payout released into it, minus what it
+      // already paid and what is in flight. So winnings are spendable and a short account is refused.
+      const payouts =
+        tx
+          .select({ v: sql<number>`coalesce(sum(${schema.sieges.releaseAmountTinybar}), 0)` })
+          .from(schema.sieges)
+          .where(and(eq(schema.sieges.agentId, agentId), isNotNull(schema.sieges.releaseTx)))
+          .get()?.v ?? 0;
+      if (a.spentTinybar + reserved + amt > a.budgetTinybar + payouts) return refuse("budget");
+      const reservationId = newId("spend");
+      tx.insert(s).values({ id: reservationId, agentId, castleId, amountTinybar: amt, day, state: "reserved", createdAt: nowIso() }).run();
+      return { ok: true, reservationId };
+    }
 
     if (castleSpent + amt > a.perCastleCapTinybar + total(castleAllow)) return refuse("per_castle");
     if (daySpent + amt > a.dailyCapTinybar + total(dayAllow)) return refuse("daily");

@@ -87,10 +87,14 @@ export function forgetOperatorKey(agentId: string): void {
   write(OPERATOR_KEYS_STORAGE, m);
 }
 
-/** Headers for a call about one unit: its key, else none (the owner cookie may still apply). */
+/**
+ * Headers for a call about one unit: its key. Not promoted yet (the deposit landed after the red teamer
+ * closed the panel, so the key still sits under its draft id): every key in this browser, which the
+ * server matches by hash. None at all: no header (the owner cookie may still apply).
+ */
 export function unitHeaders(agentId: string): Record<string, string> {
   const k = operatorKeyFor(agentId);
-  return k ? { [OPERATOR_KEY_HEADER]: k } : {};
+  return k ? { [OPERATOR_KEY_HEADER]: k } : allUnitHeaders();
 }
 
 /** Headers for list calls (agents?mine, approvals): every key in this browser, comma-separated. */

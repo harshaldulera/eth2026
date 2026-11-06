@@ -6,6 +6,7 @@ import { accountBalance } from "@/lib/chain/mirror";
 import { isStubRef, txUrl } from "@/lib/chain/hashscan";
 import { revokeZg } from "@/lib/zg/connect";
 import { agentCredentials, agentRow, stubTxRef } from "./accounts";
+import { isManualUnit } from "./manual";
 
 /**
  * Unit money out (onboarding 2b): the unit's balance, and WITHDRAW back to the wallet that funded it.
@@ -134,8 +135,9 @@ export async function withdrawUnit(agentId: string): Promise<WithdrawResult> {
     db().update(schema.raiderAgents).set({ status: r.status }).where(eq(schema.raiderAgents.id, agentId)).run();
     return { ok: false, status: 502, error: "withdraw_failed", message: e instanceof Error ? e.message.slice(0, 200) : "transfer failed" };
   }
-  // Nothing left to spend. Stub: the payouts were counted into the balance, so take them out too.
-  const budgetAfter = r.spentTinybar - (isStub() ? stubPayoutsTinybar(agentId) : 0);
+  // Nothing left to spend. Stub (the balance) and operator accounts (lib/pay/caps counts payouts as
+  // spendable) both add the payouts, so take them out too. It can sit below 0; the UI clamps it.
+  const budgetAfter = r.spentTinybar - (isStub() || isManualUnit(r) ? stubPayoutsTinybar(agentId) : 0);
   db().update(schema.raiderAgents).set({ budgetTinybar: budgetAfter }).where(eq(schema.raiderAgents.id, agentId)).run();
   void revokeZg({ mgmtKey: r.zgMgmtKey, keyId: r.zgKeyId }).catch(() => false);
   return { ok: true, withdraw: ref, amount: amount.toString() };

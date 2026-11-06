@@ -24,14 +24,25 @@ export function liveStatus(agent: RaiderAgent, approvals?: ApprovalRequest[]): A
  *
  * @example <AgentStatusPill status={liveStatus(agent)} />
  */
-export function AgentStatusPill({ status, waitingFor, className }: { status: AgentLiveStatus; waitingFor?: string; className?: string }) {
+export function AgentStatusPill({
+  status,
+  waitingFor,
+  stoppedLabel,
+  className,
+}: {
+  status: AgentLiveStatus;
+  waitingFor?: string;
+  /** What `stopped` reads (an operator account is only ever stopped by WITHDRAW: "WITHDRAWN"). */
+  stoppedLabel?: string;
+  className?: string;
+}) {
   switch (status) {
     case "running":
       return <LED kind="live" label={LED_TEXT.running} className={className} />;
     case "waiting":
       return <LED kind="warn" label={LED_TEXT.waitingForOwner(waitingFor)} className={className} />;
     case "stopped":
-      return <LED kind="idle" label={LED_TEXT.stopped} blink={false} className={cn("opacity-80", className)} />;
+      return <LED kind="idle" label={stoppedLabel ?? LED_TEXT.stopped} blink={false} className={cn("opacity-80", className)} />;
     default:
       return <LED kind="idle" label={LED_TEXT.idle} className={cn("text-ink", className)} />;
   }
@@ -56,7 +67,9 @@ export function BudgetBar({ spent, budget, asset = HBAR, className }: { spent: s
  * One cap gauge: `PER-VAULT ▮▮▮▮▯▯▯▯ 1/2 ℏ`. Money-coloured until the cap is reached, then the
  * attack colour (the unit is about to radio its owner).
  */
-export function Gauge({ label, spent, cap, asset = HBAR, className }: { label: string; spent: bigint; cap: bigint; asset?: Asset; className?: string }) {
+export function Gauge({ label, spent, cap: rawCap, asset = HBAR, className }: { label: string; spent: bigint; cap: bigint; asset?: Asset; className?: string }) {
+  // A withdrawn unit's budget can sit below 0 (its payouts were withdrawn too): never show a negative cap.
+  const cap = rawCap > BigInt(0) ? rawCap : BigInt(0);
   const full = cap > BigInt(0) && spent >= cap;
   const s = toNumber(spent.toString(), asset);
   const c = toNumber(cap.toString(), asset);
