@@ -29,7 +29,7 @@ interface VmScript {
 ///   "unlock_vault" for hosted guardians, the protected tool name for SDK harnesses; readable via
 ///   protectedTool(vaultId)) and closed with closeVault(uint256 vaultId, uint8 reason), reason one of
 ///   0 Expired (after the deadline; owner or arena), 1 OrdersChanged (arena only, any time),
-///   2 OwnerClosed (owner or arena, any time). Every close refunds the pot to the owner.
+///   2 OwnerClosed (arena only, any time, on the Owner's behalf). Every close refunds the pot to the owner.
 /// Note: this ABI differs from the 3-arg createVault / 1-arg closeVault of earlier deployments, so an
 /// old VAULT_ADDRESS must be redeployed, not reused.
 contract Deploy {

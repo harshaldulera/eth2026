@@ -360,7 +360,7 @@ async function main() {
   record("c", `WOODEN_BREAK: the guardian called ${wooden.protectedTool} on turn ${c.siege.turn}${tool ? ` (request ${tool})` : ""}`);
   const cs = await waitSettled(c.siegeId, `release for ${c.siegeId}`);
   if (!cs.release) throw new Abort(`siege ${c.siegeId} settled without a release (attempt ${cs.attempt?.txId}).`);
-  record("c", `Verifier signed (EIP-712) and SiegeVault.release paid ${hb(cs.release.amount)} (pot + fee) to the raider`, tx("release (Broken)", cs.release.txId));
+  record("c", `Verifier signed (EIP-712) and SiegeVault.release paid ${hb(cs.release.amount)} (pot + fee) to the raider`, tx("release (Breached)", cs.release.txId));
   raw.break = { castleId: wooden.id, vaultId: wooden.vaultId, siegeId: c.siegeId, receiptTx: c.receiptTx, releaseTx: cs.release.txId, amount: cs.release.amount, transcriptHash: cs.transcriptHash, requestIds: cs.messages.filter((m) => m.requestId).map((m) => m.requestId) };
   // Which guardian actually answered the hold and the break: "0g-stub-…" request ids come from the stub guardian.
   const replyIds = [...bs.messages, ...cs.messages].map((m) => m.requestId).filter((id): id is string => typeof id === "string" && id.length > 0);

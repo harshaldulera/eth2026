@@ -107,6 +107,30 @@ export function chainStateProblems(): string[] {
   return out;
 }
 
+/**
+ * Testnet only: whether the contract at VAULT_ADDRESS checks the Release this app signs. Reads
+ * RELEASE_TYPEHASH and DOMAIN_SEPARATOR from the chain. Empty = OK, or not testnet. The worker
+ * refuses to start on any, so a breach is never signed for a contract that would refuse to pay it.
+ */
+export async function contractProblems(): Promise<string[]> {
+  const e = env();
+  if (e.CHAIN_MODE === "stub") return [];
+  if (!e.VAULT_ADDRESS) return ["VAULT_ADDRESS is not set (required when CHAIN_MODE=testnet)"];
+  const [{ publicClient }, { siegeVaultAbi }, { releaseCompatProblems }] = await Promise.all([import("./evm"), import("./abi/SiegeVault"), import("./releaseSig")]);
+  const vault = e.VAULT_ADDRESS as `0x${string}`;
+  const client = publicClient();
+  try {
+    const [typehash, separator, chainId] = await Promise.all([
+      client.readContract({ address: vault, abi: siegeVaultAbi, functionName: "RELEASE_TYPEHASH" }),
+      client.readContract({ address: vault, abi: siegeVaultAbi, functionName: "DOMAIN_SEPARATOR" }),
+      client.getChainId(),
+    ]);
+    return releaseCompatProblems({ chainId, vault, typehash, domainSeparator: separator });
+  } catch (err) {
+    return [`could not read SiegeVault at ${vault}: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`];
+  }
+}
+
 export type ChainInfo = {
   mode: "stub" | "testnet";
   network: "hedera:testnet";

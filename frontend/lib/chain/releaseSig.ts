@@ -1,4 +1,4 @@
-import { keccak256, toBytes, type Hex } from "viem";
+import { domainSeparator, keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { env } from "@/lib/config/env";
 
@@ -24,6 +24,28 @@ export type ReleaseTypedData = {
   primaryType: "Release";
   message: { vaultId: bigint; operator: `0x${string}`; transcriptHash: `0x${string}`; opId: `0x${string}` };
 };
+
+/** The Release type string the contract hashes into RELEASE_TYPEHASH, from RELEASE_TYPES. */
+export function releaseTypeString(): string {
+  return `Release(${RELEASE_TYPES.Release.map((f) => `${f.type} ${f.name}`).join(",")})`;
+}
+
+/**
+ * Whether a deployed SiegeVault checks the Release this app signs. Pass what the contract returns
+ * for RELEASE_TYPEHASH and DOMAIN_SEPARATOR. A contract from before the game-vocabulary rename has
+ * the same function selectors (only names changed), so it would accept every other call and refuse
+ * only the payouts, with BadSignature: this is the check that catches it. Empty = compatible.
+ */
+export function releaseCompatProblems(p: { chainId: number; vault: `0x${string}`; typehash: Hex; domainSeparator: Hex }): string[] {
+  const out: string[] = [];
+  const wantType = keccak256(toBytes(releaseTypeString()));
+  if (p.typehash.toLowerCase() !== wantType.toLowerCase())
+    out.push(`SiegeVault ${p.vault} hashes a different Release type than this app signs (${releaseTypeString()}): an older deployment? Redeploy it (contracts/README.md).`);
+  const domain = releaseTypedData({ chainId: p.chainId, vault: p.vault, vaultId: BigInt(0), operator: p.vault, transcriptHash: `0x${"00".repeat(32)}`, opId: "" }).domain;
+  if (p.domainSeparator.toLowerCase() !== domainSeparator({ domain }).toLowerCase())
+    out.push(`SiegeVault ${p.vault} has a different EIP-712 domain than this app signs (SiegeVault v${domain.version}, chain ${p.chainId}).`);
+  return out;
+}
 
 /** Anvil key #1. Stub mode ONLY, when VERIFIER_KEY is unset. Never fund its address. */
 export const DEV_VERIFIER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;

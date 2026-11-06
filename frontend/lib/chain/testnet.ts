@@ -31,7 +31,7 @@ import { enqueueAudit } from "./outbox";
  * before its receipt is awaited (write-ahead), so a receipt timeout, a relay hiccup or a worker crash
  * is reconciled from the chain on the next try instead of re-sending into Replay/BadStatus.
  * Reconciliation order: (1) the pending tx's receipt, (2) on Replay/BadStatus/receipt_timeout:
- * SiegeVault.opConsumed(id) and the AttemptRecorded/Broken log for that siege id (mirror node).
+ * SiegeVault.opConsumed(id) and the AttemptRecorded/Breached log for that op id (mirror node).
  */
 
 const evmTx = (hash: string): TxRef => ({ txId: hash, hashscanUrl: txUrl(hash) });

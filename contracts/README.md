@@ -52,7 +52,15 @@ cast call $VAULT "protectedTool(uint256)(string)" $VAULT_ID --rpc-url https://te
 
 These signatures changed from the earlier `createVault(uint256,uint64,address)` / `closeVault(uint256)`. A vault contract deployed before this change has the old ABI, so redeploy it and update `VAULT_ADDRESS`.
 
-The game-vocabulary version (owner, operator, opId, `Breached`, `ownerBalance`, `opConsumed`, EIP-712 version 2) changed function, event and getter names and the signed `Release` type. A contract deployed before it cannot be called by this app: redeploy, update `VAULT_ADDRESS`, and close (refund) any vault still open on the old contract first.
+The game-vocabulary version (owner, operator, opId, `Breached`, `ownerBalance`, `opConsumed`, EIP-712 version 2) renamed parameters, getters and the `Broken` event, and changed the signed `Release` type. Function selectors did not change (only names did), so the app can still *call* a contract deployed before it: holds would settle, and every breach payout would revert `BadSignature`. The worker refuses to start against such a contract (`contractProblems()` in `lib/chain` compares its `RELEASE_TYPEHASH` and `DOMAIN_SEPARATOR` with what the app signs).
+
+**Redeploying for this version**, in order:
+
+1. With the old `VAULT_ADDRESS` still set, let the worker settle or void every in-flight op, then close each open vault (`POST /api/castles/<id>/close`, or `closeVault` with reason 2 from the arena key) so its pot is refunded on the old contract.
+2. Deploy (below) and set the new `VAULT_ADDRESS` in `frontend/.env.local`.
+3. `npm run seed`: it notices every vault tagged with the old address and opens a new one (an SDK vault goes back to `created` until its harness connects again).
+4. Verify the new contract on Sourcify (exact match), so HashScan decodes `Breached`, `ownerCut` and the rest.
+5. Update the root README: the `SiegeVault` address and its Sourcify note, the proof links for `recordAttempt` and `release` (re-run the golden run), and the HashScan contract tab in `docs/demo-script.md`.
 
 Always pass an explicit gas limit on Hedera. Pay Operators at addresses that already have a Hedera account, such as the agent accounts the app creates. Paying an EVM address that has no account yet relies on a lazy-create (a hollow account), which costs extra gas. This path has not been tested on testnet, so give `release` plenty of gas (for example 1,000,000).
 

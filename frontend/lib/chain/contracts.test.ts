@@ -37,6 +37,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { siegeVaultAbi, siegeVaultBytecode } from "./abi/SiegeVault";
+import { releaseCompatProblems, releaseTypedData } from "./releaseSig";
 
 type Address = `0x${string}`;
 
@@ -590,6 +591,37 @@ describe("release", () => {
     v = await setup();
     await v.createVault(FEE, DAY, A.owner, POT);
     await v.recordAttempt(1n, "held-1", A.operator2, FEE); // pot += 150
+  });
+
+  it("the app's own releaseTypedData, signed by the verifier, is paid by the compiled contract", async () => {
+    // lib/chain/releaseSig.ts exactly as the worker signs it: no hand-written copy of the type.
+    const td = releaseTypedData({ chainId: CHAIN_ID, vault: v.address, vaultId: 1n, operator: A.operator, transcriptHash: T, opId: "siege_app_signed" });
+    const sig = await acct.verifier.signTypedData(td);
+    const pot = (await v.getVault(1n)).pot;
+    const before = await v.c.balance(A.operator);
+    const { events } = await v.release(1n, A.operator, T, "siege_app_signed", sig, FEE);
+    expect(events[0]).toMatchObject({ eventName: "Breached", args: { opId: sid("siege_app_signed"), operator: A.operator, amount: pot + FEE } });
+    expect((await v.c.balance(A.operator)) - before).toBe(pot + FEE);
+  });
+
+  it("the worker's startup check: this contract matches what the app signs; an older deployment does not", async () => {
+    const typehash = await v.read<Hex>("RELEASE_TYPEHASH");
+    const separator = await v.read<Hex>("DOMAIN_SEPARATOR");
+    expect(releaseCompatProblems({ chainId: CHAIN_ID, vault: v.address, typehash, domainSeparator: separator })).toEqual([]);
+    // What a SiegeVault from before the rename returns: the old Release type under domain version 1.
+    const oldType = keccak256(toBytes("Release(uint256 vaultId,address raider,bytes32 transcriptHash,bytes32 siegeId)"));
+    const oldDomain = keccak256(
+      encodeAbiParameters(
+        [{ type: "bytes32" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "address" }],
+        [keccak256(toBytes("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")), keccak256(toBytes("SiegeVault")), keccak256(toBytes("1")), BigInt(CHAIN_ID), v.address],
+      ),
+    );
+    const old = releaseCompatProblems({ chainId: CHAIN_ID, vault: v.address, typehash: oldType, domainSeparator: oldDomain });
+    expect(old).toHaveLength(2);
+    expect(old[0]).toMatch(/different Release type .*Redeploy/);
+    expect(old[1]).toMatch(/different EIP-712 domain/);
+    // Another chain id is a domain mismatch too.
+    expect(releaseCompatProblems({ chainId: 1, vault: v.address, typehash, domainSeparator: separator })).toHaveLength(1);
   });
 
   it("pays the operator pot + fee exactly with a valid verifier signature", async () => {

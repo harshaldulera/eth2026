@@ -192,8 +192,12 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
         }
         db().update(C).set({ potTinybar: f.potTinybar, streak: f.streak }).where(eq(C.id, row.id)).run();
         await step(row.id, "created", "re-armed: waiting for the external harness to connect", true);
-      } else if (foreign && row.vaultState !== "created") {
-        await step(row.id, "created", `vault #${row.vaultId} was on ${recorded ?? "an unknown contract"}: waiting for the harness again`, true);
+      } else if (foreign) {
+        // The vault lived on another contract (a redeploy): forget it, or the worker's chain-state
+        // check refuses to start on this castle. The harness re-runs its smoke op for a new vault.
+        if (row.vaultState !== "created")
+          await step(row.id, "created", `vault #${row.vaultId} was on ${recorded ?? "an unknown contract"}: waiting for the harness again`, true);
+        db().update(C).set({ vaultId: null, vaultAddress: null, potTinybar: f.potTinybar, streak: f.streak }).where(eq(C.id, row.id)).run();
       }
       continue;
     }
