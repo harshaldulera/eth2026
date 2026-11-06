@@ -58,7 +58,7 @@ const VERIFY: Record<string, string> = {
   stub_reply_while_0g: "the reply came from the test guard while the arena runs real models",
   no_proxy_record: "the model proxy has no record of the final reply",
   proxy_record_wrong_castle: "the model record belongs to another vault",
-  proxy_record_wrong_siege_or_turn: "the model record belongs to another op or turn",
+  proxy_record_wrong_siege_or_turn: "the model record is not tagged with this op and turn",
   proxy_saw_no_open_vault: "the model proxy did not see the protected tool being called",
   prompt_hash_mismatch: "the guard's orders changed since the vault was verified",
   mock_response: "the reply came from the offline test model, which cannot pay out",
@@ -79,7 +79,7 @@ export function verifyText(reason?: string): string {
     const s = reason.slice(11);
     return `the op did not end in a breach (${STATUS_WORD[s] ?? s.replace(/_/g, " ")})`;
   }
-  return VERIFY[reason] ?? reason.replace(/_/g, " ");
+  return VERIFY[reason] ?? readable(reason);
 }
 
 /** Whether a void reason has real words (not just a code with underscores replaced). */
@@ -113,7 +113,32 @@ function rawReasonText(code: string | undefined, voice: Voice): string {
     if (by) return `${by} before ${voice === "operator" ? "your" : "this"} op finished`;
   }
   if (code.startsWith("verify:")) return `the breach could not be verified: ${verifyText(code.slice(7))}`;
-  return code.replace(/_/g, " ");
+  return readable(code);
+}
+
+/** The code's own names, as the game says them. */
+const GAME_WORD: Record<string, string> = {
+  castle: "vault",
+  castles: "vaults",
+  siege: "op",
+  sieges: "ops",
+  raider: "operator",
+  raiders: "operators",
+  guardian: "guard",
+  guardians: "guards",
+  castellan: "Owner",
+  broken: "breached",
+  broke: "breached",
+  banished: "lockdown",
+};
+
+/** An unknown code made readable: underscores to spaces, the code's names to the game's words. */
+export function readable(code: string): string {
+  return code
+    .split(/[_:]+/)
+    .filter(Boolean)
+    .map((w) => GAME_WORD[w.toLowerCase()] ?? w)
+    .join(" ");
 }
 
 /** An op that ended on its own (held or lockdown) before it was voided. */
@@ -161,9 +186,17 @@ const LIVE_CLOSED: Record<string, string> = {
  * operator's breach is still being paid out: this op is paused, not voided, so no refund is promised.
  */
 export function voidedToast(s: { free: boolean }, code?: string): string {
-  if (code === "being_broken") return "Another operator's breach on this vault is being paid out. Your op is paused until it settles.";
+  if (code === "being_broken")
+    return s.free
+      ? "Another operator's breach on this vault is being paid out. If it lands, this op ends; if not, you can carry on."
+      : "Another operator's breach on this vault is being paid out. If it lands, this op is voided and your fee refunded; if not, you can carry on.";
   const why = code ? reasonText(LIVE_CLOSED[code] ?? code, "operator") : "this op has ended";
   return `${capitalize(why)}.${s.free ? "" : " Your fee will be refunded."}`;
+}
+
+/** The toast's title for a 409 castle_closed: paused while another breach settles, else void. */
+export function voidedToastTitle(code?: string): "OP PAUSED" | null {
+  return code === "being_broken" ? "OP PAUSED" : null;
 }
 
 const capitalize = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);

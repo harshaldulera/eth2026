@@ -489,11 +489,11 @@ describe("tampering the proof must catch", () => {
       })
       .run();
     const r = await buildReplay(id);
-    expect(r!.turns[0].guardian!.issue).toBe("belongs to another op or turn");
-    expect(check(r, "inference")).toMatchObject({ state: "fail", detail: "turn 1: the model record belongs to another op or turn" });
+    expect(r!.turns[0].guardian!.issue).toBe("is not tagged with this op and turn");
+    expect(check(r, "inference")).toMatchObject({ state: "fail", detail: "turn 1: the model record is not tagged with this op and turn" });
   });
 
-  it("a model record with no op or turn tag is untagged, not someone else's; one for another vault is flagged", async () => {
+  it("a model record with no op or turn tag fails, as the verifier would; one for another vault says so", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     db().run("DELETE FROM swarm_refs");
     const tag = (requestId: string) =>
@@ -508,7 +508,9 @@ describe("tampering the proof must catch", () => {
     rec(own, WOOD);
     let r = await buildReplay(id);
     expect(r!.turns[0].guardian!.record).toBeTruthy();
-    expect(r!.turns[0].guardian!.issue).toBeUndefined();
+    // The verifier refuses to pay on an untagged record (proxy_record_wrong_siege_or_turn): the replay agrees.
+    expect(r!.turns[0].guardian!.issue).toBe("is not tagged with this op and turn");
+    expect(check(r, "inference")!.state).toBe("fail");
     tag("msg_other_vault");
     rec("msg_other_vault", GRANITE);
     r = await buildReplay(id);
@@ -659,17 +661,25 @@ describe("testnet: the mirror node (mocked)", () => {
     expect(r!.live).toBe(true);
   });
 
-  it("the last message still absent long after it was submitted: missing, a failure, and the page stops polling", async () => {
+  it("the last message still absent long after it was submitted: missing, a failure; re-read for a while, then the page stops", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     const rows = await onTestnet(id);
     const end = rows.find((r) => r.type === "siege.end")!;
     mirror.delete(end.seq!);
-    db().update(schema.auditLog).set({ submittedAt: new Date(Date.now() - 3_600_000).toISOString() }).where(eq(schema.auditLog.id, end.id)).run();
-    const r = await buildReplay(id);
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    db().update(schema.auditLog).set({ submittedAt: hourAgo }).where(eq(schema.auditLog.id, end.id)).run();
+    let r = await buildReplay(id);
     expect(r!.hcs.entries.find((e) => e.type === "siege.end")!.mirror).toBe("missing");
     expect(check(r, "hcs-end")!.state).toBe("fail");
     expect(check(r, "hcs-end")!.detail).toMatch(/not on the topic$/);
     expect(check(r, "hcs-all")!.state).toBe("fail");
+    // The op's other messages went out moments ago: keep re-reading, a stalled mirror may catch up.
+    expect(r!.live).toBe(true);
+    // Everything long past: stop polling.
+    db().update(schema.auditLog).set({ submittedAt: hourAgo }).where(eq(schema.auditLog.siegeId, id)).run();
+    db().update(schema.sieges).set({ endedAt: hourAgo }).where(eq(schema.sieges.id, id)).run();
+    r = await buildReplay(id);
+    expect(check(r, "hcs-end")!.state).toBe("fail");
     expect(r!.live).toBe(false);
   });
 
@@ -688,7 +698,9 @@ describe("testnet: the mirror node (mocked)", () => {
   it("mirror node down for an op that ended long ago: nothing claimed, and the page no longer polls or says it is retrying", async () => {
     const id = await free(WOOD, WOODEN_BREAK);
     await onTestnet(id);
-    db().update(schema.sieges).set({ endedAt: new Date(Date.now() - 2 * 3_600_000).toISOString() }).where(eq(schema.sieges.id, id)).run();
+    const longAgo = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    db().update(schema.sieges).set({ endedAt: longAgo }).where(eq(schema.sieges.id, id)).run();
+    db().update(schema.auditLog).set({ submittedAt: longAgo }).where(eq(schema.auditLog.siegeId, id)).run();
     answer = () => new Response("bad gateway", { status: 502 });
     const r = await buildReplay(id);
     expect(r!.hcs.mirror).toBe("unavailable");
@@ -696,6 +708,28 @@ describe("testnet: the mirror node (mocked)", () => {
     expect(check(r, "hcs-end")!.detail).toMatch(/mirror node unreachable$/);
     expect(r!.checks.some((c) => c.state === "fail")).toBe(false);
     expect(r!.live).toBe(false);
+  });
+
+  it("an audit message submitted long after the op ended (outbox backlog) keeps the page retrying an unreachable mirror", async () => {
+    const id = await free(WOOD, WOODEN_BREAK);
+    const rows = await onTestnet(id);
+    const longAgo = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    db().update(schema.sieges).set({ endedAt: longAgo }).where(eq(schema.sieges.id, id)).run();
+    db().update(schema.auditLog).set({ submittedAt: longAgo }).where(eq(schema.auditLog.siegeId, id)).run();
+    const end = rows.find((r) => r.type === "siege.end")!;
+    db().update(schema.auditLog).set({ submittedAt: new Date().toISOString() }).where(eq(schema.auditLog.id, end.id)).run();
+    answer = () => new Response("bad gateway", { status: 502 });
+    const r = await buildReplay(id);
+    expect(check(r, "hcs-end")!.detail).toMatch(/mirror node unreachable, retrying$/);
+    expect(r!.live).toBe(true);
+  });
+
+  it("the payout check names a failed settlement in words, never the code", async () => {
+    const id = await paidSiege(WOOD, "0.0.stub-a");
+    await sayAll(id, MUST_NOT_BREAK);
+    db().update(schema.sieges).set({ chainAttempts: 99, chainError: "siege_not_found" }).where(eq(schema.sieges.id, id)).run();
+    const r = await buildReplay(id);
+    expect(check(r, "payout")).toMatchObject({ state: "fail", detail: "the worker gave up: op not found" });
   });
 
   const BAD_BODIES: [string, () => Response][] = [

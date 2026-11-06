@@ -100,8 +100,6 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   const voided = siege.settlement?.state === "void";
   const ended = ENDED.has(siege.status) || voided;
   const now = Date.now();
-  /** The page keeps re-reading an unreachable mirror only while the op is live or recently ended. */
-  const retrying = !ended || now - Date.parse(siege.endedAt ?? siege.createdAt) < MIRROR_RETRY_MS;
 
   // ── Transcript: Swarm first, the database only when there is no reference ─────────────────────
   const ref = swarmRefFor(siegeId);
@@ -131,6 +129,13 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
   // Each row is read back from the topic it was written to (a siege can straddle a rotation).
   const byTopic = new Map<string, number[]>();
   for (const r of rows) if (r.state === "submitted" && r.seq != null && isRealTopic(r.topicId)) byTopic.set(r.topicId, [...(byTopic.get(r.topicId) ?? []), r.seq]);
+  // The page keeps re-reading the mirror only while the op is live, or recently ended, or an audit
+  // message was submitted recently (the outbox can submit long after the op ended).
+  const lastActivity = Math.max(
+    Date.parse(siege.endedAt ?? siege.createdAt) || 0,
+    ...rows.map((r) => Date.parse(r.submittedAt ?? r.at) || 0),
+  );
+  const retrying = !ended || now - lastActivity < MIRROR_RETRY_MS;
   const reads = new Map<string, MirrorRead>();
   if (env().CHAIN_MODE === "testnet") await Promise.all([...byTopic].map(async ([t, seqs]) => reads.set(t, await mirrorMessages(t, seqs))));
   const asked = [...byTopic.values()].reduce((n, s) => n + new Set(s).size, 0);
@@ -208,8 +213,10 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
         ? undefined
         : rec.castleId !== castle.id
           ? "belongs to another vault"
-          : (rec.siegeId != null && rec.siegeId !== siegeId) || (rec.turn != null && rec.turn !== turn)
-            ? "belongs to another op or turn"
+          : // As strict as the verifier (lib/siege/verifier.ts): an untagged record fails too, or the
+            // replay would pass a record the verifier refuses to pay on.
+            rec.siegeId !== siegeId || rec.turn !== turn
+            ? "is not tagged with this op and turn"
             : undefined;
       const auditIssue = hcs?.requestId && g.requestId && hcs.requestId !== g.requestId ? "differs from the request id in the audit log" : undefined;
       out.guardian = {
@@ -379,7 +386,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
           : tx
             ? tx.stub ? "stub transaction (no network)" : tx.txId
             : siege.settlement?.state === "failed"
-              ? `the worker gave up: ${siege.settlement.reason ?? "unknown error"}`
+              ? `the worker gave up: ${reasonText(siege.settlement.reason, "public")}`
               : "waiting for the worker",
       href: voided ? (refund?.tx && !refund.tx.stub ? refund.tx.hashscanUrl : undefined) : tx && !tx.stub ? tx.hashscanUrl || txUrl(tx.txId) : undefined,
     });
@@ -398,6 +405,14 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
     voided,
     // Keep polling while anything can still change: the siege, its chain result, a refund, the audit
     // outbox, a mirror node that is behind, or reads that failed and should be retried.
-    live: !ended || awaitingChain || refundDue || mirrorBehind || (failedReads > 0 && retrying) || entries.some((e) => e.state === "pending"),
+    // A row called missing keeps the page re-reading for a while too: a stalled mirror that catches
+    // up turns it back to confirmed without a reload.
+    live:
+      !ended ||
+      awaitingChain ||
+      refundDue ||
+      mirrorBehind ||
+      ((failedReads > 0 || entries.some((e) => e.mirror === "missing")) && retrying) ||
+      entries.some((e) => e.state === "pending"),
   };
 }

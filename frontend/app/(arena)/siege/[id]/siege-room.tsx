@@ -15,7 +15,7 @@ import { useCalmMotion } from "@/lib/hooks/usePrefs";
 import { useFork } from "@/lib/hooks/useFork";
 import { lastOf, parseAttempt } from "@/lib/money/events";
 import { formatAmount, toUnits } from "@/lib/money/format";
-import { reasonText, voidLine, voidedToast } from "@/lib/siege/text";
+import { reasonText, voidLine, voidedToast, voidedToastTitle } from "@/lib/siege/text";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { toBeats } from "@/lib/scene/beats";
 import { opMoney } from "@/lib/scene/money";
@@ -251,7 +251,7 @@ function Room({
           e.code === "no_turns_left"
             ? TOASTS.noMessagesLeft.title
             : e.code === "castle_closed"
-              ? TOASTS.opVoid.title
+              ? (voidedToastTitle((e.body as { reason?: string } | null)?.reason) ?? TOASTS.opVoid.title)
               : e.code === "not_guarding"
                 ? `${describeError(e)}${siege.free ? "" : " Your fee will be refunded."}`
                 : "OP OVER",

@@ -4,7 +4,7 @@ import path from "node:path";
 import { closeVoidReason } from "@/lib/chain/settle";
 import { DORMANT_VOID_REASON } from "@/lib/vault/state";
 import { VAULT_CLOSE_REASONS } from "@/lib/vault/port";
-import { isKnownReason, reasonText, refundText, verifyText, voidHeadline, voidLine, voidedToast } from "./text";
+import { isKnownReason, readable, reasonText, refundText, verifyText, voidHeadline, voidLine, voidedToast, voidedToastTitle } from "./text";
 
 /** The code's own names, which must never reach the screen (lib/vocab). */
 const RETIRED = /\b(castles?|sieges?|raiders?|castellans?|guardians?|broke|broken|banish\w*)\b/i;
@@ -113,6 +113,18 @@ describe("void reasons", () => {
   });
 });
 
+describe("unknown codes", () => {
+  it("are readable and never show the code's own names", () => {
+    expect(readable("siege_not_found")).toBe("op not found");
+    expect(readable("no_castle")).toBe("no vault");
+    expect(readable("guardian_timeout")).toBe("guard timeout");
+    for (const c of ["siege_not_found", "no_castle", "bad_status", "castle_not_open_for_raider", "broken_banished"]) {
+      expect(reasonText(c, "public"), c).not.toMatch(RETIRED);
+      expect(reasonText(c, "public"), c).not.toMatch(/_/);
+    }
+  });
+});
+
 describe("verifier reasons", () => {
   it("every reason the verifier can return has words", () => {
     const v = src("lib/siege/verifier.ts");
@@ -188,8 +200,13 @@ describe("refund and headline text", () => {
     }
     expect(voidedToast({ free: false }, "broken")).toBe("Another operator breached this vault before your op finished. Your fee will be refunded.");
     expect(voidedToast({ free: false }, "closed")).toBe("The vault closed before your op finished. Your fee will be refunded.");
-    expect(voidedToast({ free: false }, "being_broken")).toBe("Another operator's breach on this vault is being paid out. Your op is paused until it settles.");
-    expect(voidedToast({ free: false }, "being_broken")).not.toMatch(/refund/i);
+    // Not voided yet: paused, under its own title, with the outcome either way said plainly.
+    expect(voidedToastTitle("being_broken")).toBe("OP PAUSED");
+    for (const code of castleClosedValues().filter((c) => c !== "being_broken")) expect(voidedToastTitle(code), code).toBeNull();
+    expect(voidedToast({ free: false }, "being_broken")).toBe(
+      "Another operator's breach on this vault is being paid out. If it lands, this op is voided and your fee refunded; if not, you can carry on.",
+    );
+    expect(voidedToast({ free: true }, "being_broken")).not.toMatch(/fee|refund/i);
   });
 
   it("the Op room toast only promises a refund on a paid op, and gives the real reason", () => {
