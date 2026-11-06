@@ -7,6 +7,9 @@ import { Sprite } from "@/components/pixel/sprite";
 import { mmss } from "@/components/money/waiting-for-owner";
 import { cn } from "@/lib/utils";
 import { AgentStatusPill, Gauge, LossLeds, liveStatus, unitGauges } from "./agent-bits";
+import { FundedTag, hbarShort, zgKeyRejected } from "./unit-funds";
+import { ZgCredits } from "@/components/money/zg-credits";
+import { UNITS } from "@/lib/vocab";
 
 export type UnitCardProps = {
   agent: RaiderAgent;
@@ -65,6 +68,16 @@ export function UnitCard({ agent, detail: given, pending, selected, onSelect, cl
           <AgentStatusPill status={status} waitingFor={wait} className="mt-1.5 whitespace-normal [&>span:last-child]:leading-tight" />
         </span>
       </span>
+      <span className="pointer-events-none relative flex flex-wrap items-center gap-x-2 gap-y-1">
+        <FundedTag agent={a} />
+        {detail?.balance !== undefined ? (
+          <span className="font-ui text-[10px] tracking-[0.08em] text-money uppercase tabular">
+            {UNITS.balance} {hbarShort(detail.balance)}
+          </span>
+        ) : null}
+        {zgKeyRejected(approvals, a.id) ? <span className="font-ui text-[10px] tracking-[0.08em] text-threat uppercase">{UNITS.keyRejected}</span> : null}
+      </span>
+      {a.zg?.connected ? <ZgCredits agentId={a.id} className="pointer-events-none relative text-[10px]" /> : null}
       <div className="pointer-events-none relative flex flex-col gap-1.5">
         <Gauge label="Per-vault" spent={g.perVault.spent} cap={g.perVault.cap} />
         <Gauge label="Daily" spent={g.daily.spent} cap={g.daily.cap} />

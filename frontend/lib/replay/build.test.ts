@@ -38,12 +38,18 @@ async function call<T>(method: "GET" | "POST", p: string, body?: unknown, header
   const res = await f(`${BASE}${p}`, { method, headers: { "content-type": "application/json", ...headers }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   return { status: res.status, data: (await res.json().catch(() => null)) as T };
 }
+// Each op's turn token (POST /api/siege/start returns it; /message requires it), kept per siege id.
+const turnTokens = new Map<string, string>();
 const paidSiege = async (castleId: string, raider: string) => {
-  const r = await call<{ siegeId: string }>("POST", "/api/siege/start", { castleId }, { [STUB_PAYMENT_HEADER]: raider });
+  const r = await call<{ siegeId: string; turnToken?: string }>("POST", "/api/siege/start", { castleId }, { [STUB_PAYMENT_HEADER]: raider });
   expect(r.status).toBe(200);
+  if (r.data.turnToken) turnTokens.set(r.data.siegeId, r.data.turnToken);
   return r.data.siegeId;
 };
-const say = (id: string, text: string) => call<{ siege: Siege; error?: string }>("POST", `/api/siege/${id}/message`, { text });
+const say = (id: string, text: string) => {
+  const token = turnTokens.get(id);
+  return call<{ siege: Siege; error?: string }>("POST", `/api/siege/${id}/message`, { text }, token ? { "x-siege-turn-token": token } : {});
+};
 async function sayAll(id: string, lines: readonly string[]) {
   for (const t of lines) {
     const r = await say(id, t);

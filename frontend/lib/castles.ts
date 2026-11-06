@@ -2,6 +2,7 @@ import { and, desc, asc, eq, gte, isNull, lt, ne, type SQL } from "drizzle-orm";
 import { db, schema, type DB } from "@/lib/db";
 import { MAX_CHAIN_ATTEMPTS } from "@/lib/db/schema";
 import { env } from "@/lib/config/env";
+import { sdkStatusOf } from "@/lib/guard/lease";
 import type { Asset, Castle, CastleFilter } from "@/lib/types";
 
 /**
@@ -57,7 +58,27 @@ export function toCastle(row: CastleRow): Castle {
   if (row.vaultStateReason) c.vaultStateReason = row.vaultStateReason;
   if (row.lastSeenAt) c.lastSeenAt = row.lastSeenAt;
   if (row.portraitUrl) c.portraitUrl = row.portraitUrl;
+  // Onboarding: only cheap, public fields. Never orders, tool descriptions/results, or any key.
+  if (row.published) c.published = true;
+  if (row.blurb) c.blurb = row.blurb;
+  const toolNames = toolNamesOf(row.tools);
+  if (toolNames.length) c.toolNames = toolNames;
+  if (row.zgApiKey || row.zgMgmtKey) c.zg = { connected: true, kind: row.zgMgmtKey ? "mk" : "sk" };
+  // Part 2a: the plug-in strip (lease liveness, self-check, smoke op). SDK castles only.
+  if (row.transport === "sdk") c.sdk = sdkStatusOf(row);
   return c;
+}
+
+/** Tool names from a castles.tools JSON column (`[{name, …}]`); [] when absent or malformed. */
+export function toolNamesOf(toolsJson: string | null | undefined): string[] {
+  if (!toolsJson) return [];
+  try {
+    const parsed: unknown = JSON.parse(toolsJson);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((t) => (t && typeof t === "object" && typeof (t as { name?: unknown }).name === "string" ? [(t as { name: string }).name] : []));
+  } catch {
+    return [];
+  }
 }
 
 /** Raw row incl. secret orders. Server only — never return this from a route. */

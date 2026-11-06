@@ -22,7 +22,12 @@ export function reconcile(now = Date.now()): ReconcileResult {
 
   // Castles: all of them (a handful). Expired ones are dropped by the drainer.
   const castleRows = db().select().from(schema.castles).all();
-  for (const row of castleRows) if (enqueue({ kind: "vault", data: toCastle(row) }).queued) out.vaults += 1;
+  for (const row of castleRows) {
+    // A plugged-in vault published from the web but not yet funded: its owner wallet is only claimed, not
+    // proven by a deposit. Listed once the owner's deposit lands (depositTx) or a vault exists on chain.
+    if (row.published && row.transport === "sdk" && !row.depositTx && row.vaultId == null) continue;
+    if (enqueue({ kind: "vault", data: toCastle(row) }).queued) out.vaults += 1;
+  }
 
   // Sieges: live ones, and ones that ended recently.
   const since = new Date(now - RECENT_MS).toISOString();

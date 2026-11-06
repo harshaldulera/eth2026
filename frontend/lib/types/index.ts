@@ -94,6 +94,52 @@ export type Castle = {
   deadline: number;
   createdAt: string;
   portraitUrl?: string;
+
+  // ─── Onboarding (plans/siege-onboarding-plan.md). Never keys, orders or tool results. ───
+  /** Owner-published guard (POST /api/castles). Absent = fixture. */
+  published?: boolean;
+  /** Public one-liner from the publish form. */
+  blurb?: string;
+  /** Names of the guard's tools (the protected one included); descriptions/results stay server-side. */
+  toolNames?: string[];
+  /** The owner's own 0G connection. `balance` only with an mk- key (filled by the detail route). */
+  zg?: ZgStatus;
+  /** SDK castles: plug-in lifecycle strip (filled by lib/guard, part 2a). */
+  sdk?: SdkStatus;
+  /** Owner earnings (filled by GET /api/castles/[id], part 1). */
+  earnings?: CastleEarnings;
+};
+
+/** A guard's or unit's 0G connection as the client sees it (never the key itself). */
+export type ZgStatus = {
+  connected: boolean;
+  /** mk- = management key (balance visible, we minted an sk- for this); sk- = inference key only. */
+  kind?: "mk" | "sk";
+  /** Credits left, as the router reports them (mk- only). */
+  balance?: string;
+  /** Usage billed to this key through our proxy (proxy_records.billed_to). */
+  calls?: number;
+  costUsdMicro?: string;
+};
+
+export type SdkStatus = {
+  /** A harness holds the lease and polled within the dormant window. */
+  leaseLive: boolean;
+  selfCheckAt?: string;
+  smoke?: { ok: boolean; at: string; reason?: string };
+  /** The self-check pinned the system-prompt hash (castles.pinned_prompt_hash set). */
+  promptPinned: boolean;
+  /** Smoke op progress: turns held so far (0–3) once the self-check passed; 3 when the smoke op passed (part 2a). */
+  smokeHeld?: number;
+};
+
+export type CastleEarnings = {
+  /** Held ops whose fee split paid the owner. */
+  heldOps: number;
+  /** Owner's cut earned on chain so far (smallest unit). */
+  ownerCut: Amount;
+  /** Pot right now (smallest unit). */
+  potNow: Amount;
 };
 
 // ─── Sieges ─────────────────────────────────────────────────────────────────
@@ -218,7 +264,8 @@ export type GateResult =
   | { ok: true; receipt: Omit<PaidReceipt, "siegeId">; headers: Record<string, string> }
   | { ok: false; status: 402 | 400 | 502; body: unknown; headers: Record<string, string> };
 
-export type CapReason = "per_castle" | "daily" | "budget" | "stop_rule" | "stopped";
+/** `zg_key`: the unit's own 0G key was rejected (onboarding 2b); the unit pauses until its operator decides. */
+export type CapReason = "per_castle" | "daily" | "budget" | "stop_rule" | "stopped" | "zg_key";
 
 export type CapResult =
   | { ok: true; reservationId: string }
@@ -245,6 +292,10 @@ export type ApprovalRequest = {
   resolvedAt?: string;
   /** Top-up transfer on approve (owner → agent account). */
   topUp?: TxRef;
+  /** Operator-funded `budget` asks: the deposit to pay (memo transfer); the request stays pending until it lands. */
+  deposit?: { intentId: string; to: string; memo: string; amount: Amount; expiresAt: string };
+  /** Who funds the unit: on an operator-funded unit a cap APPROVE only raises the cap (no HBAR moves). */
+  fundedBy?: "arena" | "operator";
 };
 
 export type RaiderAgentStatus = "idle" | "running" | "paused" | "stopped";
@@ -265,6 +316,16 @@ export type RaiderAgent = {
   consecutiveLosses: number;
   status: RaiderAgentStatus;
   createdAt: string;
+
+  // ─── Onboarding (plans/siege-onboarding-plan.md). Never keys. ───
+  /** Who funded the unit's account: the arena (seed/demo/owner cookie) or its red teamer's deposit. */
+  fundedBy?: "arena" | "operator";
+  /** The unit is controlled by an `rk_` operator key (operator-funded units). */
+  hasOperatorKey?: boolean;
+  /** Custom strategy prompt. NOT filled by toAgent (public list); routes add it for the unit's operator/owner. */
+  strategyText?: string;
+  /** The red teamer's own 0G connection (never the key). */
+  zg?: ZgStatus;
 };
 
 // ─── Events ─────────────────────────────────────────────────────────────────

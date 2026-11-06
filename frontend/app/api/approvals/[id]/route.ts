@@ -1,17 +1,31 @@
 import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { db, schema } from "@/lib/db";
 import { decideApproval } from "@/lib/pay";
-import { err, errorMessage, isOwner, json, readBody } from "../../_lib/http";
+import { err, errorMessage, isOwner, json, readBody, unitAccess } from "../../_lib/http";
 
 /**
- * POST /api/approvals/[id] { decision } — the owner's call from the phone. Needs the httpOnly
- * siege_owner cookie (POST /api/owner). Approve = on-chain top-up + agent resumes; deny = agent stops.
+ * POST /api/approvals/[id] { decision } — the call from the phone. Needs the httpOnly siege_owner cookie
+ * (POST /api/owner) OR, for a red teamer's own unit, that unit's operator key (x-siege-operator-key).
+ * Approve = on-chain top-up + agent resumes (arena-funded units). Operator-funded units: a cap ask just
+ * raises the cap; a `budget` ask answers with a top-up `deposit` and stays pending until it lands.
+ * Deny = agent stops.
  */
 
 const Body = z.object({ decision: z.enum(["approved", "denied"]) });
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  if (!isOwner(req)) return err(401, "owner_key_required");
   const { id } = await ctx.params;
+  if (!isOwner(req)) {
+    const row = db()
+      .select({ operatorKeyHash: schema.raiderAgents.operatorKeyHash })
+      .from(schema.approvalRequests)
+      .innerJoin(schema.raiderAgents, eq(schema.raiderAgents.id, schema.approvalRequests.agentId))
+      .where(eq(schema.approvalRequests.id, id))
+      .get();
+    // Unknown approvals look the same as someone else's: no probing which ids exist.
+    if (!row || !unitAccess(req, row)) return err(401, "owner_key_required");
+  }
   const body = await readBody(req, Body);
   if (!body.ok) return body.res;
   try {

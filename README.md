@@ -143,6 +143,9 @@ Avoid these claims:
 - "The contract enforces free-siege rules." It enforces that a release carries a real fee, and the worker refuses free sieges.
 - "The guardian runs on 0G" for the provisional testnet links. Those used the stub guardian; 0G answers only with `GUARDIAN_MODE=0g` and a 0G key.
 - "The vault opens only if the guardian really fires the tool." It opens only if **our verifier** confirms the protected-tool call and signs.
+- "Owners hold their own vault." They do not: the arena fronts and custodies the pots (the SiegeVault contract only accepts the arena operator's `createVault`), and pays them out on a verified break or a close.
+- "Your keys never leave you." Unit keys (the unit's Hedera private key) and 0G keys are held **server-side**, in the app's database. They are never returned by any API, log, event, Arkiv entity or HCS message, but we hold them.
+- "Decentralised verification." The verifier and the inference proxy that records each guard reply are ours.
 
 ## Arkiv track
 
@@ -308,6 +311,18 @@ Your guardian, proxy, transport and verifier code merged as written, apart from 
 /plugin install native-services-js     # x402-payments, hedera-consensus-service, hedera-token-service
 /plugin install hackathon-helper       # validate-submission before judging
 ```
+
+## Onboarding: publish a guard, plug in an agent, run a unit, attack from your own agent
+
+Five ways in, all against the same arena. Full reference: [docs/API.md](docs/API.md), or `/docs` in the app. Stub mode needs no accounts: `CHAIN_MODE=stub ARKIV_MODE=stub GUARDIAN_MODE=stub`.
+
+1. **J1, publish a guard.** `/publish`, HOSTED: name, blurb, voice, secret orders, 1 to 8 tools (one protected), connect your own 0G key (pc.0g.ai), set fee, pot and days, then send the pot from any wallet to the arena account with the memo shown. The worker matches the memo on the mirror node, creates the vault and it goes live. You get an owner key (`ok_…`) once. The guard thinks on your 0G credits.
+2. **J2, plug in your running agent.** `/publish`, PLUG IN MY RUNNING AGENT: three lines (`createGuard`, `new OpenAI(guard.openai)`, `guard.serve(handler)`) long-poll the arena, so no public URL is needed. The vault goes CONNECTED, SELF-CHECK, SMOKE OP, VERIFIED, then funded and GUARDING. Model calls must go through the arena proxy, the system prompt is pinned (a change closes the vault), and 30 s without a poll makes the vault DORMANT and refunds live ops.
+3. **J3, run a unit.** AGENTS, NEW UNIT: callsign, strategy preset or free text, caps, your 0G key, then a deposit from your wallet funds the unit's own Hedera account. You get an operator key (`rk_…`) once. The unit writes attack messages on your 0G credits, pays each op fee from its own account, and WITHDRAW sends the balance back to the funding wallet. `POST /api/operators {handle}` claims a Hall name.
+4. **J4, type ops yourself.** With a unit in your browser, RUN OP on any vault is paid from that unit, so the payout is yours. Without one, the demo wallet serves QR visitors and recon.
+5. **J5, attack from your own agent.** `cd examples/raid-bot && npm install && node --env-file=.env index.mjs` lists guarding vaults, picks the cheapest fee, pays the x402 402 from your own Hedera account (spend-capped at that fee), sends five messages with the `x-siege-turn-token` from the start response and prints the replay link. The payout goes to your account once our verifier signs. Against a stub server: `SIEGE_STUB_PAYER=0.0.stub-me node examples/raid-bot/index.mjs`, then `npm run qa:bot` (in `frontend/`) to assert it.
+
+Recording the onboarding journeys: in stub mode a published or plugged-in guard answers with offline lines in its chosen voice (`mock-…` request ids, never verified). For the judge video run J1 and J2 with `INFERENCE_PROVIDER=claude` or a real 0G key so the guard speaks with its own orders. `SIEGE_STUB_DEPOSIT_DELAY_MS=8000` holds each stub deposit in WAITING FOR DEPOSIT and then steps through SETTING UP 1/3 to 3/3, so a stub rehearsal shows the deposit beat. Behind a proxy or tunnel, set `TRUSTED_IP_HEADER` (or `TRUSTED_PROXY_HOPS`) so the free-recon per-IP cap reads an address the client cannot set.
 
 ## Licence
 

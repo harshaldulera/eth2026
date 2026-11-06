@@ -43,6 +43,7 @@ import { BUSINESS_CASTLES, FIXTURE_CASTLES, SDK_FIXTURE_CASTLE, SDK_ORDERS_PLACE
 import { createAgent, listAgents, setAgentStatus } from "@/lib/agents/accounts";
 import { HOSTED_PROTECTED_TOOL, type RaiderAgent, type TransportKind, type VaultState } from "@/lib/types";
 import { closeCastle, TERMINAL_STATES, transitionVault } from "@/lib/vault";
+import { provisionGuardKeys } from "@/lib/guard/keys";
 
 const VAULT_DAYS = 3;
 const DEMO_AGENT = "Night Sapper";
@@ -78,6 +79,8 @@ export type SeedSummary = {
     protectedTool: string;
   }[];
   agent: RaiderAgent | null;
+  /** The Refund Desk's gk_ (SDK harness credential), minted if missing. `npm run seed` prints it. */
+  guardKey?: string;
 };
 
 /** Does `--rearm <target>` select this castle? */
@@ -135,6 +138,7 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
     return { vaultId: r.vaultId, pot };
   }
 
+  let refundGuardKey: string | undefined;
   for (const f of SEED_CASTLES) {
     const sdk = isSdk(f);
     const identity = sdk
@@ -184,6 +188,14 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
     const foreign = row.vaultId != null && recorded !== tag;
 
     if (sdk) {
+      // The harness credentials: gk_/vk_ minted once, kept on re-seeds. In stub mode the Refund Desk also gets a
+      // stand-in 0G key so /api/guard/hello answers; on testnet it stays null until the owner connects 0G.
+      const keys = provisionGuardKeys(row.id);
+      if (keys) refundGuardKey = keys.guardKey;
+      if (!testnet && !row.zgApiKey) {
+        db().update(C).set({ zgApiKey: "sk-stub-refund-desk" }).where(eq(C.id, row.id)).run();
+        row = { ...row, zgApiKey: "sk-stub-refund-desk" };
+      }
       // The SDK castle is never funded by seed: the harness has to connect and pass its smoke siege first.
       if (rearm && row.vaultState !== "created") {
         if (row.vaultId != null && !foreign && row.status === "open" && VAULT_OPEN_STATES.has(row.vaultState)) {
@@ -256,6 +268,7 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
       protectedTool: c.protectedTool,
     })),
     agent,
+    guardKey: refundGuardKey,
   };
   if (!opts.quiet) {
     console.log("");
@@ -276,6 +289,10 @@ export async function seed(opts: { quiet?: boolean; rearm?: string; newTopics?: 
     );
     if (testnet && e.VAULT_ADDRESS) console.log(`SiegeVault ${contractUrl(e.VAULT_ADDRESS)}`);
     if (agent) console.log(`Demo raider agent: ${agent.name} ${agent.accountId} (${agent.id})`);
+    if (refundGuardKey) {
+      console.log(`SIEGE_GUARD_KEY=${refundGuardKey}  (node examples/guard-refund-bot/index.mjs)`);
+      if (testnet) console.log("  Refund Desk 0G key is empty on testnet: connect one on the plug-in page before the bot can start.");
+    }
   }
   return summary;
 }

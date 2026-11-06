@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
+import { useHandOp } from "@/lib/agents/hand-ops";
 import { toast } from "sonner";
 import type { Castle, FeeSplit as FeeSplitT, Siege, StoredSiegeEvent } from "@/lib/types";
 import { MAX_TURNS } from "@/lib/types";
@@ -27,6 +28,7 @@ import { FeeSplit } from "@/components/money/fee-split";
 import { VaultPayout } from "@/components/money/vault-payout";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { PaymentReceiptCard } from "@/components/money/payment-receipt-card";
+import { ZgCredits } from "@/components/money/zg-credits";
 import { PixelButton, pixelButtonVariants } from "@/components/pixel/button";
 import { LED } from "@/components/pixel/led";
 import { PixelPanel } from "@/components/pixel/panel";
@@ -180,7 +182,9 @@ function Room({
 
   const ended = ENDED.has(siege.status) || siege.settlement?.state === "void";
   const voided = siege.settlement?.state === "void";
-  const agentDriven = Boolean(siege.agentId);
+  // A unit's own run is watched; an op this browser typed by hand and paid from a unit (J4) is played.
+  const handOp = useHandOp(siege.id);
+  const agentDriven = Boolean(siege.agentId) && !handOp;
   // The pot as the op found it: from the op's own settle event when there is one, else the vault as
   // it was when this room opened. The header never jumps ahead of the fee rail / payout.
   const [potAtOpen] = useState(openingPot ?? castle.pot);
@@ -394,6 +398,7 @@ function Room({
           {/* how events arrive matters only while the op runs: a frozen tape has no transport light */}
           {demo || (!frame.ended && !voided) ? <LiveMode mode={mode} /> : null}
           {!ended ? <SoundStrip /> : null}
+          {castle.published ? <ZgCredits castleId={castle.id} intervalMs={3000} className="border-2 border-line bg-bg/60 px-2 py-1" /> : null}
           {siege.receipt ? <PaymentReceiptCard receipt={siege.receipt} castleName={castle.name} asset={castle.asset} compact /> : null}
         </div>
       }

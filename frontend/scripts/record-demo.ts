@@ -39,14 +39,19 @@ async function main() {
   setWorkerQuiet(true);
   const f = createInProcessFetch(BASE);
   setFetch(f);
+  const turnTokens = new Map<string, string>();
   const call = async <T>(method: "GET" | "POST", p: string, body?: unknown): Promise<T> => {
+    const token = turnTokens.get(/^\/api\/siege\/([^/]+)\/message$/.exec(p)?.[1] ?? "");
     const res = await f(`${BASE}${p}`, {
       method,
-      headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+      headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(token ? { "x-siege-turn-token": token } : {}) },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     if (!res.ok) throw new Error(`${method} ${p}: ${res.status} ${await res.text()}`);
-    return (await res.json()) as T;
+    const data = (await res.json()) as T;
+    const started = data as { siegeId?: string; turnToken?: string };
+    if (started?.siegeId && started.turnToken) turnTokens.set(started.siegeId, started.turnToken);
+    return data;
   };
   const events = (siegeId: string): StoredSiegeEvent[] =>
     db()

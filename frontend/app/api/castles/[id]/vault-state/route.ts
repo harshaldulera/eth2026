@@ -2,7 +2,7 @@ import { z } from "zod";
 import { isStub } from "@/lib/config/env";
 import { getCastle } from "@/lib/castles";
 import { closeCastle, fundVault, transitionVault } from "@/lib/vault";
-import { err, isOwner, json, readBody } from "../../../_lib/http";
+import { err, isOwner, isOwnerOf, json, readBody } from "../../../_lib/http";
 
 /**
  * POST /api/castles/[id]/vault-state { to, reason } — DEV / STUB ONLY. Lets the demo (and Lane B, before
@@ -24,8 +24,8 @@ const devEndpointsOn = () => isStub() || process.env.SIEGE_DEV_ENDPOINTS === "1"
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   if (!devEndpointsOn()) return err(404, "dev_endpoint_disabled", { message: "Set SIEGE_DEV_ENDPOINTS=1 to use this outside stub mode." });
-  if (!isOwner(req)) return err(401, "owner_key_required");
   const { id } = await ctx.params;
+  if (!isOwnerOf(req, id)) return err(401, "owner_key_required");
   const body = await readBody(req, Body);
   if (!body.ok) return body.res;
   if (!getCastle(id)) return err(404, "castle_not_found");
@@ -34,6 +34,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   if (to === "created" || to === "broken") return err(409, "illegal_transition", { message: `"${to}" cannot be set by hand.` });
   if (to === "funded") {
+    // The pot is the arena's money: same rule as POST /open (arena owner, or a castle's ok_ key in stub only).
+    if (!isOwner(req) && !isStub()) return err(409, "fund_by_deposit", { message: "Fund this vault with a deposit from its owner wallet." });
     const r = await fundVault(id);
     if (!r.ok) return err(r.reason === "not_found" ? 404 : r.reason === "illegal_transition" ? 409 : 502, r.reason);
     return json({ ok: true, vaultId: r.vaultId, tx: r.tx, reason: r.reason, castle: getCastle(id) });

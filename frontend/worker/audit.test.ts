@@ -30,13 +30,19 @@ const WOOD = "castle_splinter_gate";
 const GRANITE = "castle_granite_hold";
 const L = schema.auditLog;
 
+const turnTokens = new Map<string, string>();
+
 async function call<T = Record<string, unknown>>(method: "GET" | "POST", path: string, body?: unknown, headers: Record<string, string> = {}) {
+  const token = turnTokens.get(/^\/api\/siege\/([^/]+)\/message$/.exec(path)?.[1] ?? "");
   const res = await f(`${BASE}${path}`, {
     method,
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "application/json", ...(token ? { "x-siege-turn-token": token } : {}), ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
-  return { status: res.status, data: (await res.json().catch(() => null)) as T };
+  const data = (await res.json().catch(() => null)) as T;
+  const started = data as { siegeId?: string; turnToken?: string } | null;
+  if (started?.siegeId && started.turnToken) turnTokens.set(started.siegeId, started.turnToken);
+  return { status: res.status, data };
 }
 
 async function paidSiege(castleId: string, raider: string): Promise<string> {

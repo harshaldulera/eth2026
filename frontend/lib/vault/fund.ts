@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { chain, formatHbar, vaultTag } from "@/lib/chain";
 import { db, schema } from "@/lib/db";
 import type { TxRef } from "@/lib/types";
@@ -7,6 +7,11 @@ import { transitionVault, type TransitionOpts } from "./state";
 const C = schema.castles;
 
 export const DEFAULT_VAULT_DAYS = 3;
+
+/** castles.create_vault_tx while a createVault is in flight (claimed by exactly one caller). */
+export const FUNDING_MARKER = "pending:";
+/** Outcomes after which the createVault may already be on chain: keep the marker, never re-send by itself. */
+const MAYBE_LANDED = /^(receipt_timeout|rpc_error|Replay|BadStatus|reverted)\b/;
 
 export type FundResult = { ok: true; vaultId: number; tx: TxRef; reason: string } | { ok: false; reason: string };
 
@@ -22,17 +27,43 @@ export async function fundVault(
   const row = db().select().from(C).where(eq(C.id, castleId)).get();
   if (!row) return { ok: false, reason: "not_found" };
   if (row.vaultState !== "verified") return { ok: false, reason: "illegal_transition" };
+  if (row.createVaultTx?.startsWith(FUNDING_MARKER)) return { ok: false, reason: "fund_in_progress" };
+  // Claim the castle before the awaited createVault, so two callers (the /open button and a deposit
+  // handler, or two processes) can never both create an arena-funded vault for it.
+  const claimedAt = Date.now();
+  const claim = db()
+    .update(C)
+    .set({ createVaultTx: `${FUNDING_MARKER}${claimedAt}` })
+    .where(and(eq(C.id, castleId), eq(C.vaultState, "verified"), or(isNull(C.createVaultTx), eq(C.createVaultTx, row.createVaultTx ?? ""))))
+    .run();
+  if (claim.changes !== 1) return { ok: false, reason: "fund_in_progress" };
+  const release = () =>
+    db()
+      .update(C)
+      .set({ createVaultTx: row.createVaultTx ?? null })
+      .where(and(eq(C.id, castleId), eq(C.createVaultTx, `${FUNDING_MARKER}${claimedAt}`)))
+      .run();
   const pot = opts.potTinybar ?? row.potTinybar;
   const durationSec = opts.durationSec ?? DEFAULT_VAULT_DAYS * 24 * 60 * 60;
-  const r = await chain.createVault({
-    castleId,
-    pot: String(pot),
-    fee: String(row.feeTinybar),
-    durationSec,
-    castellan: row.owner,
-    protectedTool: row.protectedTool,
-  });
-  if (!r.ok) return r;
+  let r: Awaited<ReturnType<typeof chain.createVault>>;
+  try {
+    r = await chain.createVault({
+      castleId,
+      pot: String(pot),
+      fee: String(row.feeTinybar),
+      durationSec,
+      castellan: row.owner,
+      protectedTool: row.protectedTool,
+    });
+  } catch (e) {
+    // Unknown outcome: keep the claim (an operator checks the chain before funding this castle again).
+    return { ok: false, reason: `fund_in_doubt: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (!r.ok) {
+    if (MAYBE_LANDED.test(r.reason)) return { ok: false, reason: `fund_in_doubt: ${r.reason}` };
+    release();
+    return r;
+  }
   // The contract's deadline is now + duration: keep the DB in step.
   db()
     .update(C)

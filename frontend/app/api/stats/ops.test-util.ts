@@ -7,26 +7,30 @@ import { expect } from "vitest";
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { emit } from "@/lib/events/bus";
+import { mintReconTicket, RECON_TICKET_HEADER, TURN_TOKEN_HEADER, visitorOfWallet } from "@/lib/auth/turn";
 import { STUB_PAYMENT_HEADER } from "@/lib/pay";
 import * as startRoute from "@/app/api/siege/start/route";
 import * as messageRoute from "@/app/api/siege/[id]/message/route";
 
 const BASE = "http://localhost:3000";
 
-export async function runOp(castleId: string, lines: readonly string[], o: { raider?: string; free?: boolean } = {}): Promise<string> {
+export async function runOp(castleId: string, lines: readonly string[], o: { raider?: string; free?: boolean /* raider must then be a `recon-<visitor>` wallet */ } = {}): Promise<string> {
   const raider = o.raider ?? "0.0.stub-raider";
   const res = await startRoute.POST(
     new Request(`${BASE}/api/siege/start`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...(o.free ? {} : { [STUB_PAYMENT_HEADER]: raider }) },
+      headers: {
+        "content-type": "application/json",
+        ...(o.free ? { [RECON_TICKET_HEADER]: mintReconTicket(visitorOfWallet(raider) ?? "") } : { [STUB_PAYMENT_HEADER]: raider }),
+      },
       body: JSON.stringify(o.free ? { castleId, free: true, wallet: raider } : { castleId }),
     }),
   );
-  const body = (await res.json()) as { siegeId?: string };
+  const body = (await res.json()) as { siegeId?: string; turnToken?: string };
   expect(res.status, JSON.stringify(body)).toBe(200);
   const id = body.siegeId!;
   for (const text of lines) {
-    const r = await messageRoute.POST(new Request(`${BASE}/api/siege/${id}/message`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) }), {
+    const r = await messageRoute.POST(new Request(`${BASE}/api/siege/${id}/message`, { method: "POST", headers: { "content-type": "application/json", [TURN_TOKEN_HEADER]: body.turnToken! }, body: JSON.stringify({ text }) }), {
       params: Promise.resolve({ id }),
     });
     expect(r.status).toBe(200);

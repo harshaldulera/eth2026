@@ -68,10 +68,12 @@ class HttpError extends Error {
   }
 }
 
+const turnTokens = new Map();
 async function call(method, p, body) {
+  const token = turnTokens.get(/^\/api\/siege\/([^/]+)\/message$/.exec(p)?.[1] ?? "");
   const res = await fetch(BASE + p, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
+    headers: body ? { "content-type": "application/json", ...(token ? { "x-siege-turn-token": token } : {}) } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -82,6 +84,7 @@ async function call(method, p, body) {
     data = text;
   }
   if (!res.ok) throw new HttpError(res.status, data, `${method} ${p}`);
+  if (data && data.siegeId && data.turnToken) turnTokens.set(data.siegeId, data.turnToken);
   return data;
 }
 

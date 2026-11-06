@@ -1,3 +1,4 @@
+import type { PublishFormInput } from "@/lib/publish/schema";
 import type { ReplayData } from "@/lib/replay/types";
 import type {
   ApprovalRequest,
@@ -17,6 +18,7 @@ import type {
   VaultState,
 } from "@/lib/types";
 import { notTakingSiegesReason } from "@/lib/money/vault";
+import { allUnitHeaders, unitHeaders } from "@/lib/agents/operator-keys";
 
 /**
  * Typed fetchers for Siege's HTTP API (app/api/**). Browser-safe, no env access.
@@ -151,13 +153,15 @@ export type StartSiegeResponse = {
   siegeId: string;
   siege: Siege;
   receipt: PaymentReceipt | Omit<PaidReceipt, "siegeId"> | Omit<FreeReceipt, "siegeId">;
+  /** Shown once: needed to send this siege's turns (POST /api/siege/[id]/message). */
+  turnToken: string;
 };
 
 export type CloseCastleResponse = { ok: true; tx: TxRef; refunded: Amount; inFlightRefunds: number };
 export type OpenVaultResponse = { ok: true; vaultId: number; tx: TxRef; reason: string; castle: Castle };
 export type VaultStateResponse = { ok: true; castle?: Castle; change?: { from: VaultState; to: VaultState; reason: string; at: string } };
 
-export type PlayStartResponse = { siegeId: string; receipt: StartSiegeResponse["receipt"] };
+export type PlayStartResponse = { siegeId: string; receipt: StartSiegeResponse["receipt"]; turnToken?: string };
 
 export type SiegeDetail = { siege: Siege; castle: Castle };
 
@@ -179,6 +183,12 @@ export type AgentDetail = {
   sieges: Siege[];
   approvals: ApprovalRequest[];
   events: StoredSiegeEvent[];
+  /** The unit's account balance, tinybar string (2b). */
+  balance?: string;
+  /** Calls and cost billed to the unit's own 0G key (2b). */
+  zgUsage?: { calls: number; costUsdMicro: string; today: { calls: number; costUsdMicro: string } };
+  /** What this request may do with the unit: owner cookie, its operator key, or neither. */
+  access?: "owner" | "operator" | null;
 };
 
 // ─── Fetchers ──────────────────────────────────────────────────────────────
@@ -237,21 +247,23 @@ export const api = {
     return request<EventsResponse>(`/api/events?${p}`);
   },
 
-  agents: () => request<{ agents: RaiderAgent[] }>("/api/agents"),
+  /** `{mine: true}`: only the units whose operator keys this browser holds (2b); otherwise every unit. */
+  agents: (q: { mine?: boolean } = {}) =>
+    request<{ agents: RaiderAgent[] }>(`/api/agents${q.mine ? "?mine=1" : ""}`, q.mine ? { headers: allUnitHeaders() } : {}),
   createAgent: (body: CreateAgentBody) => request<{ agent: RaiderAgent }>("/api/agents", { method: "POST", json: body }),
-  agent: (id: string) => request<AgentDetail>(`/api/agents/${enc(id)}`),
+  agent: (id: string) => request<AgentDetail>(`/api/agents/${enc(id)}`, { headers: unitHeaders(id) }),
   runAgent: (id: string, body: { castleId: string; maxSieges?: number }) =>
-    request<{ ok: true }>(`/api/agents/${enc(id)}/run`, { method: "POST", json: body }),
-  stopAgent: (id: string) => request<{ ok: true }>(`/api/agents/${enc(id)}/stop`, { method: "POST" }),
+    request<{ ok: true }>(`/api/agents/${enc(id)}/run`, { method: "POST", json: body, headers: unitHeaders(id) }),
+  stopAgent: (id: string) => request<{ ok: true }>(`/api/agents/${enc(id)}/stop`, { method: "POST", headers: unitHeaders(id) }),
 
   approvals: (status: ApprovalStatus | "all" = "pending") =>
-    request<{ approvals: ApprovalRequest[] }>(`/api/approvals?status=${enc(status)}`),
+    request<{ approvals: ApprovalRequest[] }>(`/api/approvals?status=${enc(status)}`, { headers: allUnitHeaders() }),
   /** Throws ApiError(401) when the owner cookie is missing or wrong. */
   decideApproval: (id: string, decision: "approved" | "denied") =>
-    request<{ approval: ApprovalRequest }>(`/api/approvals/${enc(id)}`, { method: "POST", json: { decision } }),
+    request<{ approval: ApprovalRequest }>(`/api/approvals/${enc(id)}`, { method: "POST", json: { decision }, headers: allUnitHeaders() }),
 
   /** Sets the httpOnly owner cookie. Throws ApiError(401) on a wrong key. */
-  ownerLogin: (key: string) => request<{ ok: true }>("/api/owner", { method: "POST", json: { key } }),
+  ownerLogin: (key: string) => request<{ ok: true; castleId?: string }>("/api/owner", { method: "POST", json: { key } }),
 
   // ─── Part 2 (types at the end of this file) ───
   /**
@@ -270,6 +282,49 @@ export const api = {
    */
   playRecon: (body: { castleId: string; visitor?: string }) =>
     request<PlayStartResponse>("/api/play/start", { method: "POST", json: { ...body, free: true } }),
+
+  // ─── Onboarding (plan siege-onboarding-plan.md) — fetchers; types at the end of this file ───
+  // Append inside your own sub-banner only.
+  // ── foundation ──
+  /** Public status of a deposit intent (memo transfer to the arena account). */
+  deposit: (id: string) => request<DepositStatus>(`/api/deposits/${encodeURIComponent(id)}`),
+  /** NEW DEPOSIT WINDOW: a fresh intent (new memo) for an expired one. */
+  renewDeposit: (id: string) =>
+    request<{ deposit: PublishDeposit; state: DepositStatus["state"] }>(`/api/deposits/${encodeURIComponent(id)}/renew`, { method: "POST", json: {} }),
+  /** 0G key probe (never stored or minted). Key problems come back as 200 { ok: false, reason }. */
+  zgValidate: (key: string) => request<ZgValidateResponse>("/api/zg/validate", { method: "POST", json: { key } }),
+  /** Public 0G credits line for a guard (castleId) or a unit (agentId). */
+  zgUsage: (q: { castleId: string } | { agentId: string }) =>
+    request<ZgUsageResponse>(`/api/zg/usage?${"castleId" in q ? `castleId=${enc(q.castleId)}` : `agentId=${enc(q.agentId)}`}`),
+  // ── part 1 ──
+  /** Publish a guard (hosted: a deposit to pay; sdk: a guard key). No auth; the owner key comes back once. */
+  publishCastle: (form: PublishFormInput) => request<PublishCastleResponse>("/api/castles", { method: "POST", json: form }),
+  /** Fund a verified plugged-in (sdk) vault: returns the deposit to pay. `pot` in HBAR. Owner key required. */
+  fundCastle: (id: string, pot?: number) => request<FundCastleResponse>(`/api/castles/${enc(id)}/fund`, { method: "POST", json: pot === undefined ? {} : { pot } }),
+  /** One guardian turn on the owner's own 0G credits: no payment, no siege. Owner key required. */
+  dryRun: (id: string, text: string) => request<DryRunResponse>(`/api/castles/${enc(id)}/dry-run`, { method: "POST", json: { text } }),
+  // ── part 2a ──
+  /** Mint a new guard key for a plugged-in vault (the old one stops working). Owner key required; the key is shown once. */
+  rotateGuardKey: (id: string) => request<{ ok: true; castleId: string; guardKey: string }>(`/api/castles/${enc(id)}/guard-key`, { method: "POST", json: {} }),
+  // ── part 2b ──
+  /**
+   * NEW UNIT as a red teamer (no owner cookie): `{draft, deposit, operatorKey}` (201): pay the deposit, the
+   * unit opens. With the owner cookie the arena funds it and the answer is `{agent}`. `zgKey` is the red
+   * teamer's own 0G key (sent once, never echoed).
+   */
+  createUnit: (body: CreateUnitBody) => request<CreateUnitResponse>("/api/agents", { method: "POST", json: body }),
+  /** A unit while its deposit is in flight: `{draft, agent?}` (agent once the deposit landed). */
+  agentDraft: (id: string) => request<UnitDraftResponse>(`/api/agents/drafts/${enc(id)}`),
+  /** WITHDRAW: the unit's balance (minus a 0.1 ℏ fee reserve) back to the wallet that funded it. */
+  withdrawAgent: (id: string) => request<WithdrawResponse>(`/api/agents/${enc(id)}/withdraw`, { method: "POST", headers: unitHeaders(id) }),
+  /** J4: pay a hand-typed op from this unit (its operator key travels as a header) instead of the demo wallet. */
+  playStartFromUnit: (body: { castleId: string; agentId: string }) =>
+    request<PlayStartResponse>("/api/play/start", { method: "POST", json: body, headers: unitHeaders(body.agentId) }),
+  /** Claim a public handle for the account behind one of your units (operator key required). */
+  setHandle: (handle: string, operatorKey: string) =>
+    request<SetHandleResponse>("/api/operators", { method: "POST", json: { handle }, headers: { "x-siege-operator-key": operatorKey } }),
+  /** Public: the handle claimed by a Hedera account, or 404. */
+  operatorHandle: (account: string) => request<SetHandleResponse>(`/api/operators/${enc(account)}`),
 };
 
 export type Api = typeof api;
@@ -431,3 +486,94 @@ export type StatsResponse = {
   live: LiveOp[];
   asOf: string;
 };
+
+// ─── Onboarding (plan siege-onboarding-plan.md) — types ─────────────────────
+// Append inside your own sub-banner only.
+
+// ── foundation ──
+
+/** GET /api/deposits/[id]. Amounts are tinybar decimal strings. */
+export type DepositStatus = {
+  intentId: string;
+  kind: "vault" | "vault-sdk" | "unit" | "topup";
+  state: "awaiting" | "underpaid" | "funding" | "funded" | "failed" | "expired";
+  received: string;
+  requested: string;
+  payer: string | null;
+  error: string | null;
+  note: string | null;
+  expiresAt: string;
+  deposit: { to: string; memo: string; amount: string };
+  /** Setup progress while `funding` (SETTING UP k/n), e.g. { k: 2, n: 3, label: "vault" }. */
+  step?: { k: number; n: number; label: string } | null;
+};
+
+/** Why a 0G key can't be used (lib/zg/connect ZgFailReason). */
+export type ZgFailReason = "unauthorized" | "needs_keys_create" | "needs_account_read" | "unreachable";
+
+/** POST /api/zg/validate. `balance` (0G credits, formatted) only for mk- keys; `mock` = offline 0G. */
+export type ZgValidateResponse =
+  | { ok: true; kind: "mk" | "sk"; balance?: string; models: string[]; model?: string; mock: boolean }
+  | { ok: false; reason: ZgFailReason };
+
+/** GET /api/zg/usage?castleId=|agentId=. Cost is micro-USD as a decimal string. No key material. */
+export type ZgUsageResponse = {
+  connected: boolean;
+  kind?: "mk" | "sk";
+  balance?: string;
+  calls: number;
+  costUsdMicro: string;
+  today: { calls: number; costUsdMicro: string };
+};
+
+// ── part 1 ──
+
+export type { PublishFormInput };
+
+export type PublishDeposit = { intentId: string; to: string; memo: string; amount: string; expiresAt: string };
+
+/** POST /api/castles 201. `ownerKey` (ok_…) and `guardKey` (gk_…) are shown once. Amounts are tinybar strings. */
+export type PublishCastleResponse =
+  | { castleId: string; transport: "hosted"; ownerKey: string; deposit: PublishDeposit; shareUrl: string; state: DepositStatus["state"] }
+  | { castleId: string; transport: "sdk"; ownerKey: string; guardKey: string; shareUrl: string; state: VaultState };
+
+/** POST /api/castles/[id]/fund. */
+export type FundCastleResponse = { deposit: PublishDeposit; state: DepositStatus["state"] };
+
+/** POST /api/castles/[id]/dry-run. Tool arguments are not returned. */
+export type DryRunResponse = { reply: string; move: "hold" | "open" | "expose" | "banish"; toolCalls: { name: string }[] };
+
+// ── part 2a ──
+
+// ── part 2b ──
+
+/** POST /api/agents body. A red teamer's unit needs `zgKey`; `strategy: "custom"` needs `strategyText`. Amounts are tinybar strings. */
+export type CreateUnitBody = CreateAgentBody & { strategyText?: string; zgKey?: string };
+
+export type UnitDraft = {
+  id: string;
+  name: string;
+  strategy: string;
+  budget: Amount;
+  perCastleCap: Amount;
+  dailyCap: Amount;
+  stopAfterLosses: number;
+  state: "awaiting" | "creating" | "created" | "failed" | "expired";
+  agentId?: string;
+  error?: string;
+  createdAt: string;
+};
+
+/** POST /api/agents: 201 `{draft, deposit, operatorKey}` for a red teamer; 200 `{agent}` with the owner cookie. */
+export type CreateUnitResponse =
+  | { draft: UnitDraft; operatorKey: string; deposit: { intentId: string; to: string; memo: string; amount: string; expiresAt: string; state: string } }
+  | { agent: RaiderAgent };
+
+/** GET /api/agents/drafts/[id]. */
+export type UnitDraftResponse = { draft: UnitDraft; agent?: RaiderAgent };
+
+/** POST /api/agents/[id]/withdraw. */
+export type WithdrawResponse = { withdraw: TxRef; amount: Amount };
+
+/** POST /api/operators, GET /api/operators/[account]. */
+export type SetHandleResponse = { ok?: true; account: string; handle: string };

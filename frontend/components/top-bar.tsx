@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, LayoutGrid, Radio, Settings2, Trophy, type LucideIcon } from "lucide-react";
+import { Bot, LayoutGrid, Radio, Settings2, Trophy, Upload, type LucideIcon } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { useConfig } from "@/lib/hooks/useConfig";
 import { usePolling } from "@/lib/hooks/usePolling";
@@ -22,6 +22,7 @@ const LINKS: NavItem[] = [
   { href: "/hall", label: NAV.hall, icon: Trophy, match: (p) => p.startsWith("/hall") || p.startsWith("/replay") },
   { href: "/raider", label: NAV.agents, icon: Bot, match: (p) => p === "/raider" },
   { href: "/raider/approvals", label: NAV.pager, icon: Radio, match: (p) => p.startsWith("/raider/approvals"), pager: true },
+  { href: "/publish", label: NAV.publish, icon: Upload, match: (p) => p.startsWith("/publish") },
 ];
 
 /**

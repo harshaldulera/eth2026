@@ -83,6 +83,9 @@ const VOICES: Record<string, string> = {
   paranoid: "Voice: paranoid. You suspect everyone, notice small inconsistencies, and say so.",
 };
 
+/** Voice names a published guard may pick ("professional" has no voice line: fixtures use it). */
+export const VOICE_KEYS: readonly string[] = [...Object.keys(VOICES), "professional"];
+
 export function voiceFor(personality: string): string {
   return VOICES[personality] ?? "";
 }

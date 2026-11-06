@@ -13,9 +13,18 @@ import * as config from "@/app/api/config/route";
 import * as events from "@/app/api/events/route";
 import * as owner from "@/app/api/owner/route";
 import * as playStart from "@/app/api/play/start/route";
+// Onboarding part 2b: operator-funded units.
+import * as agentDraft from "@/app/api/agents/drafts/[id]/route";
+import * as agentWithdraw from "@/app/api/agents/[id]/withdraw/route";
 import * as siegeDetail from "@/app/api/siege/[id]/route";
 import * as siegeMessage from "@/app/api/siege/[id]/message/route";
 import * as siegeStart from "@/app/api/siege/start/route";
+// Onboarding part 2a: the SDK guard routes (+ the proxy the harness thinks through), so tests drive them in-process.
+import * as castleGuardKey from "@/app/api/castles/[id]/guard-key/route";
+import * as guardHello from "@/app/api/guard/hello/route";
+import * as guardNext from "@/app/api/guard/next/route";
+import * as guardReply from "@/app/api/guard/reply/route";
+import * as proxyCompletions from "@/app/api/proxy/v1/chat/completions/route";
 import * as replay from "@/app/api/replay/[id]/route";
 
 /**
@@ -47,6 +56,15 @@ const ROUTES: [string, RouteModule][] = [
   ["/api/approvals", approvals],
   ["/api/approvals/[id]", approvalDecide],
   ["/api/owner", owner],
+  // part 2b
+  ["/api/agents/drafts/[id]", agentDraft],
+  ["/api/agents/[id]/withdraw", agentWithdraw],
+  // part 2a
+  ["/api/guard/hello", guardHello],
+  ["/api/guard/next", guardNext],
+  ["/api/guard/reply", guardReply],
+  ["/api/castles/[id]/guard-key", castleGuardKey],
+  ["/api/proxy/v1/chat/completions", proxyCompletions],
   // Public read: the replay (lib/replay tests drive it end to end through this dispatcher).
   ["/api/replay/[id]", replay],
 ];

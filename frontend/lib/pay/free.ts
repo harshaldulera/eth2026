@@ -42,6 +42,46 @@ export async function claimFree(wallet: AccountId): Promise<{ ok: true } | { ok:
   }
 }
 
+/**
+ * Claim one free recon for a browser visitor: one transaction counting today's free_sieges rows for
+ * "recon-<visitor>" (FREE_SIEGES_PER_DAY), "ip:<addr>" (FREE_RECON_PER_IP_PER_DAY) and "arena"
+ * (FREE_RECON_PER_DAY_TOTAL). It inserts all three rows or none, and reports the first scope that is full.
+ * The transaction is IMMEDIATE so two processes cannot both read "room left" and then both insert.
+ */
+export type ReconScope = "visitor" | "ip" | "arena";
+export function claimRecon(who: { visitor: string; ip: string }): { ok: true } | { ok: false; scope: ReconScope } {
+  const e = env();
+  const day = utcDay();
+  const keys: { scope: ReconScope; wallet: string; cap: number }[] = [
+    { scope: "visitor", wallet: norm(`recon-${who.visitor}`), cap: e.FREE_SIEGES_PER_DAY },
+    { scope: "ip", wallet: `ip:${norm(who.ip)}`, cap: e.FREE_RECON_PER_IP_PER_DAY },
+    { scope: "arena", wallet: "arena", cap: e.FREE_RECON_PER_DAY_TOTAL },
+  ];
+  try {
+    return db().transaction(
+      (tx) => {
+        const t = schema.freeSieges;
+        const counts = keys.map((k) =>
+          tx
+            .select()
+            .from(t)
+            .where(and(eq(t.wallet, k.wallet), or(eq(t.day, day), like(t.day, `${day}#%`))))
+            .all().length,
+        );
+        for (const [i, k] of keys.entries()) if (k.cap <= 0 || counts[i] >= k.cap) return { ok: false as const, scope: k.scope };
+        for (const [i, k] of keys.entries()) {
+          tx.insert(t).values({ wallet: k.wallet, day: counts[i] === 0 ? day : `${day}#${counts[i] + 1}`, createdAt: nowIso() }).run();
+        }
+        return { ok: true as const };
+      },
+      { behavior: "immediate" },
+    );
+  } catch (err) {
+    if (err instanceof Error && /UNIQUE/i.test(err.message)) return { ok: false, scope: "visitor" };
+    throw err;
+  }
+}
+
 /** Link today's newest unlinked free claim of `wallet` to the siege it started. */
 export function markFreeSiege(wallet: AccountId, siegeId: string): void {
   const w = norm(wallet);

@@ -10,3 +10,6 @@ export { WaitingForOwner, type WaitingForOwnerProps } from "./waiting-for-owner"
 export { ApprovalCard, reasonText, type ApprovalCardProps } from "./approval-card";
 export { PressureMeter, pressureColor, pressureWord, type PressureMeterProps } from "./pressure-meter";
 export { SiegeCounter, type SiegeCounterProps } from "./siege-counter";
+export { DepositPanel, type DepositPanelProps } from "./deposit-panel";
+export { ZgConnect, type ZgConnectProps, type ZgConnectResult } from "./zg-connect";
+export { ZgCredits, creditsLine, usdFromMicro, type ZgCreditsProps } from "./zg-credits";

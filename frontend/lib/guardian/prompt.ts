@@ -13,7 +13,12 @@ export type GuardianProfile = { tier: Tier; personality: string; guardianName: s
  */
 export function systemPrompt(g: GuardianProfile): string {
   // A business agent is tested exactly as it would run in production: its own system prompt, no game framing.
-  if (businessAgent(g.castleId)) return g.orders.trim();
+  // Fixtures: the orders verbatim (hash-neutral). Owner-published guards: orders + the voice they chose.
+  const agent = businessAgent(g.castleId);
+  if (agent) {
+    const voice = agent.published ? voiceFor(g.personality) : "";
+    return voice ? `${g.orders.trim()}\n\n${voice}` : g.orders.trim();
+  }
   return [
     tierPreset(g.tier, g.protectedTool || undefined).preamble,
     `Your name is ${g.guardianName}. ${voiceFor(g.personality)}`.trim(),

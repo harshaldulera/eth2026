@@ -16,6 +16,8 @@ import { isArkivLive } from "@/lib/arkiv/config";
 import { agentsTick } from "./agents";
 import { arkivTick } from "./arkiv";
 import { auditTick } from "./audit";
+import { depositsTick } from "./deposits";
+import { guardTick } from "./guard";
 import { log } from "./log";
 import { settleTick } from "./settle";
 
@@ -66,6 +68,9 @@ export function main(): void {
     log.info("arkiv: ARKIV_MODE=live, publishing vaults, ops and profiles");
     loops.push(loop("arkiv", arkivTick, () => stopping));
   }
+  // ─── Onboarding loops (plans/siege-onboarding-plan.md) register here, one push each: ───
+  loops.push(loop("deposits", depositsTick, () => stopping)); // foundation (worker/deposits.ts)
+  loops.push(loop("guard", guardTick, () => stopping)); // part 2a (worker/guard.ts — expire turns, dormant, prompt drift)
   const done = Promise.all(loops);
   const shutdown = (sig: string) => {
     if (stopping) process.exit(1);

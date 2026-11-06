@@ -63,6 +63,8 @@ const PERMANENT = new Set([
   "siege_mismatch",
   "not_verified",
   "transcript_mismatch",
+  // part 2a: an SDK break on a castle whose self-check never pinned a prompt hash
+  "no_pinned_prompt_hash",
   "no_vault",
   "siege_not_found",
   "castle_not_found",

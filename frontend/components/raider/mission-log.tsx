@@ -7,6 +7,7 @@ import { formatAmount } from "@/lib/money/format";
 import { Terminal, type TerminalLineData, type TerminalTone } from "@/components/pixel/terminal";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { cn } from "@/lib/utils";
+import { UNITS } from "@/lib/vocab";
 
 type P = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
@@ -97,7 +98,13 @@ export function logLine(e: StoredSiegeEvent, vaultName: (id: string | undefined)
         prompt = "✓";
         text = (
           <>
-            OWNER APPROVED{amount ? <> · +{formatAmount(amount)} top-up</> : null}
+            OWNER APPROVED
+            {amount ? (
+              // No top-up tx on a cap ask = a self-funded unit's cap was raised; no HBAR moved.
+              <>
+                {" "}· +{formatAmount(amount)} {p.topUp || p.txId || str(p.reason) === "budget" ? "top-up" : UNITS.capRaised}
+              </>
+            ) : null}
             {str(p.txId) ? <HashscanLink txId={str(p.txId)} className="ml-2" /> : null}
           </>
         );

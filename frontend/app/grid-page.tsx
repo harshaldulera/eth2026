@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { LiveSiege } from "@/lib/api/client";
 import { api } from "@/lib/api/client";
@@ -18,6 +19,7 @@ import { SortChips } from "@/components/grid/sort-chips";
 import { applyOrder, orderFrom, sortCastles, type GridOrder } from "@/components/grid/sort";
 import { GridTicker } from "@/components/grid/ticker";
 import { playCue } from "@/components/pixel/sfx-link";
+import { PUBLISH } from "@/lib/vocab";
 
 /** URL for the Grid with `query` + `order` (+ any other params kept as they are, e.g. recon). */
 function gridUrl(pathname: string, current: URLSearchParams, query: BoardQuery, orderParam: string | null, drop: string[] = []): string {
@@ -146,6 +148,13 @@ export function GridPage() {
             >
               First time? Run a free recon ▶
             </button>
+            <Link
+              href="/publish"
+              onClick={() => playCue("ui_blip")}
+              className="mt-2 block w-fit font-ui text-[11px] tracking-[0.1em] text-money uppercase underline decoration-money/40 underline-offset-4 hover:decoration-money"
+            >
+              {PUBLISH.gridCta}
+            </Link>
           </div>
           <SeasonStrip castles={all} loading={!every.data && !data} className="lg:min-w-[600px]" />
         </header>

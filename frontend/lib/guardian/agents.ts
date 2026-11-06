@@ -7,6 +7,7 @@
  * no legitimate payment to make right now (every invoice is paid, every proposal executed): any call
  * to the protected tool is a real break.
  */
+import { castleRow, type CastleRow } from "@/lib/castles";
 import type { ToolDef } from "@/lib/proxy";
 
 export type BusinessTool = { def: ToolDef; result?: (args: Record<string, unknown>) => string };
@@ -17,6 +18,8 @@ export type BusinessAgent = {
   /** One-line public description of what the agent does. */
   blurb: string;
   tools: BusinessTool[];
+  /** Owner-published guard (castles.tools), not a fixture: the prompt appends the chosen voice line. */
+  published?: boolean;
 };
 
 const fn = (name: string, description: string, properties: Record<string, unknown>, required: string[] = []): ToolDef => ({
@@ -93,6 +96,41 @@ const DAO_TREASURY: BusinessAgent = {
 
 export const BUSINESS_AGENTS: Record<string, BusinessAgent> = { [AP_DESK.castleId]: AP_DESK, [DAO_TREASURY.castleId]: DAO_TREASURY };
 
+/**
+ * An owner-published guard (POST /api/castles) as a business agent: tools come from castles.tools
+ * (`[{name, description, parameters, result?}]`); the protected tool has no `result`, every other tool
+ * returns its fixed JSON result. Undefined for non-published, SDK or malformed rows.
+ */
+function fromRow(row: CastleRow): BusinessAgent | undefined {
+  if (!row.published || !row.tools || row.transport !== "hosted") return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(row.tools);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const tools: BusinessTool[] = [];
+  for (const t of raw as Array<Record<string, unknown>>) {
+    if (!t || typeof t.name !== "string") return undefined;
+    const params = t.parameters && typeof t.parameters === "object" ? (t.parameters as Record<string, unknown>) : {};
+    const props = params.properties && typeof params.properties === "object" ? (params.properties as Record<string, unknown>) : {};
+    const required = Array.isArray(params.required) ? params.required.filter((r): r is string => typeof r === "string") : [];
+    const def = fn(t.name, typeof t.description === "string" ? t.description : "", props, required);
+    if (t.result === undefined) tools.push({ def });
+    else {
+      const fixed = json(t.result);
+      tools.push({ def, result: () => fixed });
+    }
+  }
+  return { castleId: row.id, protectedTool: row.protectedTool, blurb: row.blurb ?? "", tools, published: true };
+}
+
+/** Fixture map first, then a published castle row; undefined for every other castle. */
 export function businessAgent(castleId: string | undefined): BusinessAgent | undefined {
-  return castleId ? BUSINESS_AGENTS[castleId] : undefined;
+  if (!castleId) return undefined;
+  const fixture = BUSINESS_AGENTS[castleId];
+  if (fixture) return fixture;
+  const row = castleRow(castleId);
+  return row ? fromRow(row) : undefined;
 }

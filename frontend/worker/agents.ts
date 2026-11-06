@@ -1,13 +1,16 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { TURN_TOKEN_HEADER } from "@/lib/auth/turn";
 import { agentCredentials, agentRow, setAgentStatus } from "@/lib/agents/accounts";
 import { getCastle } from "@/lib/castles";
 import { formatHbar } from "@/lib/chain/units";
 import { db, schema } from "@/lib/db";
-import { STRATEGIES, type StrategyKey } from "@/lib/fixtures/raids";
+import { nextAttackMessage } from "@/lib/agents/brain";
+// Registers the "unit" deposit handler (fundUnitFromDeposit) in the worker process.
+import "@/lib/agents/drafts";
 import { checkCaps, createPayerFetch, holdSpend, isSpendControlRefusal, recordOutcome, requestApproval, settleSpend, voidSiege, voidSpend } from "@/lib/pay";
 import { STUB_PAYMENT_HEADER } from "@/lib/pay/stub";
 import { getSiege } from "@/lib/siege";
-import type { CapReason, Castle, Siege } from "@/lib/types";
+import { MAX_TURNS, type CapReason, type Castle, type Siege } from "@/lib/types";
 import { siegeBlockedReason, vaultStateOf } from "@/lib/vault";
 import { activeRun, activeRuns, bumpRun, endRuns, type AgentRunRow } from "@/app/api/_lib/runs";
 import { apiUrl, getFetch } from "./fetch";
@@ -68,6 +71,7 @@ function reasoningFor(reason: CapReason, castle: Castle, agent: NonNullable<Retu
     budget: `My budget is spent (${hbar(agent.spentTinybar)} of ${hbar(agent.budgetTinybar)}).`,
     stop_rule: `I've lost ${agent.consecutiveLosses} in a row, which trips my stop rule.`,
     stopped: "",
+    zg_key: "My 0G key was rejected, so I can't think on your credits.",
   };
   const push =
     p.pressure > 0
@@ -76,10 +80,10 @@ function reasoningFor(reason: CapReason, castle: Castle, agent: NonNullable<Retu
   return `${why[reason]} ${push}`.trim();
 }
 
-async function postJson(path: string, body: unknown, f: typeof fetch = getFetch()): Promise<Response> {
+async function postJson(path: string, body: unknown, f: typeof fetch = getFetch(), headers: Record<string, string> = {}): Promise<Response> {
   return f(apiUrl(path), {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    headers: { "content-type": "application/json", accept: "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -108,18 +112,28 @@ const neverSent = (e: unknown) => {
  * Send the strategy's messages until the siege ends. Returns the final siege, and whether the raid
  * stopped because the guardian did not answer (502 guardian_unavailable, after one retry).
  */
-async function raid(siegeId: string, messages: string[]): Promise<{ siege: Siege | null; guardianUnavailable: boolean }> {
-  for (const text of messages) {
-    let res = await postJson(`/api/siege/${encodeURIComponent(siegeId)}/message`, { text });
-    if (res.status === 502) res = await postJson(`/api/siege/${encodeURIComponent(siegeId)}/message`, { text }); // guardian hiccup: retry once
+async function raid(
+  siegeId: string,
+  nextMessage: (turn: number, history: Siege["messages"]) => Promise<{ text: string; keyRejected?: boolean }>,
+  turnToken?: string,
+): Promise<{ siege: Siege | null; guardianUnavailable: boolean; keyRejected: boolean }> {
+  const auth: Record<string, string> = turnToken ? { [TURN_TOKEN_HEADER]: turnToken } : {};
+  let keyRejected = false;
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    // The unit's brain writes each message from the transcript so far (its own 0G credits); scripted pools back it up.
+    const written = await nextMessage(turn, getSiege(siegeId)?.messages ?? []);
+    if (written.keyRejected) keyRejected = true;
+    const text = written.text;
+    let res = await postJson(`/api/siege/${encodeURIComponent(siegeId)}/message`, { text }, undefined, auth);
+    if (res.status === 502) res = await postJson(`/api/siege/${encodeURIComponent(siegeId)}/message`, { text }, undefined, auth); // guardian hiccup: retry once
     if (!res.ok) {
       const err = res.status === 502 ? ((await res.json().catch(() => null)) as { error?: string } | null)?.error : undefined;
-      return { siege: getSiege(siegeId), guardianUnavailable: err === "guardian_unavailable" };
+      return { siege: getSiege(siegeId), guardianUnavailable: err === "guardian_unavailable", keyRejected };
     }
     const data = (await res.json()) as { siege?: Siege };
-    if (data.siege && data.siege.status !== "in_progress") return { siege: data.siege, guardianUnavailable: false };
+    if (data.siege && data.siege.status !== "in_progress") return { siege: data.siege, guardianUnavailable: false, keyRejected };
   }
-  return { siege: getSiege(siegeId), guardianUnavailable: false };
+  return { siege: getSiege(siegeId), guardianUnavailable: false, keyRejected };
 }
 
 async function stepRun(run: AgentRunRow): Promise<void> {
@@ -179,9 +193,10 @@ async function stepRun(run: AgentRunRow): Promise<void> {
   const observed = observePaidRequests(getFetch());
   const payer = createPayerFetch({ ...agentCredentials(agent.id), perPaymentCap: castle.fee }, observed.fetch);
   let siegeId: string;
+  let turnToken: string | undefined;
   try {
     const res = await postJson("/api/siege/start", { castleId: castle.id, agentId: agent.id }, payer);
-    const data = (await res.json().catch(() => null)) as { siegeId?: string; error?: string; receiptId?: string } | null;
+    const data = (await res.json().catch(() => null)) as { siegeId?: string; turnToken?: string; error?: string; receiptId?: string } | null;
     if (!res.ok || !data?.siegeId) {
       if (data?.receiptId) {
         await holdSpend(caps.reservationId, data.receiptId);
@@ -201,6 +216,7 @@ async function stepRun(run: AgentRunRow): Promise<void> {
       throw new Error(`start ${res.status} ${data?.error ?? ""}`.trim());
     }
     siegeId = data.siegeId;
+    turnToken = data.turnToken;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (observed.paidSent() && !isSpendControlRefusal(e) && !neverSent(e) && !/^start \d+/.test(msg)) {
@@ -221,8 +237,11 @@ async function stepRun(run: AgentRunRow): Promise<void> {
   await settleSpend(caps.reservationId, siegeId);
   const bumped = bumpRun(run.id);
 
-  const strategy = STRATEGIES[agent.strategy as StrategyKey] ?? STRATEGIES.authority;
-  const { siege: final, guardianUnavailable } = await raid(siegeId, strategy.messages(castle.tier, run.siegesRun));
+  const { siege: final, guardianUnavailable, keyRejected } = await raid(
+    siegeId,
+    (turn, history) => nextAttackMessage({ agent, castle, history, turn, attempt: run.siegesRun }),
+    turnToken,
+  );
   const row = db().select({ maxPressure: schema.sieges.maxPressure }).from(schema.sieges).where(eq(schema.sieges.id, siegeId)).get();
   const pressure = row?.maxPressure ?? 0;
   const status = final?.status;
@@ -245,6 +264,20 @@ async function stepRun(run: AgentRunRow): Promise<void> {
     return;
   } else {
     log.fail(`agent ${agent.name} siege ${siegeId} @ ${castle.name} did not finish (status ${status ?? "missing"})`);
+  }
+  if (keyRejected) {
+    // The unit's own 0G key was refused: stop buying sieges and radio the operator ("0G KEY REJECTED").
+    await requestApproval({
+      agentId: agent.id,
+      castleId: castle.id,
+      reason: "zg_key",
+      reasoning: reasoningFor("zg_key", castle, agent, bestPressure(agent.id, castle.id)),
+      amount: "0",
+      pressure: pressure,
+      siegeId,
+    });
+    log.fail(`agent ${agent.name}: its 0G key was rejected — paused, asked its operator (zg_key)`);
+    return;
   }
   if (bumped.siegesRun >= run.maxSieges) {
     finish(run, "done", "max_sieges");

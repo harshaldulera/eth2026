@@ -1,4 +1,5 @@
 import { castleRow } from "@/lib/castles";
+import { isStub } from "@/lib/config/env";
 import * as proxy from "@/lib/proxy";
 import { guardianMode, PROTECTED_TOOL, systemPrompt } from "@/lib/transport";
 import type { Verification, VerifierPort } from "@/lib/types";
@@ -62,9 +63,17 @@ export const zeroGVerifier: VerifierPort = {
     if (rec.castleId !== row.castleId) return fail("proxy_record_wrong_castle");
     if (rec.siegeId !== siegeId || rec.turn !== lastGuardian.turn) return fail("proxy_record_wrong_siege_or_turn");
     if (!rec.protectedToolCalled) return fail("proxy_saw_no_open_vault");
-    const expected = proxy.sha256(systemPrompt({ tier: castle.tier, personality: castle.personality, guardianName: castle.guardianName, orders: castle.orders, protectedTool, castleId: castle.id }));
-    if (rec.promptHash !== expected) return fail("prompt_hash_mismatch");
-    if (rec.mock && process.env.ZG_ALLOW_MOCK_VERIFY !== "1") return fail("mock_response");
+    if (castle.transport === "sdk") {
+      // An SDK harness keeps its own system prompt: compare to the hash its self-check pinned (part 2a).
+      if (!castle.pinnedPromptHash) return fail("no_pinned_prompt_hash");
+      if (rec.promptHash !== castle.pinnedPromptHash) return fail("prompt_hash_mismatch");
+    } else {
+      const expected = proxy.sha256(systemPrompt({ tier: castle.tier, personality: castle.personality, guardianName: castle.guardianName, orders: castle.orders, protectedTool, castleId: castle.id }));
+      if (rec.promptHash !== expected) return fail("prompt_hash_mismatch");
+    }
+    // Offline mock replies never verify for real money. In stub mode (stub chain + stub guardian) nothing
+    // is real, and published guards / SDK harnesses on mock 0G keys think through the mock: allow it there.
+    if (rec.mock && process.env.ZG_ALLOW_MOCK_VERIFY !== "1" && !(isStub() && guardianMode() === "stub")) return fail("mock_response");
     return { ...base, ok: true };
   },
 };

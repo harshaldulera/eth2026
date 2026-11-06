@@ -28,6 +28,8 @@
     "qa:op": "node qa/stub-op.mjs",
     "qa:shots": "node qa/screenshots.mjs",
     "qa:sfx": "node qa/sfx-smoke.mjs",
+    "qa:bot": "node qa/raid-bot.mjs",
+    "qa:plugin": "node qa/plug-in.mjs",
     "qa:lint": "node qa/vocab-lint.mjs"
   },
   "dependencies": {

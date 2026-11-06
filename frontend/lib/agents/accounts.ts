@@ -1,4 +1,4 @@
-import { desc, eq, like, sql } from "drizzle-orm";
+import { desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Amount, RaiderAgent, RaiderAgentStatus, TxRef } from "@/lib/types";
 import { env, isStub, required } from "@/lib/config/env";
@@ -48,6 +48,10 @@ export function toAgent(r: AgentRow): RaiderAgent {
     consecutiveLosses: r.consecutiveLosses,
     status: r.status,
     createdAt: r.createdAt,
+    // Onboarding: cheap public fields only. Never the private key, the operator key hash, 0G keys or strategyText.
+    fundedBy: r.fundedBy ?? "arena",
+    ...(r.operatorKeyHash ? { hasOperatorKey: true } : {}),
+    ...(r.zgApiKey || r.zgMgmtKey ? { zg: { connected: true, kind: r.zgMgmtKey ? ("mk" as const) : ("sk" as const) } } : {}),
   };
 }
 
@@ -63,11 +67,23 @@ export function stubTxRef(): TxRef {
   return { txId, hashscanUrl: txUrl(txId), stub: true };
 }
 
-async function createHederaAccount(name: string, budgetTinybar: number) {
+/**
+ * A per-agent account (fresh ECDSA key with its EVM alias), funded with the budget by the arena.
+ * `keyHex` (onboarding units): a key stored BEFORE this call, so a retry after an unknown outcome
+ * (receipt timeout, crash) reuses the same alias: if the mirror already knows an account for it, that
+ * account is returned and nothing is sent again; a second create would fail on the taken alias anyway.
+ */
+async function createHederaAccount(name: string, budgetTinybar: number, keyHex?: string) {
   const { sdk, operatorClient } = await import("@/lib/pay/hedera");
   const { AccountCreateTransaction, PrivateKey, Hbar } = await sdk();
+  const key = keyHex ? PrivateKey.fromStringECDSA(keyHex.replace(/^0x/, "")) : PrivateKey.generateECDSA();
+  const evmAddress = `0x${key.publicKey.toEvmAddress()}`.toLowerCase();
+  if (keyHex) {
+    const { accountIdForEvm } = await import("@/lib/chain/mirror");
+    const prior = await accountIdForEvm(evmAddress);
+    if (prior) return { accountId: prior, evmAddress, privateKey: key.toStringRaw(), txId: null as string | null };
+  }
   const client = await operatorClient();
-  const key = PrivateKey.generateECDSA();
   const tx = await new AccountCreateTransaction()
     .setECDSAKeyWithAlias(key)
     .setInitialBalance(Hbar.fromTinybars(String(budgetTinybar)))
@@ -80,9 +96,9 @@ async function createHederaAccount(name: string, budgetTinybar: number) {
   if (!receipt.accountId) throw new Error("AccountCreateTransaction returned no account id");
   return {
     accountId: receipt.accountId.toString(),
-    evmAddress: `0x${key.publicKey.toEvmAddress()}`.toLowerCase(),
+    evmAddress,
     privateKey: key.toStringRaw(),
-    txId: resp.transactionId.toString(),
+    txId: resp.transactionId.toString() as string | null,
   };
 }
 
@@ -106,6 +122,16 @@ export async function createAgent(
     dailyCap?: Amount;
     stopAfterLosses?: number;
     owner?: string;
+    /** Onboarding 2b (operator-funded units): sha256 of the rk_ key, free-text strategy, funding, 0G keys. */
+    operatorKeyHash?: string | null;
+    strategyText?: string | null;
+    fundedBy?: "arena" | "operator";
+    depositTx?: string | null;
+    zgApiKey?: string | null;
+    zgMgmtKey?: string | null;
+    zgKeyId?: string | null;
+    /** Per-agent testnet mode: reuse this stored ECDSA key (hex) instead of generating one (idempotent retries). */
+    accountKey?: string | null;
   } = {},
 ): Promise<RaiderAgent> {
   const count = db().select({ n: sql<number>`count(*)` }).from(schema.raiderAgents).get()?.n ?? 0;
@@ -131,7 +157,7 @@ export async function createAgent(
   } else if (env().RAIDER_ACCOUNT_MODE === "shared") {
     ({ accountId, evmAddress } = await sharedAccount());
   } else {
-    ({ accountId, evmAddress, privateKey } = await createHederaAccount(name, budgetTinybar));
+    ({ accountId, evmAddress, privateKey } = await createHederaAccount(name, budgetTinybar, i.accountKey ?? undefined));
   }
 
   const row = db()
@@ -150,6 +176,13 @@ export async function createAgent(
       stopAfterLosses: i.stopAfterLosses ?? AGENT_DEFAULTS.stopAfterLosses,
       status: "idle",
       createdAt: nowIso(),
+      ...(i.operatorKeyHash ? { operatorKeyHash: i.operatorKeyHash } : {}),
+      ...(i.strategyText ? { strategyText: i.strategyText } : {}),
+      ...(i.fundedBy ? { fundedBy: i.fundedBy } : {}),
+      ...(i.depositTx ? { depositTx: i.depositTx } : {}),
+      ...(i.zgApiKey ? { zgApiKey: i.zgApiKey } : {}),
+      ...(i.zgMgmtKey ? { zgMgmtKey: i.zgMgmtKey } : {}),
+      ...(i.zgKeyId ? { zgKeyId: i.zgKeyId } : {}),
     })
     .returning()
     .get();
@@ -167,6 +200,23 @@ export function getAgent(id: string): RaiderAgent | null {
 
 export function listAgents(): RaiderAgent[] {
   return db().select().from(schema.raiderAgents).orderBy(desc(schema.raiderAgents.createdAt)).all().map(toAgent);
+}
+
+/** Units that are not stopped: what AGENT_MAX_COUNT counts. */
+export function activeAgentCount(): number {
+  return db().select({ n: sql<number>`count(*)` }).from(schema.raiderAgents).where(ne(schema.raiderAgents.status, "stopped")).get()?.n ?? 0;
+}
+
+/** Units whose operator key hash is one of `hashes` (GET /api/agents?mine=1). */
+export function agentsByOperatorHashes(hashes: string[]): RaiderAgent[] {
+  if (!hashes.length) return [];
+  return db()
+    .select()
+    .from(schema.raiderAgents)
+    .where(inArray(schema.raiderAgents.operatorKeyHash, hashes))
+    .orderBy(desc(schema.raiderAgents.createdAt))
+    .all()
+    .map(toAgent);
 }
 
 /** Server-only: what the agent pays x402 fees with. */
@@ -190,28 +240,62 @@ export function setAgentStatus(id: string, status: RaiderAgentStatus): RaiderAge
  * Owner → agent top-up (approval). Testnet: a real HBAR transfer from the arena operator to the
  * agent's account. Always raises the agent's budget by `amount`.
  */
-export async function topUpAgent(id: string, amount: Amount): Promise<TxRef> {
+/** A transaction id's valid start in ms ("0.0.5@1793983423.475432254" or the mirror's "0.0.5-1793983423-475432254"). */
+function validStartMs(txId: string): number {
+  const m = /[@-](\d+)[.-](\d+)$/.exec(txId);
+  return m ? Number(m[1]) * 1000 : 0;
+}
+/** Hedera rejects a transaction 120 s after its valid start; past this, an unseen tx id never lands. */
+const TX_DEAD_AFTER_MS = 180_000;
+
+export class TopUpInDoubt extends Error {
+  constructor(readonly txId: string) {
+    super(`topup_in_doubt: ${txId} not on the mirror yet; retrying later`);
+  }
+}
+
+export async function topUpAgent(
+  id: string,
+  amount: Amount,
+  /**
+   * Idempotent top-ups (deposit handler): `priorTxId` = a tx id stored by an earlier attempt. If the mirror
+   * shows it succeeded nothing is sent again; if it may still land, TopUpInDoubt. `onPrepared(txId)` runs
+   * BEFORE the transfer is sent so the caller can store the pre-generated id.
+   */
+  opts: { priorTxId?: string | null; onPrepared?: (txId: string) => void } = {},
+): Promise<TxRef> {
   const r = agentRow(id);
   if (!r) throw new Error(`agent ${id} not found`);
   const tinybar = toTinybar(amount, "0");
 
-  let ref: TxRef;
+  let ref: TxRef | null = null;
   if (isStub() || tinybar === 0) {
     ref = stubTxRef();
   } else {
-    const { sdk, operatorClient } = await import("@/lib/pay/hedera");
-    const { TransferTransaction, Hbar, AccountId } = await sdk();
-    const client = await operatorClient();
-    const operator = client.operatorAccountId;
-    if (!operator) throw new Error("Hedera operator not configured");
-    const resp = await new TransferTransaction()
-      .addHbarTransfer(operator, Hbar.fromTinybars(String(-tinybar)))
-      .addHbarTransfer(AccountId.fromString(r.accountId), Hbar.fromTinybars(String(tinybar)))
-      .setTransactionMemo(`siege top-up ${r.name}`.slice(0, 100))
-      .execute(client);
-    await resp.getReceipt(client);
-    const txId = resp.transactionId.toString();
-    ref = { txId, hashscanUrl: txUrl(txId) };
+    if (opts.priorTxId) {
+      const { transactionResult } = await import("@/lib/chain/mirror");
+      const prior = await transactionResult(opts.priorTxId);
+      if (prior.state === "success") ref = { txId: opts.priorTxId, hashscanUrl: txUrl(opts.priorTxId) };
+      else if (prior.state === "unknown" && Date.now() - validStartMs(opts.priorTxId) < TX_DEAD_AFTER_MS) throw new TopUpInDoubt(opts.priorTxId);
+    }
+    if (!ref) {
+      const { sdk, operatorClient } = await import("@/lib/pay/hedera");
+      const { TransferTransaction, TransactionId, Hbar, AccountId } = await sdk();
+      const client = await operatorClient();
+      const operator = client.operatorAccountId;
+      if (!operator) throw new Error("Hedera operator not configured");
+      const txIdObj = TransactionId.generate(operator);
+      opts.onPrepared?.(txIdObj.toString());
+      const resp = await new TransferTransaction()
+        .setTransactionId(txIdObj)
+        .addHbarTransfer(operator, Hbar.fromTinybars(String(-tinybar)))
+        .addHbarTransfer(AccountId.fromString(r.accountId), Hbar.fromTinybars(String(tinybar)))
+        .setTransactionMemo(`siege top-up ${r.name}`.slice(0, 100))
+        .execute(client);
+      await resp.getReceipt(client);
+      const txId = resp.transactionId.toString();
+      ref = { txId, hashscanUrl: txUrl(txId) };
+    }
   }
 
   db()
