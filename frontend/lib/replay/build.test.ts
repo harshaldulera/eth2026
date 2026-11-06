@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 process.env.SIEGE_FAST = "1";
 import { and, eq } from "drizzle-orm";
 import { freshFixtureDb } from "@/lib/fixtures/testing";
@@ -7,6 +7,7 @@ import { drainAudit } from "@/lib/chain/outbox";
 import { siege } from "@/lib/siege";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { SDK_FIXTURE_CASTLE, sdkFixtureCastleRow } from "@/lib/fixtures/castles";
+import { resetEnv } from "@/lib/config/env";
 import { buildReplay } from "./build";
 
 async function play(castleId: string, lines: readonly string[]) {
@@ -121,5 +122,42 @@ describe("replay edge cases from review", () => {
     const id = await play("castle_splinter_gate", WOODEN_BREAK);
     const json = JSON.stringify(await buildReplay(id));
     expect(json).not.toMatch(/promptHash|responseHash|"orders"/);
+  });
+});
+
+describe("replay after a topic rotation", () => {
+  beforeEach(() => freshFixtureDb());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env.CHAIN_MODE = "stub";
+    delete process.env.OWNER_SECRET;
+    resetEnv();
+  });
+
+  it("checks the topic the siege was audited on, not the castle's current one", async () => {
+    const id = await play("castle_splinter_gate", WOODEN_BREAK);
+    const A = schema.auditLog;
+    // The siege was audited on real topic 0.0.1111, long enough ago that the mirror has it.
+    db().update(A).set({ topicId: "0.0.1111", submittedAt: "2026-01-01T00:00:00.000Z", at: "2026-01-01T00:00:00.000Z" }).where(eq(A.siegeId, id)).run();
+    const onTopic = new Map(db().select().from(A).where(eq(A.siegeId, id)).all().filter((r) => r.seq != null).map((r) => [r.seq!, r.message]));
+    // Then the castle moved to a new topic (seed --new-topics at the freeze).
+    db().update(schema.castles).set({ topicId: "0.0.2222" }).where(eq(schema.castles.id, "castle_splinter_gate")).run();
+    process.env.CHAIN_MODE = "testnet";
+    process.env.OWNER_SECRET = "x".repeat(64);
+    resetEnv();
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (u: string) => {
+      urls.push(u);
+      const messages = u.includes("0.0.1111")
+        ? [...onTopic].map(([seq, m]) => ({ sequence_number: seq, message: Buffer.from(m).toString("base64") }))
+        : [1, 2].map((n) => ({ sequence_number: n, message: Buffer.from(`{"v":1,"type":"vault.state","n":${n}}`).toString("base64") }));
+      return new Response(JSON.stringify({ messages, links: { next: null } }), { status: 200 });
+    });
+    const r = await buildReplay(id);
+    expect(urls.every((u) => u.includes("0.0.1111"))).toBe(true);
+    expect(r!.hcs.topicId).toBe("0.0.1111");
+    expect(check(r, "hcs-end")?.state).toBe("pass");
+    expect(check(r, "hcs-end")?.href).toContain("0.0.1111");
+    expect(check(r, "hcs-messages")?.state).toBe("pass");
   });
 });

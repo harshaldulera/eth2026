@@ -86,9 +86,11 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
 
   // ── HCS: what the castle's topic carries for this siege ────────────────────────────────────────
   const { rows, skipped } = auditRows(siegeId);
-  const topicId = castle.topicId ?? rows[0]?.topicId ?? null;
-  // No topic at all (testnet topic creation failed): the outbox skips every row, nothing is audited.
-  const noTopic = !castle.topicId && rows.length === 0 && (skipped > 0 || env().CHAIN_MODE === "testnet");
+  // The topic this siege was audited on: its own rows carry it. The castle's topic can have moved
+  // since (seed --new-topics at the freeze), and the old sequence numbers mean nothing on the new one.
+  const topicId = rows[0]?.topicId ?? castle.topicId ?? null;
+  // Not audited: every row was skipped (no topic when it ran), or testnet with no topic at all.
+  const noTopic = rows.length === 0 && (skipped > 0 || (!castle.topicId && env().CHAIN_MODE === "testnet"));
   const stubTopic = !noTopic && (!topicId || isStubRef(topicId) || topicId.includes("stub"));
   const realTopic = !stubTopic && !noTopic;
   let mirror: ReplayData["hcs"]["mirror"] = "skipped";
@@ -216,6 +218,8 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
               ? ", confirmed on the mirror node"
               : end.mirror === "missing"
                 ? ", not on the mirror node"
+                : end.mirror === "mismatch"
+                  ? ", differs on the mirror node"
                 : realTopic && end.state === "submitted"
                   ? mirror === "unavailable" ? ", mirror node unreachable" : ", waiting for the mirror node"
                   : ""
