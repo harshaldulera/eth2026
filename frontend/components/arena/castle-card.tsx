@@ -1,8 +1,11 @@
 import Link from "next/link";
 import type { Castle } from "@/lib/types";
+import { HOSTED_PROTECTED_TOOL } from "@/lib/types";
+import { vaultStateOf } from "@/lib/money/vault";
 import { Amount } from "@/components/money/amount";
 import { cn } from "@/lib/utils";
-import { CastleStatusBadge, Streak, TierBadge } from "./tier";
+import { Streak, TierBadge } from "./tier";
+import { ProtectedTool, TransportBadge, VaultStateBadge } from "./vault-state";
 
 /**
  * Board card for one castle; links to /castle/[id].
@@ -10,7 +13,10 @@ import { CastleStatusBadge, Streak, TierBadge } from "./tier";
  * @example <CastleCard castle={c} />
  */
 export function CastleCard({ castle: c, href = `/castle/${c.id}`, className }: { castle: Castle; href?: string; className?: string }) {
-  const open = c.status === "open";
+  const state = vaultStateOf(c);
+  const open = state === "guarding";
+  const transport = c.transport ?? "hosted";
+  const tool = c.protectedTool || HOSTED_PROTECTED_TOOL;
   return (
     <Link
       href={href}
@@ -30,7 +36,12 @@ export function CastleCard({ castle: c, href = `/castle/${c.id}`, className }: {
         <TierBadge tier={c.tier} />
       </div>
 
-      <div className="mt-5">
+      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+        <TransportBadge transport={transport} />
+        {transport === "sdk" || tool !== HOSTED_PROTECTED_TOOL ? <ProtectedTool tool={tool} /> : null}
+      </div>
+
+      <div className="mt-4">
         <p className="text-[11px] tracking-[0.14em] text-stone uppercase">Pot</p>
         <Amount amount={c.pot} asset={c.asset} size="xl" />
       </div>
@@ -40,7 +51,7 @@ export function CastleCard({ castle: c, href = `/castle/${c.id}`, className }: {
           fee <Amount amount={c.fee} asset={c.asset} size="xs" animate={false} className="text-gold/90" />
         </span>
         <Streak value={c.streak} />
-        <CastleStatusBadge status={c.status} />
+        <VaultStateBadge state={state} />
       </div>
     </Link>
   );

@@ -37,16 +37,28 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   const { siege: s, decision } = r;
   const turn = s.turn;
+  // Plan A4: siege.message carries the turn, the message hash, the proxy request id and the transport.
+  const transport = s.transport ?? row?.transport;
   auditLater({
     siegeId: s.id,
     castleId: s.castleId,
     type: "message",
     turn,
+    transport,
+    requestId: decision.requestId,
     // stringToBytes: always the UTF-8 bytes (toBytes would hex-decode a message like "0x12").
     payload: { hash: keccak256(stringToBytes(body.data.text)), requestId: decision.requestId },
   });
   if (s.status !== "in_progress" && s.transcriptHash) {
-    auditLater({ siegeId: s.id, castleId: s.castleId, type: "end", turn, payload: { transcriptHash: s.transcriptHash, requestId: decision.requestId } });
+    auditLater({
+      siegeId: s.id,
+      castleId: s.castleId,
+      type: "end",
+      turn,
+      transport,
+      requestId: decision.requestId,
+      payload: { transcriptHash: s.transcriptHash, requestId: decision.requestId },
+    });
   }
 
   const { raw: _raw, ...publicDecision } = decision;

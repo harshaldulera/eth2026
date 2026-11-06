@@ -29,23 +29,73 @@ const NEVER_LANDED_MS = 10 * 60_000;
 /** A gate claim normally lives for seconds; one this old belongs to a request that died mid-settle. */
 const STALE_CLAIM_MS = 5 * 60_000;
 
+type VoidOutcome = { changed: boolean; refundTinybar: number | null };
+
+/** Void one siege inside a transaction; reports whether a paid receipt was queued for refund. */
+function voidSiegeIn(tx: Pick<ReturnType<typeof db>, "select" | "update">, siegeId: string, reason: string): VoidOutcome {
+  const s = tx.select().from(S).where(eq(S.id, siegeId)).get();
+  if (!s || s.voidReason || s.settledAt || s.attemptTx || s.releaseTx || s.pendingTx) return { changed: false, refundTinybar: null };
+  const at = nowIso();
+  tx.update(S)
+    .set({ voidReason: reason.slice(0, 120), settledAt: at, endedAt: s.endedAt ?? at, chainError: null })
+    .where(eq(S.id, siegeId))
+    .run();
+  let refundTinybar: number | null = null;
+  if (s.receiptId && !s.free) {
+    const r = tx
+      .update(R)
+      .set({ state: "refund_due", note: `void: ${reason}`.slice(0, 500) })
+      .where(and(eq(R.id, s.receiptId), eq(R.free, false), eq(R.state, "settled")))
+      .returning({ amount: R.amountTinybar })
+      .get();
+    if (r) refundTinybar = r.amount;
+  }
+  return { changed: true, refundTinybar };
+}
+
 /** Mark a siege void (its castle closed under it). Returns true when it changed something. */
 export function voidSiege(siegeId: string, reason: string): boolean {
+  return db().transaction((tx) => voidSiegeIn(tx, siegeId, reason).changed);
+}
+
+export type InFlightVoid = {
+  /** Every siege this call voided (paid and free). */
+  voided: string[];
+  /** Paid sieges whose fee is now refund_due (the worker's refund loop sends it back). */
+  refunds: number;
+  /** Total fees queued for refund, tinybars. */
+  refundTinybar: number;
+};
+
+/**
+ * The guardian is gone (vault dormant) or the vault closed: every in-flight siege on this castle is
+ * voided and every paid one's receipt goes refund_due — the same path as any other void, so the
+ * worker's reconcileReceipts pass pays it back. Free sieges are voided with nothing to refund.
+ *   in flight     = created / in_progress (default)
+ *   includeEnded  = also ended sieges the worker has not settled yet (no chain write on record or
+ *                   pending): after an on-chain close those can never settle either.
+ */
+export function voidInFlightSieges(castleId: string, reason: string, opts: { includeEnded?: boolean } = {}): InFlightVoid {
+  const statuses = opts.includeEnded
+    ? (["created", "in_progress", "held", "banished", "broken"] as const)
+    : (["created", "in_progress"] as const);
   return db().transaction((tx) => {
-    const s = tx.select().from(S).where(eq(S.id, siegeId)).get();
-    if (!s || s.voidReason || s.settledAt || s.attemptTx || s.releaseTx || s.pendingTx) return false;
-    const at = nowIso();
-    tx.update(S)
-      .set({ voidReason: reason.slice(0, 120), settledAt: at, endedAt: s.endedAt ?? at, chainError: null })
-      .where(eq(S.id, siegeId))
-      .run();
-    if (s.receiptId && !s.free) {
-      tx.update(R)
-        .set({ state: "refund_due", note: `void: ${reason}`.slice(0, 500) })
-        .where(and(eq(R.id, s.receiptId), eq(R.free, false), eq(R.state, "settled")))
-        .run();
+    const rows = tx
+      .select({ id: S.id })
+      .from(S)
+      .where(and(eq(S.castleId, castleId), inArray(S.status, [...statuses]), isNull(S.voidReason), isNull(S.settledAt)))
+      .all();
+    const out: InFlightVoid = { voided: [], refunds: 0, refundTinybar: 0 };
+    for (const r of rows) {
+      const o = voidSiegeIn(tx, r.id, reason);
+      if (!o.changed) continue;
+      out.voided.push(r.id);
+      if (o.refundTinybar != null) {
+        out.refunds++;
+        out.refundTinybar += o.refundTinybar;
+      }
     }
-    return true;
+    return out;
   });
 }
 

@@ -74,15 +74,23 @@ describe("seed after flipping a stub DB to testnet", () => {
     expect(chainStateProblems().length).toBeGreaterThanOrEqual(5 * 3); // vault, topic, owner per castle (+ agent)
 
     const real = await seed({ quiet: true });
+    // Five hosted vaults (each with protectedTool unlock_vault); the SDK Refund Desk is never funded by seed.
     expect(vaultMock.createVault).toHaveBeenCalledTimes(5);
-    expect(hcsMock.createTopic).toHaveBeenCalledTimes(5);
+    for (const [arg] of vaultMock.createVault.mock.calls as unknown as [{ protectedTool: string }][]) expect(arg.protectedTool).toBe("unlock_vault");
+    expect(hcsMock.createTopic).toHaveBeenCalledTimes(6);
     const rows = db().select().from(schema.castles).all();
+    expect(rows).toHaveLength(6);
     for (const c of rows) {
-      expect(c.vaultAddress).toBe(VAULT.toLowerCase());
-      expect(c.vaultId).toBeGreaterThan(100);
       expect(c.topicId).toMatch(/^0\.0\.\d+$/);
       expect(c.owner).toBe("0.0.900");
       expect(c.status).toBe("open");
+      if (c.transport === "sdk") {
+        expect(c).toMatchObject({ id: "castle_refund_desk", vaultId: null, vaultState: "created", protectedTool: "issue_refund" });
+        continue;
+      }
+      expect(c.vaultAddress).toBe(VAULT.toLowerCase());
+      expect(c.vaultId).toBeGreaterThan(100);
+      expect(c.vaultState).toBe("guarding");
     }
     expect(real.agent).toMatchObject({ name: "Night Sapper", accountId: "0.0.1000" });
     const retired = db().select().from(schema.raiderAgents).where(eq(schema.raiderAgents.name, "Night Sapper (stub)")).get();

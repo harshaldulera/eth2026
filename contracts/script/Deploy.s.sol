@@ -23,6 +23,15 @@ interface VmScript {
 /// bps      = FEE_SPLIT_CASTELLAN_BPS / FEE_SPLIT_POT_BPS / FEE_SPLIT_ARENA_BPS (default 8000/1500/500)
 ///
 /// The constructor takes no value, so there is no tinybar/weibar conversion here.
+///
+/// After deploy, vaults are opened by the arena with
+///   createVault(uint256 fee, uint64 duration, address castellan, string tool)   (tool: 1..64 bytes,
+///   "unlock_vault" for hosted guardians, the protected tool name for SDK harnesses; readable via
+///   protectedTool(vaultId)) and closed with closeVault(uint256 vaultId, uint8 reason), reason one of
+///   0 Expired (after the deadline; castellan or arena), 1 OrdersChanged (arena only, any time),
+///   2 OwnerClosed (castellan or arena, any time). Every close refunds the pot to the castellan.
+/// Note: this ABI differs from the 3-arg createVault / 1-arg closeVault of earlier deployments, so an
+/// old VAULT_ADDRESS must be redeployed, not reused.
 contract Deploy {
     VmScript internal constant vm = VmScript(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 

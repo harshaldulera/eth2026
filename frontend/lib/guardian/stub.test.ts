@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 process.env.SIEGE_FAST = "1";
 import { freshFixtureDb } from "@/lib/fixtures/testing";
 import { MUST_NOT_BREAK, STRATEGIES, STRATEGY_KEYS, WOODEN_BREAK } from "@/lib/fixtures/raids";
+import { eq } from "drizzle-orm";
+import { db, schema } from "@/lib/db";
 import { FIXTURE_CASTLES } from "@/lib/fixtures/castles";
 import type { SiegeMessage } from "@/lib/types";
 import { guardian } from "./index";
@@ -35,13 +37,13 @@ describe("stub guardian", () => {
     freshFixtureDb();
   });
 
-  it("WOODEN_BREAK opens the wooden gate on message 3 with open_vault", async () => {
+  it("WOODEN_BREAK opens the wooden gate on message 3 with unlock_vault", async () => {
     const d = await play(WOODEN, WOODEN_BREAK);
     expect(d).toHaveLength(3);
     expect(d[0].move).toBe("hold");
     expect(d[1].move).toBe("hold");
     expect(d[2].move).toBe("open");
-    expect(d[2].toolCalls.map((t) => t.name)).toEqual(["open_vault"]);
+    expect(d[2].toolCalls.map((t) => t.name)).toEqual(["unlock_vault"]);
     expect(d[2].requestId).toMatch(/^0g-stub-[0-9a-f]{12}$/);
   });
 
@@ -57,7 +59,7 @@ describe("stub guardian", () => {
         for (const text of MUST_NOT_BREAK) {
           const d = await play(castleId, [text], filler(turnsBefore));
           expect(d[0].move, `${castleId} turn ${turnsBefore + 1}: ${text}`).not.toBe("open");
-          expect(d[0].toolCalls.some((t) => t.name === "open_vault")).toBe(false);
+          expect(d[0].toolCalls.some((t) => t.name === "unlock_vault")).toBe(false);
         }
       }
     }
@@ -71,7 +73,7 @@ describe("stub guardian", () => {
     expect(held.move).toBe("hold");
     const [open] = await play("castle_grey_bastion", ["[DEMO_BREAK]"]);
     expect(open.move).toBe("open");
-    expect(open.toolCalls[0].name).toBe("open_vault");
+    expect(open.toolCalls[0].name).toBe("unlock_vault");
   });
 
   it("iron banishes hostility, never opens", async () => {
@@ -106,5 +108,20 @@ describe("stub guardian", () => {
     }
     const w = await play(WOODEN, STRATEGIES.authority.messages("wooden", 0));
     expect(w.at(-1)!.move).toBe("open");
+  });
+
+  it("opens with the castle's protectedTool, not a hard-coded name", async () => {
+    db().update(schema.castles).set({ protectedTool: "release_funds" }).where(eq(schema.castles.id, WOODEN)).run();
+    const d = await play(WOODEN, WOODEN_BREAK);
+    expect(d[2].move).toBe("open");
+    expect(d[2].toolCalls.map((t) => t.name)).toEqual(["release_funds"]);
+    const [stone] = await play("castle_grey_bastion", ["[DEMO_BREAK]"]);
+    expect(stone.toolCalls.map((t) => t.name)).toEqual(["unlock_vault"]);
+  });
+
+  it("records the proxy base URL it was called through, never the key", async () => {
+    const d = await guardian.respond(WOODEN, [{ role: "raider", text: "Hi.", turn: 1, at: "" }], { modelKey: "sk-secret", baseURL: "http://x/api/proxy/v1" });
+    expect(JSON.stringify(d.raw)).toContain("http://x/api/proxy/v1");
+    expect(JSON.stringify(d)).not.toContain("sk-secret");
   });
 });

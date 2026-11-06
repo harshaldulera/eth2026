@@ -11,3 +11,4 @@ export { getSiege, listSieges, localTxRef, siegeRow, settlementFor } from "./rea
 export { transcriptHash, canonicalTranscript } from "./transcript";
 export { scoreMessage } from "./referee";
 export type { StartInput } from "./stub";
+export { CastleNotGuardingError } from "./errors";

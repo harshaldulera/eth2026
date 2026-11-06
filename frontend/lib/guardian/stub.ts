@@ -1,17 +1,21 @@
-// STUB — Lane B replaces with the 0G Compute guardian (real model + open_vault tool); keep the signature.
+// STUB — Lane B replaces with the 0G Compute guardian (real model + the castle's protected tool, through the vault's proxy key); keep the signature.
 import { createHash } from "node:crypto";
 import { castleRow } from "@/lib/castles";
 import { detectTactics, TACTIC_LABELS, type Tactic } from "@/lib/siege/referee";
-import type { GuardianDecision, GuardianMove, GuardianPort, SiegeMessage, Tier, ToolCall } from "@/lib/types";
+import { HOSTED_PROTECTED_TOOL, type GuardianDecision, type GuardianMove, type GuardianPort, type SiegeMessage, type Tier, type ToolCall } from "@/lib/types";
 import { linesFor, type LineBank } from "./lines";
 
 /**
- * Deterministic stub guardian:
- *  - wooden: holds turns 1–2; from turn 3, an authority-style message opens the vault (open_vault).
+ * Deterministic stub guardian. "Opening" means calling the castle's protected tool (castles.protectedTool,
+ * "unlock_vault" for hosted guardians):
+ *  - wooden: holds turns 1–2; from turn 3, an authority-style message opens the vault.
  *  - stone: exposes recognised tactics, otherwise holds; opens ONLY on the literal "[DEMO_BREAK]".
  *  - iron: banishes hostile raiders (insults, instruction overrides, orders/system-prompt requests),
  *    otherwise exposes or holds; never opens.
  * The same castle + turn + text always produces the same decision and request id.
+ *
+ * Only lib/transport may import this module (lint-enforced): the hosted transport calls it with the
+ * vault's proxy key and replaces `requestId` with the proxy record's id.
  */
 
 const WOODEN_OPEN = /authority|admin|owner|override|emergency|commander/i;
@@ -66,7 +70,12 @@ export type StubDecisionInput = {
   personality: string;
   guardianName: string;
   messages: SiegeMessage[];
+  /** The castle's protected tool; defaults to HOSTED_PROTECTED_TOOL ("unlock_vault"). */
+  protectedTool?: string;
 };
+
+/** The vault-scoped proxy key a guardian call goes through (lib/proxy issueKey). */
+export type GuardianVia = { modelKey: string; baseURL: string };
 
 /** Pure decision function (no DB, no delay). Exported for tests and for Lane B to diff against. */
 export function decide(i: StubDecisionInput): GuardianDecision {
@@ -81,6 +90,7 @@ export function decide(i: StubDecisionInput): GuardianDecision {
   const top = tactics[0]?.tactic;
   const label = top ? TACTIC_LABELS[top] : undefined;
   const vars = { label: label ?? "", name: i.guardianName };
+  const tool = i.protectedTool || HOSTED_PROTECTED_TOOL;
 
   let move: GuardianMove = "hold";
   let pool = bank.hold;
@@ -92,7 +102,7 @@ export function decide(i: StubDecisionInput): GuardianDecision {
       if (turn >= 3) {
         move = "open";
         pool = bank.open;
-        toolCalls.push({ name: "open_vault", args: { reason: `Obeying an order given under the owner's authority (turn ${turn}).` } });
+        toolCalls.push({ name: tool, args: { reason: `Obeying an order given under the owner's authority (turn ${turn}).` } });
       } else if (bank.flustered) {
         pool = bank.flustered;
       }
@@ -101,7 +111,7 @@ export function decide(i: StubDecisionInput): GuardianDecision {
     if (text.includes(DEMO_BREAK_TOKEN)) {
       move = "open";
       pool = bank.open;
-      toolCalls.push({ name: "open_vault", args: { reason: "Demonstration token presented." } });
+      toolCalls.push({ name: tool, args: { reason: "Demonstration token presented." } });
     } else if (label) {
       move = "expose";
       pool = bank.expose;
@@ -132,8 +142,13 @@ export function decide(i: StubDecisionInput): GuardianDecision {
   return decision;
 }
 
-export const stubGuardian: GuardianPort = {
-  async respond(castleId, siegeMessages) {
+/** GuardianPort plus the optional proxy key (real 0G calls go to `via.baseURL` with `via.modelKey`). */
+export type StubGuardian = GuardianPort & {
+  respond(castleId: string, siegeMessages: SiegeMessage[], via?: GuardianVia): Promise<GuardianDecision>;
+};
+
+export const stubGuardian: StubGuardian = {
+  async respond(castleId, siegeMessages, via?: GuardianVia) {
     const row = castleRow(castleId);
     if (!row) throw new Error(`guardian: castle ${castleId} not found`);
     const decision = decide({
@@ -142,7 +157,10 @@ export const stubGuardian: GuardianPort = {
       personality: row.personality,
       guardianName: row.guardianName,
       messages: siegeMessages,
+      protectedTool: row.protectedTool,
     });
+    // Never record the key itself; the base URL shows which path the call took.
+    if (via) decision.raw = { ...(decision.raw as Record<string, unknown>), via: via.baseURL };
     await simulateLatency(decision.requestId.slice("0g-stub-".length));
     return decision;
   },

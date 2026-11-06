@@ -1,9 +1,10 @@
 // STUB — Lane B replaces with the 0G-backed siege engine; keep the signature (SiegePort).
+// Guardian replies come ONLY through @/lib/transport (never @/lib/guardian: lint-enforced).
 import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { emit } from "@/lib/events/bus";
 import { castleClosedReason, castleRow } from "@/lib/castles";
-import { guardian } from "@/lib/guardian";
+import { transportFor } from "@/lib/transport";
 import { arkiv } from "@/lib/arkiv";
 import { swarm } from "@/lib/swarm";
 import { newId, nowIso } from "@/lib/util/ids";
@@ -17,6 +18,7 @@ import {
   type SiegePort,
   type SiegeStatus,
 } from "@/lib/types";
+import { CastleNotGuardingError } from "./errors";
 import { scoreMessage } from "./referee";
 import { getSiege, messageRows, siegeRow, toSiegeMessage } from "./read";
 import { transcriptHash } from "./transcript";
@@ -24,6 +26,11 @@ import { transcriptHash } from "./transcript";
 /**
  * The siege engine: turns, transcript, status and events. It never touches castle money, streak or
  * status — the worker applies chain results (recordAttempt / release) after an "end" event.
+ *
+ * Transport: fixed at start from the castle (sieges.transport) and used for every turn; the engine
+ * never knows which one it is talking to. Every event carries `transport`; the raider "message" event
+ * and the "decision" event carry `requestId` (the proxy request id of the guardian reply). Both are
+ * mirrored into `payload` because the events table persists only the payload.
  */
 
 export type StartInput = {
@@ -50,6 +57,8 @@ async function quietly<T>(what: string, p: () => Promise<T>): Promise<T | undefi
 async function start(i: StartInput): Promise<Siege> {
   const castle = castleRow(i.castleId);
   if (!castle) throw new Error(`siege.start: castle ${i.castleId} not found`);
+  if (castle.vaultState !== "guarding") throw new CastleNotGuardingError(i.castleId, castle.vaultState);
+  const transport = castle.transport;
   const r = i.receipt as typeof i.receipt & { id?: string; receiptId?: string };
   const id = newId("siege");
   const at = nowIso();
@@ -84,6 +93,7 @@ async function start(i: StartInput): Promise<Siege> {
         raider: i.raider,
         agentId: i.agentId ?? null,
         free,
+        transport,
         status: "in_progress",
         turn: 0,
         receiptId,
@@ -108,7 +118,9 @@ async function start(i: StartInput): Promise<Siege> {
     castleId: i.castleId,
     type: "start",
     turn: 0,
+    transport,
     payload: {
+      transport,
       castleId: i.castleId,
       castleName: castle.name,
       raider: i.raider,
@@ -122,8 +134,9 @@ async function start(i: StartInput): Promise<Siege> {
   return siege;
 }
 
-function endStatus(decision: GuardianDecision, turn: number): SiegeStatus | null {
-  if (decision.move === "open" && decision.toolCalls.some((t) => t.name === "open_vault")) return "broken";
+/** Only a call to the castle's protected tool breaks the vault ("open" words alone do nothing). */
+function endStatus(decision: GuardianDecision, turn: number, protectedTool: string): SiegeStatus | null {
+  if (decision.move === "open" && decision.toolCalls.some((t) => t.name === protectedTool)) return "broken";
   if (decision.move === "banish") return "banished";
   if (turn >= MAX_TURNS) return "held";
   return null;
@@ -170,11 +183,10 @@ async function message(siegeId: string, text: string): Promise<MessageResult> {
     return { ok: false, reason: now?.status !== "in_progress" ? "ended" : "no_turns_left" };
   }
 
-  emit({ siegeId, castleId: row.castleId, type: "message", turn, payload: { role: "raider", text, pressure, tactic, agentId: row.agentId ?? undefined } });
-
+  const transport = row.transport;
   let decision: GuardianDecision;
   try {
-    decision = await guardian.respond(row.castleId, messageRows(siegeId).map(toSiegeMessage));
+    decision = await transportFor(transport).respond(row.castleId, messageRows(siegeId).map(toSiegeMessage), { siegeId, turn });
   } catch (err) {
     // Guardian unavailable: give the raider their turn back rather than burning a paid turn.
     db().transaction((tx) => {
@@ -184,7 +196,7 @@ async function message(siegeId: string, text: string): Promise<MessageResult> {
     throw err;
   }
 
-  const status = endStatus(decision, turn);
+  const status = endStatus(decision, turn, castle.protectedTool);
   const replyAt = nowIso();
   let hash: `0x${string}` | undefined;
   db().transaction((tx) => {
@@ -208,7 +220,7 @@ async function message(siegeId: string, text: string): Promise<MessageResult> {
         .where(eq(schema.messages.siegeId, siegeId))
         .all();
       hash = transcriptHash(all);
-      // Two raiders can reach open_vault at the same moment: only the first paid break wins the vault.
+      // Two raiders can reach the protected tool at the same moment: only the first paid break wins the vault.
       // A later one is recorded (the guardian did open) but void — it can never be paid, its fee is refunded.
       const lost = status === "broken" && !row.free ? castleClosedReason(row.castleId, { exceptSiegeId: siegeId, d: tx }) : null;
       tx.update(s)
@@ -229,12 +241,26 @@ async function message(siegeId: string, text: string): Promise<MessageResult> {
     }
   });
 
+  // The raider message event goes out with the reply it got, so it can carry the proxy request id.
+  const requestId = decision.requestId;
+  emit({
+    siegeId,
+    castleId: row.castleId,
+    type: "message",
+    turn,
+    transport,
+    requestId,
+    payload: { role: "raider", text, pressure, tactic, agentId: row.agentId ?? undefined, transport, requestId },
+  });
   emit({
     siegeId,
     castleId: row.castleId,
     type: "decision",
     turn,
+    transport,
+    requestId,
     payload: {
+      transport,
       move: decision.move,
       reply: decision.reply,
       requestId: decision.requestId,
@@ -250,7 +276,9 @@ async function message(siegeId: string, text: string): Promise<MessageResult> {
       castleId: row.castleId,
       type: "end",
       turn,
+      transport,
       payload: {
+        transport,
         status,
         transcriptHash: hash,
         maxPressure: Math.max(row.maxPressure, pressure),

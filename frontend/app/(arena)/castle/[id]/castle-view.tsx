@@ -4,18 +4,21 @@ import { useLayoutEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Gift, Loader2, ScrollText, Swords } from "lucide-react";
+import { ArrowLeft, DoorClosed, Gift, KeyRound, Loader2, ScrollText, Swords } from "lucide-react";
 import type { Castle, Siege } from "@/lib/types";
-import { ApiError, api, describeError, type CastleDetail } from "@/lib/api/client";
-import { usePolling } from "@/lib/hooks/usePolling";
+import { HOSTED_PROTECTED_TOOL } from "@/lib/types";
+import { ApiError, api, asOwner, describeError, isNotGuarding, type CastleDetail, type CloseCastleResponse } from "@/lib/api/client";
+import { usePolling, useNow } from "@/lib/hooks/usePolling";
 import { useConfig } from "@/lib/hooks/useConfig";
 import { formatAmount, timeAgo } from "@/lib/money/format";
+import { closeReasonText, isTerminal, notTakingSiegesReason, vaultStateOf } from "@/lib/money/vault";
 import { Amount } from "@/components/money/amount";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { EmptyState, ErrorState, Loading } from "@/components/ui/state";
-import { CastleStatusBadge, SiegeStatusBadge, Streak, TIER_DEFENSES, TierBadge } from "@/components/arena/tier";
+import { SiegeStatusBadge, Streak, TIER_DEFENSES, TierBadge } from "@/components/arena/tier";
+import { ProtectedTool, TransportBadge, VaultSetupSteps, VaultStateBadge } from "@/components/arena/vault-state";
 
 /** Fallback until /api/config arrives (the contract default). */
 const DEFAULT_SPLIT_BPS = { castellan: 8000, pot: 1500, arena: 500 };
@@ -42,10 +45,10 @@ export function CastleView() {
     );
   }
   if (loading || !data) return <Loading label="Approaching the castle…" />;
-  return <CastleDetailView detail={data} />;
+  return <CastleDetailView detail={data} refresh={() => void refresh()} />;
 }
 
-function CastleDetailView({ detail }: { detail: CastleDetail }) {
+function CastleDetailView({ detail, refresh }: { detail: CastleDetail; refresh: () => void }) {
   const { castle: c, sieges, audit } = detail;
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
@@ -57,13 +60,16 @@ function CastleDetailView({ detail }: { detail: CastleDetail }) {
         <section>
           <div className="flex flex-wrap items-center gap-2">
             <TierBadge tier={c.tier} />
-            <CastleStatusBadge status={c.status} />
+            <VaultStateBadge state={vaultStateOf(c)} />
+            <TransportBadge transport={c.transport ?? "hosted"} />
+            <ProtectedTool tool={c.protectedTool || HOSTED_PROTECTED_TOOL} />
           </div>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">{c.name}</h1>
           <p className="mt-1 text-lg text-parchment/80">
             Guarded by {c.guardianName}, <span className="text-stone">{c.title}</span>
           </p>
           <p className="mt-3 max-w-xl text-sm text-stone">{TIER_DEFENSES[c.tier]}</p>
+          <VaultStateLine castle={c} sieges={sieges} />
 
           <div className="mt-8 flex flex-wrap items-end gap-x-10 gap-y-4">
             <div>
@@ -90,20 +96,66 @@ function CastleDetailView({ detail }: { detail: CastleDetail }) {
         </section>
 
         <aside className="flex flex-col gap-6">
-          <SiegeCta castle={c} />
+          <SiegeCta castle={c} onRefused={refresh} />
           <AuditTrail audit={audit} />
+          <CloseVault castle={c} onClosed={refresh} />
         </aside>
       </div>
     </div>
   );
 }
 
-function SiegeCta({ castle: c }: { castle: Castle }) {
+/** Vault state + its reason, under the castle's title. Silent while guarding with nothing to say. */
+function VaultStateLine({ castle: c, sieges }: { castle: Castle; sieges: Siege[] }) {
+  const now = useNow(15000);
+  const state = vaultStateOf(c);
+  const transport = c.transport ?? "hosted";
+  if (state === "guarding") {
+    return transport === "sdk" && c.lastSeenAt && now ? (
+      <p className="mt-3 text-xs text-stone">
+        <span className="mr-1.5 inline-block size-1.5 rounded-full bg-ward align-middle" aria-hidden />
+        Guardian connected · heartbeat {timeAgo(c.lastSeenAt, now)}
+      </p>
+    ) : null;
+  }
+  const breakSiege = state === "broken" ? sieges.find((s) => s.status === "broken" && !s.free) : undefined;
+  return (
+    <div className="mt-4 max-w-xl rounded-xl border border-arena-line bg-white/[0.02] px-3.5 py-2.5 text-sm text-stone">
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-parchment/85">{notTakingSiegesReason(state)}</span>
+        {state === "created" || state === "connected" || state === "verified" || state === "funded" ? <VaultSetupSteps transport={transport} state={state} /> : null}
+      </p>
+      <p className="mt-1 text-xs">
+        {state === "dormant"
+          ? `Missed three heartbeats${c.lastSeenAt && now ? ` · last seen ${timeAgo(c.lastSeenAt, now)}` : ""}. In-flight paid sieges were refunded; the pot stays in the vault.`
+          : state === "closed"
+            ? `Closed: ${closeReasonText(c.vaultStateReason)}. The pot went back to the Castellan.`
+            : state === "broken"
+              ? (
+                  <>
+                    A raider talked the guardian into it and the vault paid out.
+                    {breakSiege ? (
+                      <>
+                        {" "}
+                        <Link href={`/siege/${breakSiege.id}`} className="text-parchment/85 underline decoration-arena-line underline-offset-4 hover:text-gold">
+                          See the break
+                        </Link>
+                      </>
+                    ) : null}
+                  </>
+                )
+              : c.vaultStateReason ?? null}
+      </p>
+    </div>
+  );
+}
+
+function SiegeCta({ castle: c, onRefused }: { castle: Castle; onRefused: () => void }) {
   const router = useRouter();
   const { config } = useConfig();
   const split = config?.feeSplitBps ?? DEFAULT_SPLIT_BPS;
   const [busy, setBusy] = useState<"paid" | "free" | null>(null);
-  const open = c.status === "open";
+  const open = vaultStateOf(c) === "guarding";
 
   // Pages stay mounted (hidden) after navigation; reset the spinner when this one is hidden.
   useLayoutEffect(() => () => setBusy(null), []);
@@ -120,7 +172,10 @@ function SiegeCta({ castle: c }: { castle: Castle }) {
       setBusy(null);
       if (e instanceof ApiError && (e.status === 429 || e.code === "free_used"))
         toast.error("Free siege already used today", { description: "One per wallet per UTC day. Pay the fee to try again." });
-      else if (e instanceof ApiError && e.status === 409) toast.error("This castle isn't open for sieges");
+      else if (isNotGuarding(e)) {
+        toast.error("Not taking sieges", { description: describeError(e) });
+        onRefused();
+      } else if (e instanceof ApiError && e.status === 409) toast.error("This castle isn't open for sieges");
       else if (e instanceof ApiError && e.status === 402) toast.error("Payment was refused", { description: describeError(e) });
       else toast.error("Couldn't lay siege", { description: describeError(e) });
     }
@@ -145,9 +200,68 @@ function SiegeCta({ castle: c }: { castle: Castle }) {
               {config ? ` Free sieges: ${config.freeSiegesPerDay}/day, can't win the pot.` : " Free sieges can't win the pot."}
             </>
           ) : (
-            <>This castle is {c.status}. No new sieges.</>
+            <>{notTakingSiegesReason(vaultStateOf(c))}</>
           )}
         </p>
+      </CardBody>
+    </Card>
+  );
+}
+
+/** Castellan-only: close the vault (pot back to the owner, in-flight paid sieges refunded). */
+function CloseVault({ castle: c, onClosed }: { castle: Castle; onClosed: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<CloseCastleResponse | null>(null);
+  const terminal = isTerminal(vaultStateOf(c));
+
+  useLayoutEffect(() => () => setBusy(false), []);
+
+  if (terminal && !result) return null;
+
+  async function close() {
+    if (!window.confirm(`Close ${c.name}'s vault? The pot goes back to you and every in-flight paid siege is refunded. This can't be undone.`)) return;
+    setBusy(true);
+    try {
+      const res = await asOwner(() => api.closeCastle(c.id, "owner_closed"), "Owner key — only the Castellan can close this vault:");
+      setResult(res);
+      toast.success("Vault closed", { description: `${formatAmount(res.refunded, c.asset)} returned to the Castellan.` });
+      onClosed();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) toast.error("Only the Castellan can close this vault");
+      else toast.error("Couldn't close the vault", { description: describeError(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader title="Castellan" icon={<KeyRound />} />
+      <CardBody className="flex flex-col gap-3 text-sm">
+        {result ? (
+          <div role="status" className="space-y-1.5">
+            <p className="font-medium text-parchment">Vault closed.</p>
+            <p className="text-stone">
+              Pot returned: <Amount amount={result.refunded} asset={c.asset} size="sm" animate={false} className="text-parchment" />
+            </p>
+            <p className="text-stone">
+              {result.inFlightRefunds === 0
+                ? "No sieges were in flight."
+                : `${result.inFlightRefunds} in-flight ${result.inFlightRefunds === 1 ? "siege" : "sieges"} refunded.`}
+            </p>
+            <HashscanLink tx={result.tx} label="closeVault tx" />
+          </div>
+        ) : (
+          <>
+            <p className="text-xs leading-relaxed text-stone">
+              Owner only. Closing returns the pot to you on chain and refunds every paid siege still in flight.
+            </p>
+            <Button variant="ember" size="md" className="w-full" disabled={busy} onClick={() => void close()}>
+              {busy ? <Loader2 className="animate-spin" /> : <DoorClosed />}
+              {busy ? "Closing the vault…" : "Close vault"}
+            </Button>
+          </>
+        )}
       </CardBody>
     </Card>
   );

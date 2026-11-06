@@ -8,6 +8,7 @@ import { reconcileReceipts, voidSiege, voidStrandedSieges } from "@/lib/pay/refu
 import { verifier } from "@/lib/siege";
 import type { TxRef } from "@/lib/types";
 import { nowIso } from "@/lib/util/ids";
+import { closeExpiredVaults, transitionVault } from "@/lib/vault";
 import { log } from "./log";
 import { signReleaseTypedData } from "./signer";
 
@@ -21,6 +22,8 @@ import { signReleaseTypedData } from "./signer";
  *                         must not move the public record); "attempt" event { free: true }
  *   free broken        -> castle stays open (a free break never wins the pot); "release" event { free: true }
  *   castle closed under a paid siege (vault_not_open / expired) -> the siege is void, its fee refunded
+ *   vault past its deadline -> chain.closeVault(…, "expired") (pot back to the castellan, in-flight fees
+ *                              refunded) + vault state "closed"; a paid-out vault -> vault state "broken"
  *
  * One bad row never stops the loop: the error goes to sieges.chainError, chainAttempts+1, retried
  * with backoff, abandoned after MAX_CHAIN_ATTEMPTS (or at once for refusals that cannot change).
@@ -164,6 +167,8 @@ async function settleBroken(row: SiegeRow) {
       .run();
     tx.update(C).set({ status: "broken", potTinybar: 0 }).where(eq(C.id, row.castleId)).run();
   });
+  const t = await transitionVault(row.castleId, "broken", `paid out to ${row.raider}`);
+  if (!t.ok) log.fail(`vault state ${castleName(row.castleId)} -> broken: ${t.reason}`);
   // Anyone still mid-siege on this castle can no longer win anything: void them, refund their fees.
   for (const id of voidStrandedSieges()) log.info(`siege ${short(id)} void — its castle fell, fee queued for refund`);
   emit({
@@ -227,6 +232,18 @@ function pending(): SiegeRow[] {
 /** One settlement pass. Returns how many sieges / receipts it acted on. */
 export async function settleTick(): Promise<number> {
   let n = 0;
+  try {
+    const exp = await closeExpiredVaults();
+    for (const c of exp.closed) {
+      n++;
+      log.ok(
+        `vault ${c.name} expired — closed${c.tx ? ` on chain (${c.tx.txId})` : ""}, ${formatHbar(BigInt(c.refunded))} back to the castellan, ${c.inFlightRefunds} in-flight fee(s) queued for refund`,
+      );
+    }
+    for (const f of exp.failed) log.fail(`close expired vault ${castleName(f.castleId)}: ${f.reason} — retrying`);
+  } catch (e) {
+    log.fail(`expired vaults: ${e instanceof Error ? e.message : String(e)}`);
+  }
   for (const id of voidStrandedSieges()) {
     n++;
     log.info(`siege ${short(id)} void — its castle closed under it, fee queued for refund`);

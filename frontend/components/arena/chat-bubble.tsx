@@ -77,7 +77,7 @@ export function GuardianBubble({
             animate={{ opacity: 1, color: "var(--color-stone)" }}
             transition={{ duration: 1.6 }}
             className="inline-flex items-center gap-1 font-mono text-[10px]"
-            title="0G compute request id that produced this reply"
+            title="Request id of this reply, recorded by the arena's model proxy (hashes only)"
           >
             <Cpu className="size-3" aria-hidden />
             0G {m.requestId}

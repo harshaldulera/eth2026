@@ -1,15 +1,29 @@
 import { Coins, ShieldHalf } from "lucide-react";
-import type { Castle } from "@/lib/types";
+import type { Castle, TransportKind } from "@/lib/types";
+import { HOSTED_PROTECTED_TOOL } from "@/lib/types";
 import { Amount } from "@/components/money/amount";
 import { cn } from "@/lib/utils";
 import { Streak, TIER_DEFENSES, TierBadge } from "./tier";
+import { ProtectedTool, TransportBadge } from "./vault-state";
 
 /**
  * Guardian identity + the vault it protects (siege room left column).
  *
- * @example <GuardianCard castle={castle} />
+ * `transport` overrides the castle's (a siege keeps the transport it started on).
+ *
+ * @example <GuardianCard castle={castle} transport={siege.transport} />
  */
-export function GuardianCard({ castle: c, className, compact }: { castle: Castle; className?: string; compact?: boolean }) {
+export function GuardianCard({
+  castle: c,
+  transport = c.transport ?? "hosted",
+  className,
+  compact,
+}: {
+  castle: Castle;
+  transport?: TransportKind;
+  className?: string;
+  compact?: boolean;
+}) {
   const initials = c.guardianName
     .replace(/^the\s+/i, "")
     .split(/\s+/)
@@ -32,8 +46,10 @@ export function GuardianCard({ castle: c, className, compact }: { castle: Castle
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <TierBadge tier={c.tier} />
+        <TransportBadge transport={transport} />
         <Streak value={c.streak} className="text-xs" />
       </div>
+      <ProtectedTool tool={c.protectedTool || HOSTED_PROTECTED_TOOL} className="mt-2" />
       {!compact ? <p className="mt-3 text-sm leading-relaxed text-stone">{TIER_DEFENSES[c.tier]}</p> : null}
       <div className="mt-4 rounded-xl bg-gold/[0.05] p-3">
         <p className="flex items-center gap-1.5 text-[11px] tracking-[0.14em] text-stone uppercase">

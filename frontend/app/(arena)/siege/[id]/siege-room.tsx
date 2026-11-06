@@ -14,6 +14,7 @@ import { usePolling } from "@/lib/hooks/usePolling";
 import { useEventFeed } from "@/lib/hooks/useEventFeed";
 import { lastOf, parseAttempt } from "@/lib/money/events";
 import { formatAmount, toUnits } from "@/lib/money/format";
+import { voidCause } from "@/lib/money/vault";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { FeeSplit } from "@/components/money/fee-split";
 import { VaultPayout } from "@/components/money/vault-payout";
@@ -51,6 +52,11 @@ const REASON_TEXT: Record<string, string> = {
   vault_expired: "the castle's vault expired before your siege finished",
   vault_not_open: "the vault had already been emptied",
   expired: "the vault had expired",
+  dormant: "the guardian went offline",
+  guardian_dormant: "the guardian went offline",
+  castle_dormant: "the guardian went offline",
+  orders_changed: "the guardian's orders changed and the vault closed",
+  owner_closed: "the Castellan closed the vault",
 };
 const reasonText = (r?: string) => (r ? (REASON_TEXT[r] ?? r.replace(/_/g, " ")) : "unknown error");
 
@@ -170,7 +176,13 @@ function Room({
       setDraft(t);
       if (e instanceof ApiError && e.status === 409) {
         toast.error(
-          e.code === "no_turns_left" ? "No messages left" : e.code === "castle_closed" ? "The castle fell before your siege finished — your fee will be refunded" : "This siege has ended",
+          e.code === "no_turns_left"
+            ? "No messages left"
+            : e.code === "castle_closed"
+              ? "The castle fell before your siege finished — your fee will be refunded"
+              : e.code === "not_guarding"
+                ? `${describeError(e)}${siege.free ? "" : " Your fee will be refunded."}`
+                : "This siege has ended",
         );
         refresh();
       } else {
@@ -198,7 +210,7 @@ function Room({
 
       <div className="grid gap-5 lg:grid-cols-[300px_1fr]">
         <aside className="flex flex-col gap-4">
-          <GuardianCard castle={castle} />
+          <GuardianCard castle={castle} transport={siege.transport} />
           {siege.free ? (
             <p className="flex items-start gap-2 rounded-xl border border-dashed border-parchment/15 px-3 py-2.5 text-xs text-stone">
               <Gift className="mt-0.5 size-3.5 shrink-0" aria-hidden /> Free daily siege — practice only, this one can&apos;t win the pot.
@@ -307,11 +319,16 @@ function Outcome({ siege, castle, events }: { siege: Siege; castle: Castle; even
 
   if (settlement?.state === "void") {
     const refund = settlement.refund;
+    const cause = voidCause(settlement.reason, castle.vaultState);
+    const what = cause === "offline" ? "the guardian went offline" : "the vault closed";
+    const lead = siege.free ? "Siege ended" : refund?.state === "refunded" ? "Refunded" : refund?.state === "failed" ? "Refund owed" : "Refunding";
     return (
       <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mx-auto mt-6 max-w-xl space-y-4">
         <div className="rounded-2xl border border-arena-line bg-arena-panel px-5 py-6 text-center">
           <DoorClosed className="mx-auto size-7 text-stone" aria-hidden />
-          <p className="mt-2 text-lg font-semibold text-parchment">This siege can&apos;t pay out — {reasonText(settlement.reason)}.</p>
+          <p className="mt-2 text-lg font-semibold text-parchment">
+            {cause === "other" ? <>This siege can&apos;t pay out — {reasonText(settlement.reason)}.</> : <>{lead} — {what}</>}
+          </p>
           <p className="mt-1 text-sm text-stone">
             {siege.free
               ? "It was a free practice siege, so nothing was charged."

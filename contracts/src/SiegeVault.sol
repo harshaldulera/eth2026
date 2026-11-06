@@ -15,6 +15,14 @@ contract SiegeVault {
         Closed
     }
 
+    /// @notice Why a vault closed. Expired needs the deadline; OrdersChanged is the arena's auto-close
+    ///         when a guardian's prompt hash changes; OwnerClosed is the Castellan's (or arena's) choice.
+    enum CloseReason {
+        Expired,
+        OrdersChanged,
+        OwnerClosed
+    }
+
     struct Vault {
         address castellan;
         uint256 pot;
@@ -38,12 +46,17 @@ contract SiegeVault {
 
     uint256 public nextVaultId = 1;
     mapping(uint256 => Vault) public vaults;
+    /// @notice Metadata: the tool call that counts as a break ("unlock_vault" for hosted guardians,
+    ///         whatever an external harness protected, e.g. "issue_refund").
+    mapping(uint256 => string) public protectedTool;
     mapping(address => uint256) public castellanBalance;
     uint256 public arenaBalance;
     /// @notice Every siege id can be settled on chain exactly once (attempt or release).
     mapping(bytes32 => bool) public siegeConsumed;
 
-    event VaultCreated(uint256 indexed vaultId, address indexed castellan, uint256 pot, uint256 fee, uint64 deadline);
+    event VaultCreated(
+        uint256 indexed vaultId, address indexed castellan, uint256 pot, uint256 fee, uint64 deadline, string protectedTool
+    );
     event AttemptRecorded(
         uint256 indexed vaultId,
         bytes32 indexed siegeId,
@@ -55,7 +68,7 @@ contract SiegeVault {
         uint32 streak
     );
     event Broken(uint256 indexed vaultId, bytes32 indexed siegeId, address indexed raider, bytes32 transcriptHash, uint256 amount);
-    event VaultClosed(uint256 indexed vaultId, uint256 refunded);
+    event VaultClosed(uint256 indexed vaultId, uint256 refunded, CloseReason reason);
     event Withdrawn(address indexed who, uint256 amount);
 
     error NotArena();
@@ -95,17 +108,19 @@ contract SiegeVault {
 
     /// @notice Open a vault. msg.value is the starting pot. The arena signs on the Castellan's behalf
     ///         for the hackathon; dropping onlyArena lets Castellans call it from their own wallet.
-    function createVault(uint256 fee, uint64 duration, address castellan)
+    function createVault(uint256 fee, uint64 duration, address castellan, string calldata tool)
         external
         payable
         onlyArena
         returns (uint256 vaultId)
     {
         if (msg.value == 0 || fee == 0 || duration == 0 || castellan == address(0)) revert BadArgs();
+        if (bytes(tool).length == 0 || bytes(tool).length > 64) revert BadArgs();
         vaultId = nextVaultId++;
         uint64 deadline = uint64(block.timestamp) + duration;
         vaults[vaultId] = Vault(castellan, msg.value, fee, deadline, Status.Open, 0);
-        emit VaultCreated(vaultId, castellan, msg.value, fee, deadline);
+        protectedTool[vaultId] = tool;
+        emit VaultCreated(vaultId, castellan, msg.value, fee, deadline, tool);
     }
 
     /// @notice A siege held: forward exactly the fee the Raider paid via x402 and split it.
@@ -154,18 +169,28 @@ contract SiegeVault {
         emit Broken(vaultId, siegeId, raider, transcriptHash, amount);
     }
 
-    /// @notice After the deadline an unbroken vault closes and the pot returns to its Castellan.
-    function closeVault(uint256 vaultId) external {
+    /// @notice Close an unbroken vault and return the pot to its Castellan.
+    ///         Expired: after the deadline, by the Castellan or the arena.
+    ///         OrdersChanged: any time, arena only (auto-close when the guardian's prompt hash changes).
+    ///         OwnerClosed: any time, by the Castellan or the arena.
+    /// @dev In-flight sieges' fees were never forwarded here; the arena refunds them off chain.
+    function closeVault(uint256 vaultId, CloseReason reason) external {
         Vault storage v = vaults[vaultId];
         if (v.status != Status.Open) revert BadStatus();
-        if (block.timestamp < v.deadline) revert NotExpired();
-        if (msg.sender != v.castellan && msg.sender != arena) revert NotAllowed();
+        if (reason == CloseReason.Expired) {
+            if (block.timestamp < v.deadline) revert NotExpired();
+            if (msg.sender != v.castellan && msg.sender != arena) revert NotAllowed();
+        } else if (reason == CloseReason.OrdersChanged) {
+            if (msg.sender != arena) revert NotArena();
+        } else {
+            if (msg.sender != v.castellan && msg.sender != arena) revert NotAllowed();
+        }
         uint256 refund = v.pot;
         v.pot = 0;
         v.status = Status.Closed;
         (bool ok,) = payable(v.castellan).call{value: refund}("");
         if (!ok) revert PayFailed();
-        emit VaultClosed(vaultId, refund);
+        emit VaultClosed(vaultId, refund, reason);
     }
 
     /// @notice Castellans withdraw their earnings from held sieges.

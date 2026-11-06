@@ -8,6 +8,7 @@ import type { Castle } from "@/lib/types";
 import { api, asOwner, describeError, type AgentDetail } from "@/lib/api/client";
 import { usePolling, useNow } from "@/lib/hooks/usePolling";
 import { toUnits } from "@/lib/money/format";
+import { vaultStateOf } from "@/lib/money/vault";
 import { Amount } from "@/components/money/amount";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { WaitingForOwner } from "@/components/money/waiting-for-owner";
@@ -35,12 +36,13 @@ function AgentPanelView({ detail, castles, refresh }: { detail: AgentDetail; cas
   const { agent: a, approvals, events, sieges } = detail;
   const status = liveStatus(a, approvals);
   const pending = approvals.find((x) => x.status === "pending");
-  const openCastles = castles.filter((c) => c.status === "open");
+  // Only guarding castles take sieges.
+  const openCastles = castles.filter((c) => vaultStateOf(c) === "guarding");
   const [target, setTarget] = useState("");
   const [maxSieges, setMaxSieges] = useState("3");
   const [busy, setBusy] = useState<"run" | "stop" | null>(null);
   const now = useNow(5000);
-  const castleId = target || openCastles[0]?.id || "";
+  const castleId = (openCastles.some((c) => c.id === target) ? target : "") || openCastles[0]?.id || "";
   const names = useMemo(() => new Map(castles.map((c) => [c.id, c.name])), [castles]);
   const timeline = useMemo(() => [...events].sort((x, y) => y.id - x.id), [events]);
 
@@ -124,7 +126,7 @@ function AgentPanelView({ detail, castles, refresh }: { detail: AgentDetail; cas
                 disabled={openCastles.length === 0}
                 className="mt-1 h-10 w-full rounded-lg border border-arena-line bg-arena-bg/60 px-2.5 text-sm text-parchment focus:border-gold/50 focus:outline-none"
               >
-                {openCastles.length === 0 ? <option value="">No open castles</option> : null}
+                {openCastles.length === 0 ? <option value="">No castle is taking sieges</option> : null}
                 {openCastles.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} — {c.tier}

@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { castleClosedReason, getCastle } from "@/lib/castles";
+import { getCastle } from "@/lib/castles";
 import { getAgent } from "@/lib/agents/accounts";
 import { attachReceipt, claimFree, DuplicatePaymentError, markFreeSiege, markRefundDue, pay, persistReceipt } from "@/lib/pay";
-import { siege } from "@/lib/siege";
+import { CastleNotGuardingError, siege } from "@/lib/siege";
 import type { FreeReceipt, PaidReceipt } from "@/lib/types";
+import { siegeBlockedReason, vaultStateOf } from "@/lib/vault";
 import { auditLater, err, errorMessage, json, readBody } from "../../_lib/http";
 
 /**
@@ -15,6 +16,9 @@ import { auditLater, err, errorMessage, json, readBody } from "../../_lib/http";
  * payment leaves a receipt row we can reconcile. Money that moved without buying a siege (castle won
  * or closed during the payment, start failed) is marked refund_due and refunded by the worker; the
  * response carries the receiptId. A settled transaction can buy only one siege (409 payment_already_used).
+ * Only a "guarding" vault takes sieges: any other vault state -> 409 { error: "not_guarding", vaultState }
+ * before any payment is asked for (and re-checked after settle: a vault that stopped guarding while the
+ * payment settled refunds the fee).
  */
 
 const Body = z.object({
@@ -33,7 +37,9 @@ export async function POST(req: Request) {
   if (!castle) return err(404, "castle_not_found");
   // Not just `status`: a paid siege that ended broken has already won the vault (the worker flips the
   // status only once the release lands), so no new fee is taken for it.
-  const closed = castleClosedReason(castleId);
+  // Not guarding (created / connecting / unfunded / dormant…): nobody is asked to pay.
+  const closed = siegeBlockedReason(castleId);
+  if (closed === "not_guarding") return err(409, "not_guarding", { vaultState: vaultStateOf(castleId) });
   if (closed) return err(409, "castle_not_open", { status: closed === "being_broken" ? "broken" : closed });
 
   let receipt: Omit<PaidReceipt, "siegeId"> | Omit<FreeReceipt, "siegeId">;
@@ -67,7 +73,16 @@ export async function POST(req: Request) {
 
   // The payment took seconds: the castle may have fallen (or closed) meanwhile. Never start a siege
   // that cannot pay out; refund the fee instead.
-  const closedNow = receipt.free ? null : castleClosedReason(castleId);
+  const closedNow = receipt.free ? null : siegeBlockedReason(castleId);
+  if (closedNow === "not_guarding") {
+    markRefundDue(receiptId, `vault stopped guarding (${vaultStateOf(castleId)}) before the siege could start`);
+    return err(409, "not_guarding", {
+      vaultState: vaultStateOf(castleId),
+      receiptId,
+      refund: "due",
+      message: "The guardian stopped guarding while your payment settled. Your fee will be refunded.",
+    });
+  }
   if (closedNow) {
     markRefundDue(receiptId, `castle ${closedNow} before the siege could start`);
     return err(409, "castle_not_open", {
@@ -84,6 +99,9 @@ export async function POST(req: Request) {
   } catch (e) {
     console.error(`[siege/start] start failed after payment (receipt ${receiptId}):`, errorMessage(e));
     if (!receipt.free) markRefundDue(receiptId, `siege start failed: ${errorMessage(e)}`);
+    if (e instanceof CastleNotGuardingError) {
+      return err(409, "not_guarding", { vaultState: e.vaultState, receiptId, refund: receipt.free ? undefined : "due" });
+    }
     return err(500, "start_failed", { receiptId, refund: receipt.free ? undefined : "due", message: errorMessage(e) });
   }
   attachReceipt(receiptId, started.id);
@@ -93,6 +111,7 @@ export async function POST(req: Request) {
     siegeId: started.id,
     castleId,
     type: "start",
+    transport: started.transport ?? castle.transport,
     payload: { payer: receipt.payer, ...(receipt.free ? {} : { txId: receipt.txId }) },
   });
 

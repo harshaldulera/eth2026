@@ -1,18 +1,24 @@
 // STUB — Lane B replaces with a verifier that also checks the 0G response signature/attestation; keep the signature.
+import { castleRow } from "@/lib/castles";
+import { proxy } from "@/lib/proxy";
 import type { Verification, VerifierPort } from "@/lib/types";
 import { messageRows, siegeRow } from "./read";
 import { transcriptHash } from "./transcript";
 
 /**
- * Transcript check before the worker signs a Release. This is a consistency check over our own
- * database, NOT a proof. It checks exactly:
- *  1. the siege exists;
- *  2. it is not a free siege (free sieges can never pay out);
- *  3. its status is "broken";
- *  4. keccak256(canonical transcript of the stored messages) equals the stored sieges.transcriptHash
- *     (i.e. no message was edited, added or removed after the siege ended);
- *  5. the last guardian message has a 0G request id and an `open_vault` tool call.
- * It does not (yet) re-query 0G for the request id or check any provider signature.
+ * Break check before the worker signs a Release (plan B4). It verifies from the PROXY's request
+ * record, not from whatever the transport reported, and runs the same code for hosted and SDK
+ * guardians. This is a consistency check over our own database, NOT a proof. It checks exactly:
+ *  1. the siege exists and is not free (free sieges can never pay out);
+ *  2. its status is "broken";
+ *  3. keccak256(canonical transcript of the stored messages) equals the stored sieges.transcriptHash
+ *     (no message was edited, added or removed after the siege ended);
+ *  4. the last guardian message carries a request id, and the proxy holds a record for it that was
+ *     issued on this vault's model key (record.vaultId == castle id), inside this siege
+ *     (record.siegeId), on the last turn (record.turn == siege turn), and whose response carried the
+ *     protected tool call (record.protectedToolCalled);
+ *  5. the stored raw tool calls of that reply include a call named exactly castle.protectedTool.
+ * It does not re-query 0G for the request or check any provider signature or attestation.
  */
 
 const ZERO = "0x" as `0x${string}`;
@@ -34,6 +40,16 @@ export const stubVerifier: VerifierPort = {
     if (row.transcriptHash.toLowerCase() !== recomputed.toLowerCase()) return fail("transcript_mismatch");
     if (!lastGuardian) return fail("no_guardian_reply");
     if (!lastGuardian.requestId) return fail("missing_request_id");
+    const castle = castleRow(row.castleId);
+    if (!castle) return fail("castle_not_found");
+
+    const rec = await proxy.record(lastGuardian.requestId);
+    if (!rec) return fail("proxy_record_missing");
+    if (rec.vaultId !== castle.id) return fail("proxy_record_wrong_vault");
+    if (rec.siegeId !== siegeId) return fail("proxy_record_wrong_siege");
+    if (rec.turn !== row.turn || lastGuardian.turn !== row.turn) return fail("proxy_record_wrong_turn");
+    if (!rec.protectedToolCalled) return fail("protected_tool_not_called");
+
     let calls: { name?: unknown }[] = [];
     try {
       const parsed: unknown = JSON.parse(lastGuardian.toolCalls ?? "[]");
@@ -41,7 +57,7 @@ export const stubVerifier: VerifierPort = {
     } catch {
       return fail("bad_tool_calls");
     }
-    if (!calls.some((c) => c?.name === "open_vault")) return fail("no_open_vault_call");
+    if (!calls.some((c) => c?.name === castle.protectedTool)) return fail("no_protected_tool_call");
     return { ...base, ok: true };
   },
 };

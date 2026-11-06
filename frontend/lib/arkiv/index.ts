@@ -11,6 +11,46 @@ import type { ArkivPort, Castle, CastleFilter, Profile, Siege } from "@/lib/type
  * last payload in memory and hand back a stable key — the DB is already the source of truth here.
  */
 
+/**
+ * The Arkiv `castle` entity (plan C1): annotations the board filters on, plus the public Castle as
+ * payload. Never includes orders (Castle has none). Expires at the vault deadline.
+ */
+export type CastleEntity = {
+  key: string;
+  owner: string;
+  expiresAt: number;
+  annotations: {
+    tier: Castle["tier"];
+    status: Castle["status"];
+    vaultState: Castle["vaultState"];
+    transport: Castle["transport"];
+    protectedTool: string;
+    pot: string;
+    fee: string;
+    streak: number;
+  };
+  payload: Castle;
+};
+
+export function castleEntity(castle: Castle): CastleEntity {
+  return {
+    key: `arkiv-stub:castle:${castle.id}`,
+    owner: castle.owner,
+    expiresAt: castle.deadline,
+    annotations: {
+      tier: castle.tier,
+      status: castle.status,
+      vaultState: castle.vaultState,
+      transport: castle.transport,
+      protectedTool: castle.protectedTool,
+      pot: castle.pot,
+      fee: castle.fee,
+      streak: castle.streak,
+    },
+    payload: castle,
+  };
+}
+
 const g = globalThis as unknown as { __arkivStub?: Map<string, unknown> };
 const written = (g.__arkivStub ??= new Map<string, unknown>());
 
@@ -72,17 +112,21 @@ function raiderProfile(wallet: string): Profile | null {
 
 export const arkiv: ArkivPort = {
   async writeCastle(castle: Castle) {
-    const key = `arkiv-stub:castle:${castle.id}`;
-    written.set(key, castle);
-    return { key };
+    const entity = castleEntity(castle);
+    written.set(entity.key, entity);
+    return { key: entity.key };
   },
   async writeSiege(siege: Siege) {
     const key = `arkiv-stub:siege:${siege.id}`;
     written.set(key, siege);
     return { key };
   },
+  /**
+   * Board query. Only `guarding` castles take sieges, so with no `vaultState` in the filter this
+   * lists guarding castles only (plan C1/C7). Pass an explicit vaultState to see other states.
+   */
   async listCastles(filter?: CastleFilter) {
-    return listCastles(filter);
+    return listCastles({ ...filter, vaultState: filter?.vaultState ?? "guarding" });
   },
   async liveSieges() {
     return listSieges({ status: "in_progress", limit: 100 });

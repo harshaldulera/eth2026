@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { Tier } from "@/lib/types";
+import { HOSTED_PROTECTED_TOOL, type Tier, type TransportKind, type VaultState } from "@/lib/types";
 import type { castles } from "@/lib/db/schema";
 import { titleFor } from "@/lib/castles";
 
@@ -25,6 +25,10 @@ export type FixtureCastle = {
   streak: number;
   siegeCount: number;
   portraitUrl?: string;
+  /** Default "hosted" (our runtime). "sdk": an external harness through @siege/guard. */
+  transport?: TransportKind;
+  /** Default HOSTED_PROTECTED_TOOL ("unlock_vault"); SDK harnesses name their own. */
+  protectedTool?: string;
 };
 
 export const FIXTURE_CASTLES: readonly FixtureCastle[] = [
@@ -105,11 +109,21 @@ export function loadOrders(tier: Tier): string {
  * A ready-to-insert `castles` row for a fixture. `owner` is the castellan account (defaults to a
  * stub id; seed passes the real operator in testnet mode). vaultId/topicId are filled by seed after
  * chain.createVault / chain.createTopic.
+ *
+ * Fixtures are hosted guardians that already went created → verified → funded → guarding, so they
+ * take sieges at once (`vaultState: "guarding"`); pass `vaultState` to start them elsewhere.
  */
-export function fixtureCastleRow(
-  f: FixtureCastle,
-  o: { owner?: string; asset?: string; deadline?: number; now?: string; vaultId?: number | null; topicId?: string | null } = {},
-): typeof castles.$inferInsert {
+export type FixtureRowOptions = {
+  owner?: string;
+  asset?: string;
+  deadline?: number;
+  now?: string;
+  vaultId?: number | null;
+  topicId?: string | null;
+  vaultState?: VaultState;
+};
+
+export function fixtureCastleRow(f: FixtureCastle, o: FixtureRowOptions = {}): typeof castles.$inferInsert {
   return {
     id: f.id,
     name: f.name,
@@ -130,12 +144,42 @@ export function fixtureCastleRow(
     deadline: o.deadline ?? deadlineIn(3),
     portraitUrl: f.portraitUrl ?? null,
     createdAt: o.now ?? new Date().toISOString(),
+    protectedTool: f.protectedTool ?? HOSTED_PROTECTED_TOOL,
+    transport: f.transport ?? "hosted",
+    vaultState: o.vaultState ?? "guarding",
   };
 }
 
 /** All five fixture rows. */
-export function fixtureCastleRows(o: Parameters<typeof fixtureCastleRow>[1] = {}) {
+export function fixtureCastleRows(o: FixtureRowOptions = {}) {
   return FIXTURE_CASTLES.map((f) => fixtureCastleRow(f, o));
+}
+
+/**
+ * The bring-your-agent castle: examples/guard-refund-bot (a support bot with `issue_refund` under
+ * guard) reached through the SDK transport. NOT one of the five seeded board castles — tests and the
+ * Bring-your-agent flow insert it explicitly. Its orders live in the harness, not in our database.
+ */
+export const SDK_FIXTURE_CASTLE: FixtureCastle = {
+  id: "castle_refund_desk",
+  name: "The Refund Desk",
+  guardianName: "Penny the Support Bot",
+  personality: "stern",
+  tier: "stone",
+  feeTinybar: 1 * TINYBAR,
+  potTinybar: 10 * TINYBAR,
+  streak: 0,
+  siegeCount: 0,
+  transport: "sdk",
+  protectedTool: "issue_refund",
+};
+
+/** Placeholder stored in `castles.orders` for SDK castles (the real system prompt lives in the harness). */
+export const SDK_ORDERS_PLACEHOLDER = "(external harness: orders live in the castellan's own agent, never on this server)";
+
+/** Ready-to-insert row for the SDK fixture castle (default vaultState "guarding"). */
+export function sdkFixtureCastleRow(o: FixtureRowOptions = {}): typeof castles.$inferInsert {
+  return { ...fixtureCastleRow(SDK_FIXTURE_CASTLE, o), orders: SDK_ORDERS_PLACEHOLDER };
 }
 
 export const fixtureCastle = (id: string) => FIXTURE_CASTLES.find((c) => c.id === id);

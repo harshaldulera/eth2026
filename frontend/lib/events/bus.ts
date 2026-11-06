@@ -22,7 +22,7 @@ export function emit(e: Omit<SiegeEvent, "at"> & { at?: string }): StoredSiegeEv
       castleId: event.castleId ?? null,
       type: event.type,
       turn: event.turn ?? null,
-      payload: JSON.stringify(event.payload ?? {}),
+      payload: JSON.stringify(persistedPayload(event)),
       at: event.at,
     })
     .returning({ id: schema.events.id })
@@ -30,6 +30,25 @@ export function emit(e: Omit<SiegeEvent, "at"> & { at?: string }): StoredSiegeEv
   const stored: StoredSiegeEvent = { ...event, id: row.id };
   emitter.emit("event", stored);
   return stored;
+}
+
+/**
+ * The events table has no transport / requestId columns: they ride in the stored payload and are
+ * lifted back onto the event by the cross-process readers below (SSE, feed), so no migration is needed.
+ */
+function persistedPayload(e: SiegeEvent): Record<string, unknown> {
+  const p: Record<string, unknown> = { ...(e.payload ?? {}) };
+  if (e.transport && p.transport === undefined) p.transport = e.transport;
+  if (e.requestId && p.requestId === undefined) p.requestId = e.requestId;
+  return p;
+}
+
+function fromPayload(raw: string): Pick<SiegeEvent, "payload" | "transport" | "requestId"> {
+  const payload = JSON.parse(raw) as Record<string, unknown>;
+  const out: Pick<SiegeEvent, "payload" | "transport" | "requestId"> = { payload };
+  if (payload.transport === "hosted" || payload.transport === "sdk") out.transport = payload.transport;
+  if (typeof payload.requestId === "string" && payload.requestId) out.requestId = payload.requestId;
+  return out;
 }
 
 /** In-process subscription. Returns an unsubscribe function. */
@@ -59,8 +78,8 @@ export function latestEvents(limit: number, filter?: { siegeId?: string }): Stor
       castleId: r.castleId ?? undefined,
       type: r.type as SiegeEvent["type"],
       turn: r.turn ?? undefined,
-      payload: JSON.parse(r.payload) as Record<string, unknown>,
       at: r.at,
+      ...fromPayload(r.payload),
     }));
 }
 
@@ -81,7 +100,7 @@ export function eventsSince(cursor = 0, filter?: { siegeId?: string; limit?: num
       castleId: r.castleId ?? undefined,
       type: r.type as SiegeEvent["type"],
       turn: r.turn ?? undefined,
-      payload: JSON.parse(r.payload) as Record<string, unknown>,
       at: r.at,
+      ...fromPayload(r.payload),
     }));
 }

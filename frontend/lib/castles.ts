@@ -48,9 +48,14 @@ export function toCastle(row: CastleRow): Castle {
     owner: row.owner,
     vaultId: row.vaultId ?? null,
     topicId: row.topicId ?? null,
+    protectedTool: row.protectedTool,
+    vaultState: row.vaultState,
+    transport: row.transport,
     deadline: row.deadline,
     createdAt: row.createdAt,
   };
+  if (row.vaultStateReason) c.vaultStateReason = row.vaultStateReason;
+  if (row.lastSeenAt) c.lastSeenAt = row.lastSeenAt;
   if (row.portraitUrl) c.portraitUrl = row.portraitUrl;
   return c;
 }
@@ -66,14 +71,17 @@ export function getCastle(id: string): Castle | null {
 }
 
 /**
- * Filter by tier/status/minPot. Sort: pot (desc, default), streak (desc), fee (asc: cheapest first),
- * recent (createdAt desc).
+ * Filter by tier/status/vaultState/transport/minPot. No vaultState filter = every state (castellan
+ * pages, worker); the board passes vaultState "guarding" (lib/arkiv's listCastles does by default).
+ * Sort: pot (desc, default), streak (desc), fee (asc: cheapest first), recent (createdAt desc).
  */
 export function listCastles(filter: CastleFilter = {}): Castle[] {
   const c = schema.castles;
   const where: SQL[] = [];
   if (filter.tier) where.push(eq(c.tier, filter.tier));
   if (filter.status) where.push(eq(c.status, filter.status));
+  if (filter.vaultState) where.push(eq(c.vaultState, filter.vaultState));
+  if (filter.transport) where.push(eq(c.transport, filter.transport));
   if (filter.minPot !== undefined && filter.minPot !== "") {
     const min = Number(filter.minPot);
     if (Number.isFinite(min)) where.push(gte(c.potTinybar, min));
@@ -106,6 +114,7 @@ export type CastleClosed = "not_found" | "broken" | "closed" | "expired" | "bein
  * only flips `status` after the release lands on chain, seconds later. "being_broken" covers that
  * window: a paid, non-void broken siege the worker has not settled and not given up on.
  * (Once released, `status` is "broken"; `seed --rearm` reopens it with a new vault.)
+ * Vault lifecycle is NOT checked here: lib/vault/guards.ts siegeBlockedReason adds "not_guarding" on top.
  * `exceptSiegeId` ignores one siege (the one asking).
  */
 export function castleClosedReason(castleId: string, opts: { exceptSiegeId?: string; now?: number; d?: Reader } = {}): CastleClosed | null {

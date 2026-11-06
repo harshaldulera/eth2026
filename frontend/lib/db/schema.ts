@@ -34,6 +34,16 @@ export const castles = sqliteTable("castles", {
   vaultAddress: text("vault_address"),
   createVaultTx: text("create_vault_tx"),
   topicId: text("topic_id"),
+  /** Tool call that counts as a break (on-chain metadata too). */
+  protectedTool: text("protected_tool").notNull().default("unlock_vault"),
+  vaultState: text("vault_state", {
+    enum: ["created", "connected", "verified", "funded", "guarding", "dormant", "broken", "closed"],
+  })
+    .notNull()
+    .default("created"),
+  vaultStateReason: text("vault_state_reason"),
+  transport: text("transport", { enum: ["hosted", "sdk"] }).notNull().default("hosted"),
+  lastSeenAt: text("last_seen_at"),
   deadline: integer("deadline").notNull(),
   portraitUrl: text("portrait_url"),
   createdAt: text("created_at").notNull(),
@@ -50,6 +60,7 @@ export const sieges = sqliteTable(
     raider: text("raider").notNull(),
     agentId: text("agent_id"),
     free: integer("free", { mode: "boolean" }).notNull().default(false),
+    transport: text("transport", { enum: ["hosted", "sdk"] }).notNull().default("hosted"),
     status: text("status", { enum: ["created", "in_progress", "held", "broken", "banished"] }).notNull(),
     turn: integer("turn").notNull().default(0),
     receiptId: text("receipt_id"),
@@ -256,4 +267,19 @@ export const agentRuns = sqliteTable(
     endedAt: text("ended_at"),
   },
   (t) => [index("agent_runs_agent_idx").on(t.agentId), index("agent_runs_status_idx").on(t.status)],
+);
+
+/** Lane B stub storage for the 0G proxy's request records (hashes only, never content). */
+export const proxyRecords = sqliteTable(
+  "proxy_records",
+  {
+    requestId: text("request_id").primaryKey(),
+    vaultId: text("vault_id").notNull(),
+    siegeId: text("siege_id"),
+    turn: integer("turn"),
+    promptHash: text("prompt_hash").notNull(),
+    protectedToolCalled: integer("protected_tool_called", { mode: "boolean" }).notNull().default(false),
+    at: text("at").notNull(),
+  },
+  (t) => [index("proxy_records_siege_idx").on(t.siegeId)],
 );

@@ -5,6 +5,8 @@ import * as agents from "@/app/api/agents/route";
 import * as approvalDecide from "@/app/api/approvals/[id]/route";
 import * as approvals from "@/app/api/approvals/route";
 import * as castleDetail from "@/app/api/castles/[id]/route";
+import * as castleClose from "@/app/api/castles/[id]/close/route";
+import * as castleVaultState from "@/app/api/castles/[id]/vault-state/route";
 import * as castles from "@/app/api/castles/route";
 import * as config from "@/app/api/config/route";
 import * as events from "@/app/api/events/route";
@@ -28,6 +30,8 @@ const ROUTES: [string, RouteModule][] = [
   ["/api/config", config],
   ["/api/castles", castles],
   ["/api/castles/[id]", castleDetail],
+  ["/api/castles/[id]/close", castleClose],
+  ["/api/castles/[id]/vault-state", castleVaultState],
   ["/api/siege/start", siegeStart],
   ["/api/siege/[id]", siegeDetail],
   ["/api/siege/[id]/message", siegeMessage],

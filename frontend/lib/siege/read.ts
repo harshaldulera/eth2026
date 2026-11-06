@@ -107,6 +107,7 @@ export function toSiege(row: SiegeRow, msgs: MessageRow[] = messageRows(row.id))
     status: row.status,
     messages: msgs.map(toSiegeMessage),
     free: row.free,
+    transport: row.transport,
     createdAt: row.createdAt,
   };
   if (row.agentId) s.agentId = row.agentId;

@@ -1,7 +1,9 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { recoverTypedDataAddress, type Hash } from "viem";
 import { db as sharedDb, schema, type DB } from "@/lib/db";
-import type { Amount, ChainPort, FeeSplit, SiegeEvent, TxRef, Verification } from "@/lib/types";
+import { env } from "@/lib/config/env";
+import { voidInFlightSieges } from "@/lib/pay/refunds";
+import type { Amount, ChainPort, FeeSplit, SiegeEvent, TxRef, VaultCloseReason, Verification } from "@/lib/types";
 import { nowIso } from "@/lib/util/ids";
 import { arenaAccount } from "./evm";
 import { txUrl, isStubRef } from "./hashscan";
@@ -12,10 +14,13 @@ import {
   attemptRefusal,
   auditCastle,
   auditMessage,
+  auditType,
   buildRelease,
+  closeVoidReason,
   isFreeSiege,
   loadSettle,
   releaseRefusal,
+  validProtectedTool,
   verdictRefusal,
   type SettleRows,
 } from "./settle";
@@ -44,6 +49,8 @@ const CONTRACT_REASON: Record<string, string> = {
   NotAllowed: "not_allowed",
   BadSignature: "bad_signature",
   Replay: "already_consumed",
+  NotExpired: "not_expired",
+  PayFailed: "pay_failed",
 };
 
 function reasonOf(err: unknown): string {
@@ -108,13 +115,15 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
   return {
     mode: "testnet",
 
-    async createVault(i: { castleId: string; pot: Amount; fee: Amount; durationSec: number; castellan: string }) {
+    async createVault(i: { castleId: string; pot: Amount; fee: Amount; durationSec: number; castellan: string; protectedTool: string }) {
+      if (!validProtectedTool(i.protectedTool)) return { ok: false, reason: "bad_args" };
       try {
         const res = await vault.createVault({
           fee: BigInt(i.fee),
           durationSec: BigInt(Math.floor(i.durationSec)),
           castellan: await castellanAddress(i.castellan),
           pot: BigInt(i.pot),
+          protectedTool: i.protectedTool,
         });
         return { ok: true, vaultId: Number(res.vaultId), tx: evmTx(res.txHash) };
       } catch (err) {
@@ -198,6 +207,36 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
       }
     },
 
+    async closeVault(vaultId: number, reason: VaultCloseReason) {
+      const d = getDb();
+      const tag = (env().VAULT_ADDRESS ?? "unset").toLowerCase();
+      const castle = d
+        .select()
+        .from(schema.castles)
+        .where(and(eq(schema.castles.vaultId, vaultId), eq(schema.castles.vaultAddress, tag)))
+        .get();
+      const refundSieges = () => (castle ? voidInFlightSieges(castle.id, closeVoidReason(reason), { includeEnded: true }).refunds : 0);
+      try {
+        const res = await vault.closeVault({ vaultId: BigInt(vaultId), reason });
+        return { ok: true, tx: evmTx(res.txHash), refunded: res.refunded.toString(), inFlightRefunds: refundSieges() };
+      } catch (err) {
+        // A close that may have landed (timeout, or BadStatus because an earlier try did close it):
+        // the vault's on-chain status decides. Closed = done (the pot already went back).
+        if (err instanceof vault.VaultError && MAYBE_LANDED.has(err.errorName)) {
+          try {
+            const v = await vault.getVault(BigInt(vaultId));
+            if (v.status === "Closed") {
+              const ref = err.txHash ? evmTx(err.txHash) : { txId: `vault#${vaultId}:closed`, hashscanUrl: txUrl(vault.vaultAddress()) };
+              return { ok: true, tx: ref, refunded: String(castle?.potTinybar ?? 0), inFlightRefunds: refundSieges() };
+            }
+          } catch (e) {
+            return { ok: false, reason: `reconcile_failed: ${reasonOf(e)}` };
+          }
+        }
+        return { ok: false, reason: reasonOf(err) };
+      }
+    },
+
     async audit(event: SiegeEvent) {
       let d: DB;
       try {
@@ -211,7 +250,7 @@ export function createTestnetChain(getDb: () => DB = sharedDb): ChainPort {
       const row = (topicId: string, seq: number | null, txId: string | null) => {
         try {
           d.insert(schema.auditLog)
-            .values({ topicId, castleId: castle.id, siegeId: event.siegeId || null, type: event.type, message, seq, txId, at: nowIso() })
+            .values({ topicId, castleId: castle.id, siegeId: event.siegeId || null, type: auditType(event), message, seq, txId, at: nowIso() })
             .run();
         } catch (err) {
           console.warn("[chain] auditLog insert failed", err);

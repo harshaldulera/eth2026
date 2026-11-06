@@ -1,7 +1,8 @@
-import { eq, max } from "drizzle-orm";
+import { and, eq, isNull, max, or } from "drizzle-orm";
 import { recoverTypedDataAddress } from "viem";
 import { db as sharedDb, schema, type DB } from "@/lib/db";
-import type { Amount, ChainPort, SiegeEvent, TxRef, Verification } from "@/lib/types";
+import { voidInFlightSieges } from "@/lib/pay/refunds";
+import type { Amount, ChainPort, SiegeEvent, TxRef, VaultCloseReason, Verification } from "@/lib/types";
 import { nowIso } from "@/lib/util/ids";
 import { txUrl } from "./hashscan";
 import { verifierAddress } from "./releaseSig";
@@ -9,11 +10,15 @@ import {
   attemptRefusal,
   auditCastle,
   auditMessage,
+  auditType,
   buildRelease,
+  closeVoidReason,
   computeSplit,
   loadSettle,
   releaseRefusal,
   splitToAmounts,
+  validProtectedTool,
+  VAULT_OPEN_STATES,
   verdictRefusal,
 } from "./settle";
 
@@ -23,7 +28,19 @@ import {
  * in the auditLog table. Like the real port it never writes castles/sieges: the worker does.
  */
 
-const g = globalThis as unknown as { __siegeStubTx?: number; __siegeStubVault?: number };
+const g = globalThis as unknown as {
+  __siegeStubTx?: number;
+  __siegeStubVault?: number;
+  __siegeStubVaultTools?: Map<number, string>;
+  __siegeStubClosed?: Set<number>;
+};
+const vaultTools = (g.__siegeStubVaultTools ??= new Map<number, string>());
+const closedVaults = (g.__siegeStubClosed ??= new Set<number>());
+
+/** The protectedTool a stub vault was created with (this process only; the castle row has it too). */
+export const stubVaultTool = (vaultId: number): string | undefined => vaultTools.get(vaultId);
+
+
 
 export function stubTx(): TxRef {
   g.__siegeStubTx = (g.__siegeStubTx ?? 0) + 1;
@@ -37,7 +54,7 @@ export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
   return {
     mode: "stub",
 
-    async createVault(i: { castleId: string; pot: Amount; fee: Amount; durationSec: number; castellan: string }) {
+    async createVault(i: { castleId: string; pot: Amount; fee: Amount; durationSec: number; castellan: string; protectedTool: string }) {
       let pot: bigint, fee: bigint;
       try {
         pot = BigInt(i.pot);
@@ -46,10 +63,34 @@ export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
         return { ok: false, reason: "bad_args" };
       }
       if (pot <= BigInt(0) || fee <= BigInt(0) || !(i.durationSec > 0) || !i.castellan) return { ok: false, reason: "bad_args" };
+      if (!validProtectedTool(i.protectedTool)) return { ok: false, reason: "bad_args" };
       const dbMax = getDb().select({ m: max(schema.castles.vaultId) }).from(schema.castles).get()?.m ?? 0;
       const vaultId = Math.max(dbMax, g.__siegeStubVault ?? 0) + 1;
       g.__siegeStubVault = vaultId;
+      vaultTools.set(vaultId, i.protectedTool);
       return { ok: true, vaultId, tx: stubTx() };
+    },
+
+    /**
+     * Mirrors SiegeVault.closeVault: the vault must be Open (castle open, vault funded/guarding/dormant),
+     * "expired" needs the deadline to have passed; the arena may close for any reason. The pot goes back
+     * to the castellan; every in-flight paid siege on the castle is voided and queued for refund.
+     * Like the real port it does not touch castles (the caller transitions the vault state).
+     */
+    async closeVault(vaultId: number, reason: VaultCloseReason) {
+      const d = getDb();
+      const C = schema.castles;
+      const castle = d
+        .select()
+        .from(C)
+        .where(and(eq(C.vaultId, vaultId), or(eq(C.vaultAddress, "stub"), isNull(C.vaultAddress))))
+        .get();
+      if (!castle || closedVaults.has(vaultId) || castle.status !== "open" || !VAULT_OPEN_STATES.has(castle.vaultState))
+        return { ok: false, reason: "vault_not_open" };
+      if (reason === "expired" && castle.deadline > Date.now()) return { ok: false, reason: "not_expired" };
+      closedVaults.add(vaultId);
+      const voided = voidInFlightSieges(castle.id, closeVoidReason(reason), { includeEnded: true });
+      return { ok: true, tx: stubTx(), refunded: String(castle.potTinybar), inFlightRefunds: voided.refunds };
     },
 
     async recordAttempt(siegeId: string) {
@@ -98,7 +139,7 @@ export function createStubChain(getDb: () => DB = sharedDb): ChainPort {
               topicId,
               castleId: castle.id,
               siegeId: event.siegeId || null,
-              type: event.type,
+              type: auditType(event),
               message,
               seq: next,
               txId: null,

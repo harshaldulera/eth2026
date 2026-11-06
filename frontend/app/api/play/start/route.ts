@@ -2,6 +2,7 @@ import { z } from "zod";
 import { env, isStub } from "@/lib/config/env";
 import { getCastle } from "@/lib/castles";
 import { createPayerFetch, isSpendControlRefusal, SpendControlError } from "@/lib/pay";
+import { vaultStateOf } from "@/lib/vault";
 import { err, errorMessage, internalFetch, json, readBody } from "../../_lib/http";
 
 /**
@@ -28,6 +29,9 @@ export async function POST(req: Request) {
 
   const castle = getCastle(castleId);
   if (!castle) return err(404, "castle_not_found");
+  // Same rule as /api/siege/start, checked before the demo wallet signs anything.
+  const state = vaultStateOf(castleId);
+  if (state !== "guarding" && castle.status === "open") return err(409, "not_guarding", { vaultState: state });
   const raider = demoRaider();
   if (!raider) return err(503, "demo_raider_not_configured", { message: "Set RAIDER_OPERATOR_ID / RAIDER_OPERATOR_KEY." });
 

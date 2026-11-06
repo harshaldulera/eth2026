@@ -1,11 +1,12 @@
 import type * as React from "react";
 import Link from "next/link";
-import { Coins, DoorClosed, DoorOpen, Hand, MessageSquare, ShieldCheck, ShieldX, Swords, Shield } from "lucide-react";
+import { Coins, DoorClosed, DoorOpen, Hand, MessageSquare, Moon, ShieldCheck, ShieldX, Swords, Shield } from "lucide-react";
 import type { StoredSiegeEvent } from "@/lib/types";
 import { Amount } from "@/components/money/amount";
 import { HashscanLink } from "@/components/money/hashscan-link";
 import { parseAttempt, parseRelease } from "@/lib/money/events";
 import { timeAgo } from "@/lib/money/format";
+import { closeReasonText } from "@/lib/money/vault";
 import { cn } from "@/lib/utils";
 
 type P = Record<string, unknown>;
@@ -141,6 +142,25 @@ export function EventLine({
       icon = <Shield />;
       body = <>Guardian: {s(p.move)}{s(p.exposed) ? ` (${s(p.exposed)})` : ""}</>;
       break;
+    case "vault_state": {
+      const to = s(p.to);
+      if (to === "guarding") {
+        icon = <ShieldCheck />;
+        tone = "text-ward";
+        body = s(p.from) === "dormant" ? <>{castle} is back on guard</> : <><b className="font-medium text-parchment">{castle}</b> now guarding — open for sieges</>;
+      } else if (to === "dormant") {
+        icon = <Moon />;
+        body = <>{castle}&apos;s guardian went offline — sieges refunded</>;
+      } else if (to === "closed") {
+        icon = <DoorClosed />;
+        body = <>{castle} vault closed — {closeReasonText(s(p.reason))}</>;
+      } else {
+        // broken is already told by the "end"/"release" lines; setup steps only in verbose views.
+        if (!verbose || !to || to === "broken") return null;
+        body = <>{castle} vault {to}</>;
+      }
+      break;
+    }
     case "message":
       if (!verbose) return null;
       body = <>Raider message, turn {e.turn}</>;

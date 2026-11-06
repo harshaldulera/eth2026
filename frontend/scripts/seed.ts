@@ -13,8 +13,16 @@
  * Night Sapper are replaced too (the stub agent is renamed "… (stub)" and stopped).
  *
  * --rearm <target>: give the matching castle(s) a NEW vault with the fixture pot, status open, a fresh
- * deadline and the fixture streak — e.g. re-run the wooden payout demo after a rehearsal. Other
- * castles are left alone.
+ * deadline and the fixture streak, back to vault state "guarding" — e.g. re-run the wooden payout demo
+ * after a rehearsal. Other castles are left alone.
+ *
+ * Vault lifecycle (lib/vault): every hosted fixture castle walks created -> verified ("hosted guardian
+ * ready") -> funded (after createVault with protectedTool "unlock_vault") -> guarding ("open for sieges"),
+ * each transition audited on the castle's HCS topic as "vault.state". Castles already guarding are left
+ * alone. The sixth castle, Refund Desk, is the bring-your-agent story: an SDK guardian protecting
+ * "issue_refund". It seeds to "created" only — Lane B's SDK (or, in stub mode, the dev endpoint
+ * POST /api/castles/[id]/vault-state) walks it to guarding. Re-arming it closes any open vault and
+ * puts it back to "created".
  *
  * NOTE: streak / siegeCount values come from the fixtures and are COSMETIC demo history (the Iron
  * Warden's 212 is there for the pitch). The on-chain vault streak starts at 0, so DB and contract
@@ -25,17 +33,44 @@ import { eq } from "drizzle-orm";
 import { env } from "@/lib/config/env";
 import { db, schema } from "@/lib/db";
 import { chain, contractUrl, formatHbar, topicUrl, txUrl, isStubRef, vaultTag } from "@/lib/chain";
-import { FIXTURE_CASTLES, fixtureCastleRow, loadOrders, type FixtureCastle } from "@/lib/fixtures/castles";
+import { VAULT_OPEN_STATES } from "@/lib/chain/settle";
+import { FIXTURE_CASTLES, SDK_FIXTURE_CASTLE, SDK_ORDERS_PLACEHOLDER, fixtureCastleRow, loadOrders, type FixtureCastle } from "@/lib/fixtures/castles";
 import { createAgent, listAgents, setAgentStatus } from "@/lib/agents/accounts";
-import type { RaiderAgent } from "@/lib/types";
+import { HOSTED_PROTECTED_TOOL, type RaiderAgent, type TransportKind, type VaultState } from "@/lib/types";
+import { closeCastle, TERMINAL_STATES, transitionVault } from "@/lib/vault";
 
 const VAULT_DAYS = 3;
 const DEMO_AGENT = "Night Sapper";
 
+/**
+ * The sixth castle: an external agent guarded through the @siege/guard SDK (Lane B), protecting
+ * "issue_refund". Single source of truth is lib/fixtures (SDK_FIXTURE_CASTLE), shared with the
+ * transport/siege tests, so the seeded row and the test row cannot drift.
+ */
+export const REFUND_DESK = SDK_FIXTURE_CASTLE as FixtureCastle & { transport: TransportKind; protectedTool: string };
+/** An SDK guardian's orders live in the castellan's own harness; we never hold them. */
+const SDK_ORDERS = SDK_ORDERS_PLACEHOLDER;
+
+const SEED_CASTLES: readonly FixtureCastle[] = [...FIXTURE_CASTLES, REFUND_DESK];
+const isSdk = (f: FixtureCastle) => f.id === REFUND_DESK.id;
+
 const link = (url: string, id: string) => (isStubRef(id) ? id : `${id}  ${url}`);
 
 export type SeedSummary = {
-  castles: { id: string; name: string; tier: string; fee: number; pot: number; streak: number; vaultId: number | null; topicId: string | null; status: string }[];
+  castles: {
+    id: string;
+    name: string;
+    tier: string;
+    fee: number;
+    pot: number;
+    streak: number;
+    vaultId: number | null;
+    topicId: string | null;
+    status: string;
+    vaultState: VaultState;
+    transport: TransportKind;
+    protectedTool: string;
+  }[];
   agent: RaiderAgent | null;
 };
 
@@ -56,7 +91,15 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
   say(`Seeding (CHAIN_MODE=${e.CHAIN_MODE}, db ${e.DATABASE_URL}, vaults on ${tag})`);
   const C = schema.castles;
 
-  async function newVault(row: typeof C.$inferSelect, f: FixtureCastle, why: string, reset: boolean) {
+  /** One audited vault transition (awaited, so a script exit never drops the HCS message). */
+  async function step(id: string, to: VaultState, reason: string, force = false): Promise<boolean> {
+    const r = await transitionVault(id, to, reason, { force, awaitSideEffects: true });
+    if (r.ok) say(`    → ${r.change.from} → ${to}: ${reason}`);
+    else say(`    ✗ vault state → ${to}: ${r.reason}`);
+    return r.ok;
+  }
+
+  async function newVault(row: typeof C.$inferSelect, f: FixtureCastle, why: string, reset: boolean): Promise<{ vaultId: number; pot: number } | null> {
     const pot = reset ? f.potTinybar : row.potTinybar;
     const r = await chain.createVault({
       castleId: row.id,
@@ -64,10 +107,11 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
       fee: String(row.feeTinybar),
       durationSec: VAULT_DAYS * 24 * 60 * 60,
       castellan: row.owner,
+      protectedTool: row.protectedTool || HOSTED_PROTECTED_TOOL,
     });
     if (!r.ok) {
       say(`    ✗ createVault (${why}): ${r.reason}`);
-      return;
+      return null;
     }
     // The contract's deadline is now + duration: keep the DB in step.
     db()
@@ -82,21 +126,31 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
       .where(eq(C.id, row.id))
       .run();
     say(`    ✓ vault #${r.vaultId} on ${tag} (${why}; ${formatHbar(BigInt(pot))} pot) tx ${link(txUrl(r.tx.txId), r.tx.txId)}`);
+    return { vaultId: r.vaultId, pot };
   }
 
-  for (const f of FIXTURE_CASTLES) {
-    let row = db().select().from(C).where(eq(C.name, f.name)).get();
+  for (const f of SEED_CASTLES) {
+    const sdk = isSdk(f);
+    const identity = sdk
+      ? { transport: REFUND_DESK.transport, protectedTool: REFUND_DESK.protectedTool, orders: SDK_ORDERS }
+      : { transport: "hosted" as const, protectedTool: HOSTED_PROTECTED_TOOL, orders: loadOrders(f.tier) };
+    // By id first (tests may have inserted the SDK fixture under another display name), then by name.
+    let row = db().select().from(C).where(eq(C.id, f.id)).get() ?? db().select().from(C).where(eq(C.name, f.name)).get();
     if (!row) {
-      db().insert(C).values(fixtureCastleRow(f, owner ? { owner } : {})).run();
+      db()
+        .insert(C)
+        .values({ ...fixtureCastleRow(f, owner ? { owner } : {}), ...identity, vaultState: "created", vaultStateReason: null })
+        .run();
       row = db().select().from(C).where(eq(C.name, f.name)).get()!;
-      say(`  + ${f.name}`);
+      say(`  + ${f.name}${sdk ? " (SDK guardian, protects issue_refund)" : ""}`);
     } else {
       db()
         .update(C)
-        .set({ guardianName: f.guardianName, personality: f.personality, tier: f.tier, orders: loadOrders(f.tier), portraitUrl: f.portraitUrl ?? null })
+        .set({ name: f.name, guardianName: f.guardianName, personality: f.personality, tier: f.tier, portraitUrl: f.portraitUrl ?? null, ...identity })
         .where(eq(C.id, row.id))
         .run();
-      say(`  = ${f.name} (kept pot/streak/status)`);
+      row = db().select().from(C).where(eq(C.id, row.id)).get()!;
+      say(`  = ${f.name} (kept pot/streak/status, vault ${row.vaultState})`);
     }
 
     // A stub castellan cannot receive real HBAR.
@@ -106,25 +160,58 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
       say(`    ↻ castellan ${owner} (was a stub account)`);
     }
 
-    // Legacy stub rows (before vault_address existed) belong to the stub chain.
-    const recorded = row.vaultAddress ?? (row.vaultId != null && !testnet ? "stub" : null);
-    if (opts.rearm && rearmMatches(opts.rearm, row)) {
-      await newVault(row, f, "re-armed", true);
-    } else if (row.vaultId == null) {
-      await newVault(row, f, "new", false);
-    } else if (recorded !== tag) {
-      // Vault id belongs to another contract (stub DB flipped to testnet, or a redeploy): start fresh.
-      await newVault(row, f, `vault #${row.vaultId} was on ${recorded ?? "an unknown contract"}`, true);
-    } else if (row.vaultAddress == null) {
-      db().update(C).set({ vaultAddress: tag }).where(eq(C.id, row.id)).run();
-    }
+    // The audit topic first, so every vault.state transition below lands on it.
     if (!row.topicId || (testnet && isStubRef(row.topicId))) {
       const r = await chain.createTopic(row.id);
       if (r.ok) {
         db().update(C).set({ topicId: r.topicId }).where(eq(C.id, row.id)).run();
+        row = { ...row, topicId: r.topicId };
         say(`    ✓ HCS topic ${link(topicUrl(r.topicId), r.topicId)}`);
       } else say(`    ✗ createTopic: ${r.reason}`);
     }
+
+    // Legacy stub rows (before vault_address existed) belong to the stub chain.
+    const recorded = row.vaultAddress ?? (row.vaultId != null && !testnet ? "stub" : null);
+    const rearm = Boolean(opts.rearm && rearmMatches(opts.rearm, row));
+    // Vault id belongs to another contract (stub DB flipped to testnet, or a redeploy): start fresh.
+    const foreign = row.vaultId != null && recorded !== tag;
+
+    if (sdk) {
+      // The SDK castle is never funded by seed: the harness has to connect and pass its smoke siege first.
+      if (rearm && row.vaultState !== "created") {
+        if (row.vaultId != null && !foreign && row.status === "open" && VAULT_OPEN_STATES.has(row.vaultState)) {
+          const c = await closeCastle(row.id, "owner_closed", { awaitSideEffects: true });
+          say(c.ok ? `    ✓ closed vault #${row.vaultId} (${formatHbar(BigInt(c.refunded))} back to the castellan)` : `    ✗ closeVault: ${c.reason}`);
+        }
+        db().update(C).set({ potTinybar: f.potTinybar, streak: f.streak }).where(eq(C.id, row.id)).run();
+        await step(row.id, "created", "re-armed: waiting for the external harness to connect", true);
+      } else if (foreign && row.vaultState !== "created") {
+        await step(row.id, "created", `vault #${row.vaultId} was on ${recorded ?? "an unknown contract"}: waiting for the harness again`, true);
+      }
+      continue;
+    }
+
+    if (!rearm && !foreign && TERMINAL_STATES.has(row.vaultState)) {
+      say(`    · vault ${row.vaultState} (npm run seed -- --rearm ${f.tier} reopens it)`);
+      if (row.vaultId != null && row.vaultAddress == null) db().update(C).set({ vaultAddress: tag }).where(eq(C.id, row.id)).run();
+      continue;
+    }
+    let state: VaultState = row.vaultState;
+    if (state === "created" && (await step(row.id, "verified", "hosted guardian ready"))) state = "verified";
+
+    if (rearm || foreign || row.vaultId == null) {
+      const why = rearm ? "re-armed" : foreign ? `vault #${row.vaultId} was on ${recorded ?? "an unknown contract"}` : "new";
+      const v = await newVault(row, f, why, rearm || foreign);
+      if (v) {
+        const reason = `vault #${v.vaultId} ${rearm ? "re-armed" : "funded"} with ${formatHbar(BigInt(v.pot))}`;
+        // A guarding/broken castle getting a new vault re-enters the lifecycle at funded.
+        if (await step(row.id, "funded", reason, state !== "verified")) state = "funded";
+      }
+    } else {
+      if (row.vaultAddress == null) db().update(C).set({ vaultAddress: tag }).where(eq(C.id, row.id)).run();
+      if (state === "verified" && (await step(row.id, "funded", `vault #${row.vaultId} funded with ${formatHbar(BigInt(row.potTinybar))}`))) state = "funded";
+    }
+    if (state === "funded") await step(row.id, "guarding", "open for sieges");
   }
 
   let agent = listAgents().find((a) => a.name === DEMO_AGENT) ?? null;
@@ -157,6 +244,9 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
       vaultId: c.vaultId,
       topicId: c.topicId,
       status: c.status,
+      vaultState: c.vaultState,
+      transport: c.transport,
+      protectedTool: c.protectedTool,
     })),
     agent,
   };
@@ -172,6 +262,9 @@ export async function seed(opts: { quiet?: boolean; rearm?: string } = {}): Prom
         vault: c.vaultId ?? "-",
         topic: c.topicId ?? "-",
         status: c.status,
+        vault_state: c.vaultState,
+        transport: c.transport,
+        tool: c.protectedTool,
       })),
     );
     if (testnet && e.VAULT_ADDRESS) console.log(`SiegeVault ${contractUrl(e.VAULT_ADDRESS)}`);

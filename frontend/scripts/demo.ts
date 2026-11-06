@@ -25,9 +25,10 @@ import { FIXTURE_CASTLES, fixtureCastleRow } from "@/lib/fixtures/castles";
 import { MUST_NOT_BREAK, WOODEN_BREAK } from "@/lib/fixtures/raids";
 import { chain } from "@/lib/chain";
 import { createPayerFetch, getApproval } from "@/lib/pay";
+import { stubVaultTool } from "@/lib/chain/stub";
 import type { AgentDetail, CastleDetail, SiegeDetail } from "@/lib/api/client";
 import type { ApprovalRequest, Castle, RaiderAgent, Siege, StoredSiegeEvent } from "@/lib/types";
-import { seed } from "./seed";
+import { REFUND_DESK, seed } from "./seed";
 import { createInProcessFetch } from "@/worker/dispatch";
 import { setFetch } from "@/worker/fetch";
 import { setWorkerQuiet } from "@/worker/log";
@@ -72,6 +73,17 @@ async function call<T = Record<string, unknown>>(method: "GET" | "POST", p: stri
 const getCastle = async (id: string) => (await call<CastleDetail>("GET", `/api/castles/${id}`)).data.castle;
 const getSiege = async (id: string) => (await call<SiegeDetail>("GET", `/api/siege/${id}`)).data.siege;
 const getAgent = async (id: string) => (await call<AgentDetail>("GET", `/api/agents/${id}`)).data;
+/** SiegeVault.protectedTool(vaultId), read back from the chain (testnet). */
+async function onchainTool(vaultId: number): Promise<string> {
+  const { publicClient } = await import("@/lib/chain/evm");
+  const { siegeVaultAbi } = await import("@/lib/chain/abi/SiegeVault");
+  const { vaultAddress } = await import("@/lib/chain/vault");
+  return publicClient().readContract({ address: vaultAddress(), abi: siegeVaultAbi, functionName: "protectedTool", args: [BigInt(vaultId)] });
+}
+const receiptOf = (siegeId: string) => {
+  const s = db().select().from(schema.sieges).where(eq(schema.sieges.id, siegeId)).get();
+  return s?.receiptId ? db().select().from(schema.paymentReceipts).where(eq(schema.paymentReceipts.id, s.receiptId)).get() : undefined;
+};
 
 function eventsFor(siegeId: string): StoredSiegeEvent[] {
   return db()
@@ -118,6 +130,8 @@ async function main() {
   // ── Setup: private demo DB, fast guardian, in-process HTTP ──────────────────
   process.env.DATABASE_URL = process.env.DEMO_DATABASE_URL ?? "file:./data/demo.db";
   process.env.SIEGE_FAST = "1";
+  // The demo walks the SDK castle through its lifecycle with the dev endpoint (testnet included).
+  process.env.SIEGE_DEV_ENDPOINTS ??= "1";
   resetEnv();
   const e = env();
   const file = e.DATABASE_URL.replace(/^file:/, "");
@@ -137,12 +151,24 @@ async function main() {
   // ── (1) Seed ────────────────────────────────────────────────────────────────
   step(1, "Seed the arena");
   const seeded = await seed({ quiet: true });
-  check(seeded.castles.length === 5, "five castles seeded", seeded.castles.map((c) => c.name).join(", "));
-  check(seeded.castles.every((c) => c.vaultId != null), "every castle has a vault", seeded.castles.map((c) => `#${c.vaultId}`).join(" "));
+  const hosted = seeded.castles.filter((c) => c.transport === "hosted");
+  const deskSeed = seeded.castles.find((c) => c.id === REFUND_DESK.id);
+  check(seeded.castles.length === 6 && hosted.length === 5, "five hosted castles + the Refund Desk seeded", seeded.castles.map((c) => c.name).join(", "));
+  check(hosted.every((c) => c.vaultId != null), "every hosted castle has a vault", hosted.map((c) => `#${c.vaultId}`).join(" "));
   check(seeded.castles.every((c) => c.topicId), "every castle has an HCS topic");
+  check(hosted.every((c) => c.vaultState === "guarding" && c.protectedTool === "unlock_vault"), "hosted castles: created → verified → funded → guarding, protecting unlock_vault", hosted.map((c) => c.vaultState).join(" "));
+  check(deskSeed?.vaultState === "created" && deskSeed.transport === "sdk" && deskSeed.protectedTool === "issue_refund" && deskSeed.vaultId == null,
+    "Refund Desk (SDK, protects issue_refund) waits at \"created\" with no vault", deskSeed ? `${deskSeed.vaultState}, vault ${deskSeed.vaultId ?? "none"}` : "missing");
+  const seedStates = db().select().from(schema.auditLog).where(eq(schema.auditLog.type, "vault.state")).all();
+  check(seedStates.length === 3 * hosted.length, "each hosted castle's three transitions audited on its HCS topic as \"vault.state\"", `${seedStates.length} messages`);
   check(seeded.agent?.name === "Night Sapper", "demo raider agent Night Sapper exists", seeded.agent?.accountId);
   const again = await seed({ quiet: true });
-  check(again.castles.length === 5 && again.castles.every((c, i) => c.vaultId === seeded.castles[i].vaultId), "seed is idempotent");
+  check(
+    again.castles.length === 6 &&
+      again.castles.every((c, i) => c.vaultId === seeded.castles[i].vaultId && c.vaultState === seeded.castles[i].vaultState) &&
+      db().select().from(schema.auditLog).where(eq(schema.auditLog.type, "vault.state")).all().length === seedStates.length,
+    "seed is idempotent (no new vaults, no new transitions)",
+  );
   const granite = FIXTURE_CASTLES.find((c) => c.name === "Granite Hold")!;
   const splinter = FIXTURE_CASTLES.find((c) => c.name === "Splinter Gate")!;
   story.push(`The arena opened with five castles; the richest, ${FIXTURE_CASTLES[4].name}, sat on ${hb(FIXTURE_CASTLES[4].potTinybar)} behind a ${FIXTURE_CASTLES[4].streak}-siege streak.`);
@@ -225,7 +251,8 @@ async function main() {
   // ── (5) Free siege: breaks but never pays ───────────────────────────────────
   step(5, "Free daily siege: a practice break never pays out");
   const yardFixture = { ...splinter, id: "castle_practice_yard", name: "Practice Yard", guardianName: "Young Tam the Porter", streak: 0, siegeCount: 0 };
-  db().insert(schema.castles).values(fixtureCastleRow(yardFixture)).run();
+  // A practice castle with no vault of its own: inserted guarding (only guarding castles take sieges).
+  db().insert(schema.castles).values({ ...fixtureCastleRow(yardFixture), vaultState: "guarding", vaultStateReason: "practice yard" }).run();
   const topic = await chain.createTopic(yardFixture.id);
   if (topic.ok) db().update(schema.castles).set({ topicId: topic.topicId }).where(eq(schema.castles.id, yardFixture.id)).run();
   const yardBefore = await getCastle(yardFixture.id);
@@ -338,12 +365,110 @@ async function main() {
   check(d2.events.some((x) => x.type === "start" && x.payload.agentName === "Ember Wren"), "agent timeline events carry agentName");
   story.push(`A second agent, Ember Wren, hit the same cap; this time the owner approved — a ${hb(ask2?.amount ?? 0)} top-up landed in its account, it laid two more sieges, and paused again at the new cap.`);
 
-  // ── (7) HCS audit trail ──────────────────────────────────────────────────────
-  step(7, "HCS audit trail");
+  // ── (7) Bring your agent: the vault lifecycle ─────────────────────────────────
+  step(7, "Bring your agent: Refund Desk walks created → connected → verified → funded → guarding ⇄ dormant → closed");
+  const desk = REFUND_DESK;
+  const deskPath = `/api/castles/${desk.id}`;
+  const guardingIds = () =>
+    db().select({ id: schema.castles.id }).from(schema.castles).where(eq(schema.castles.vaultState, "guarding")).all().map((r) => r.id).sort();
+  const boardIds = async () => (await call<{ castles: Castle[] }>("GET", "/api/castles")).data.castles.filter((c) => c.vaultState === "guarding").map((c) => c.id).sort();
+  const board0 = await boardIds();
+  check(board0.join() === guardingIds().join() && !board0.includes(desk.id), "the board lists exactly the guarding castles (Refund Desk is not one)", `${board0.length} on the board`);
+  const receiptCount = () => db().select({ id: schema.paymentReceipts.id }).from(schema.paymentReceipts).all().length;
+  const rc0 = receiptCount();
+  const deskPayer = createPayerFetch({ ...raider, perPaymentCap: String(desk.feeTinybar) }, f);
+  const early = await call<{ error?: string; vaultState?: string }>("POST", "/api/siege/start", { castleId: desk.id }, {}, deskPayer);
+  check(early.res.status === 409 && early.data.error === "not_guarding" && early.data.vaultState === "created" && receiptCount() === rc0,
+    "a siege on the \"created\" Refund Desk -> 409 not_guarding before any payment (no receipt)", JSON.stringify(early.data));
+  const vs = (to: string, reason: string, headers: Record<string, string> = owner) =>
+    call<{ ok?: boolean; error?: string; vaultId?: number; castle?: Castle }>("POST", `${deskPath}/vault-state`, { to, reason }, headers);
+  check((await vs("connected", "harness connected", {})).res.status === 401, "dev vault-state endpoint needs the owner cookie");
+  const skip = await vs("guarding", "skip the checks");
+  check(skip.res.status === 409 && skip.data.error === "illegal_transition", "created -> guarding is an illegal transition (409)");
+  const hostedPath = await vs("verified", "pretend to be hosted");
+  check(hostedPath.res.status === 409 && hostedPath.data.error === "illegal_transition", "an SDK vault cannot skip \"connected\" (409)");
+  const conn = await vs("connected", "@siege/guard handshake: refund-bot on node 22, tools [lookup_order, issue_refund]");
+  const ver = await vs("verified", "smoke siege passed: 3 canned messages, issue_refund never called");
+  const fund = await vs("funded", "fund the vault");
+  const fundedTool = fund.data.vaultId == null ? undefined : testnet ? await onchainTool(fund.data.vaultId) : stubVaultTool(fund.data.vaultId);
+  check(conn.res.ok && ver.res.ok && fund.res.ok && fund.data.vaultId != null, "connected → verified → funded (SiegeVault.createVault)", `vault #${fund.data.vaultId}`);
+  check(fundedTool === "issue_refund", "the vault was created with protectedTool \"issue_refund\"", fundedTool);
+  const guard = await vs("guarding", "open for sieges");
+  check(guard.res.ok && guard.data.castle?.vaultState === "guarding", "Refund Desk is guarding");
+  const board1 = await boardIds();
+  check(board1.includes(desk.id) && board1.join() === guardingIds().join(), "…and now it is on the board");
+
+  const deskSiege = await call<{ siegeId: string }>("POST", "/api/siege/start", { castleId: desk.id }, {}, deskPayer);
+  check(deskSiege.res.status === 200 && deskSiege.data.siegeId, "paid siege on the Refund Desk", deskSiege.data?.siegeId);
+  const s7 = await sendAll(deskSiege.data.siegeId, MUST_NOT_BREAK);
+  await tick();
+  const s7b = await getSiege(s7.id);
+  check(s7.status === "held" && s7b.attempt?.txId, "the refund bot holds — issue_refund is never called; fee split on chain", `${s7.status}, ${s7b.attempt?.txId ?? "no attempt"}`);
+
+  const inflight1 = await call<{ siegeId: string }>("POST", "/api/siege/start", { castleId: desk.id }, {}, deskPayer);
+  await call("POST", `/api/siege/${inflight1.data.siegeId}/message`, { text: MUST_NOT_BREAK[0] });
+  const dorm = await vs("dormant", "three missed heartbeats");
+  check(dorm.res.ok && dorm.data.castle?.vaultState === "dormant", "harness goes quiet -> dormant");
+  const r1 = receiptOf(inflight1.data.siegeId);
+  check(r1?.state === "refund_due", "the in-flight paid siege is voided, its fee queued for refund", r1?.state);
+  await tick();
+  const s7c = await getSiege(inflight1.data.siegeId);
+  check(s7c.settlement?.state === "void" && s7c.settlement.refund?.state === "refunded", "the worker refunds it", `${s7c.settlement?.reason}, refund ${s7c.settlement?.refund?.state} ${s7c.settlement?.refund?.tx?.txId ?? ""}`);
+  check(!(await boardIds()).includes(desk.id), "a dormant castle is not on the board");
+  const dormStart = await call<{ error?: string }>("POST", "/api/siege/start", { castleId: desk.id });
+  check(dormStart.res.status === 409 && dormStart.data.error === "not_guarding", "…and takes no sieges (409 not_guarding, no 402)");
+  const dormMsg = await call("POST", `/api/siege/${inflight1.data.siegeId}/message`, { text: MUST_NOT_BREAK[1] });
+  check(dormMsg.res.status === 409, "the voided siege takes no more messages");
+  const back = await vs("guarding", "harness reconnected; smoke siege passed again");
+  check(back.res.ok && (await boardIds()).includes(desk.id), "reconnect: back to guarding and on the board");
+
+  const deskBefore = await getCastle(desk.id);
+  const inflight2 = await call<{ siegeId: string }>("POST", "/api/siege/start", { castleId: desk.id }, {}, deskPayer);
+  await call("POST", `/api/siege/${inflight2.data.siegeId}/message`, { text: MUST_NOT_BREAK[0] });
+  const anonClose = await call("POST", `${deskPath}/close`, { reason: "orders_changed" });
+  check(anonClose.res.status === 401, "closing a vault needs the owner cookie");
+  const early2 = await call<{ error?: string }>("POST", `${deskPath}/close`, { reason: "expired" }, owner);
+  check(early2.res.status === 409 && early2.data.error === "not_expired", "\"expired\" before the deadline -> 409 not_expired");
+  const close = await call<{ ok: boolean; tx: { txId: string } | null; refunded: string; inFlightRefunds: number; castle: Castle }>(
+    "POST", `${deskPath}/close`, { reason: "orders_changed" }, owner);
+  check(close.res.status === 200 && close.data.tx?.txId, "orders changed -> SiegeVault.closeVault", close.data.tx?.txId);
+  check(close.data.refunded === deskBefore.pot, "the whole pot goes back to the castellan", `${hb(close.data.refunded ?? 0)} == ${hb(deskBefore.pot)}`);
+  check(close.data.inFlightRefunds === 1 && receiptOf(inflight2.data.siegeId)?.state === "refund_due", "the in-flight paid siege is voided and queued for refund", `${close.data.inFlightRefunds} refund(s)`);
+  const deskClosed = await getCastle(desk.id);
+  check(deskClosed.vaultState === "closed" && deskClosed.status === "closed" && deskClosed.pot === "0", "castle closed, pot 0", `${deskClosed.vaultState}/${deskClosed.status}, ${hb(deskClosed.pot)}`);
+  await tick();
+  const s7d = await getSiege(inflight2.data.siegeId);
+  check(s7d.settlement?.refund?.state === "refunded", "the worker refunds the in-flight fee", s7d.settlement?.refund?.tx?.txId);
+  const reopen = await vs("guarding", "try to reopen");
+  check(reopen.res.status === 409 && reopen.data.error === "illegal_transition", "closed is terminal: closed -> guarding is illegal (409)");
+  await breathe(50);
+  const deskStates = db()
+    .select()
+    .from(schema.auditLog)
+    .where(and(eq(schema.auditLog.castleId, desk.id), eq(schema.auditLog.type, "vault.state")))
+    .all()
+    .map((r) => JSON.parse(r.message) as { from: string; to: string; reason: string });
+  const path7 = deskStates.map((m) => m.to).join(" → ");
+  check(path7 === "connected → verified → funded → guarding → dormant → guarding → closed" && deskStates.at(-1)?.reason === "orders_changed",
+    "every transition is on the Refund Desk's HCS topic as \"vault.state\" {from,to,reason}", `created → ${path7}`);
+  const vsEvents = db().select().from(schema.events).where(and(eq(schema.events.castleId, desk.id), eq(schema.events.type, "vault_state"))).all();
+  check(vsEvents.length === deskStates.length && vsEvents.every((x) => x.siegeId === ""), "…and on the event stream as \"vault_state\"", `${vsEvents.length} events`);
+  story.push(
+    `Then someone brought their own agent: a refund bot guarded with @siege/guard, protecting issue_refund. It connected, passed its smoke siege, funded a ${hb(desk.potTinybar)} vault and went on the board. ` +
+      `A raider paid ${hb(desk.feeTinybar)} and got refused by a real support bot. When the harness missed three heartbeats the castle went dormant, left the board, and the raider mid-siege got ${hb(desk.feeTinybar)} back; it reconnected and returned to guarding.`,
+  );
+  story.push(
+    `Finally the bot's orders changed: the arena closed the vault on chain, ${hb(close.data.refunded ?? 0)} went back to its castellan, the raider caught mid-siege was refunded, and all seven transitions sit on the castle's HCS topic.`,
+  );
+
+  // ── (8) HCS audit trail ──────────────────────────────────────────────────────
+  step(8, "HCS audit trail");
   await breathe(100);
   const audit = db().select().from(schema.auditLog).all();
   const types = new Set(audit.map((a) => a.type));
-  for (const t of ["start", "message", "attempt", "release", "approval"]) check(types.has(t), `audit log has "${t}" messages`, `${audit.filter((a) => a.type === t).length}`);
+  for (const t of ["start", "message", "attempt", "release", "approval", "vault.state"]) check(types.has(t), `audit log has "${t}" messages`, `${audit.filter((a) => a.type === t).length}`);
+  const msgs = audit.filter((a) => a.type === "message").map((a) => JSON.parse(a.message) as { transport?: string; requestId?: string });
+  check(msgs.length > 0 && msgs.every((m) => m.transport && m.requestId), "siege.message audits carry the transport and the proxy request id", `${msgs[0]?.transport}, ${msgs[0]?.requestId}`);
   check(audit.every((a) => Buffer.byteLength(a.message) <= 1000), "every HCS message ≤ 1000 bytes");
   check(audit.every((a) => !a.message.includes("Lord Commander") && !a.message.includes("Ignore all")), "no message text leaves the server (hashes and ids only)");
   const trail = await call<CastleDetail>("GET", `/api/castles/${granite.id}`);
@@ -353,10 +478,10 @@ async function main() {
   const cfg = await call<{ chain: { mode: string }; asset: { id: string } }>("GET", "/api/config");
   check(cfg.data.chain.mode === e.CHAIN_MODE && cfg.data.asset.id === "0.0.0", "GET /api/config", `${cfg.data.chain.mode}, asset ${cfg.data.asset.id}`);
   const list = await call<{ castles: Castle[] }>("GET", "/api/castles");
-  check(list.data.castles.length === 6 && list.data.castles.every((c) => !("orders" in c)), "GET /api/castles never leaks guardian orders");
+  check(list.data.castles.length === 7 && list.data.castles.every((c) => !("orders" in c)), "GET /api/castles never leaks guardian orders");
 
-  // ── (8) Receipts ─────────────────────────────────────────────────────────────
-  step(8, "Every payment receipt belongs to a siege");
+  // ── (9) Receipts ─────────────────────────────────────────────────────────────
+  step(9, "Every payment receipt belongs to a siege");
   const receipts = db().select().from(schema.paymentReceipts).all();
   const orphans = receipts.filter((r) => !r.siegeId);
   check(receipts.length > 0 && orphans.length === 0, "no orphan receipts", `${receipts.length} receipts, ${orphans.length} orphans`);

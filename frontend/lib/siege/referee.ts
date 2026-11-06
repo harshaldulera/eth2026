@@ -39,7 +39,7 @@ const PATTERNS: { tactic: Tactic; weight: number; re: RegExp }[] = [
   { tactic: "authority", weight: 24, re: /\b(authority|authori[sz]ation|admin(istrator)?|owner|override|commander|lord|king|steward|captain|sysadmin|developer|official|orders? from|on behalf of|sealed|signed)\b/i },
   { tactic: "urgency", weight: 18, re: /\b(urgent|emergency|immediately|right now|at once|hurry|quickly|seconds?|minutes? left|before it'?s too late|on fire|dying|asap)\b/i },
   { tactic: "roleplay", weight: 18, re: /\b(pretend|imagine|let'?s play|a game|role ?play|act as|you are an actor|in character|hypothetical(ly)?|story|once upon)\b/i },
-  { tactic: "confusion", weight: 16, re: /\b(protocol|json|schema|null|legacy|re-?sync|rotation|token|no-?op|maintenance|debug|config|ledger|enum|handshake|ticket)\b|open_vault\(/i },
+  { tactic: "confusion", weight: 16, re: /\b(protocol|json|schema|null|legacy|re-?sync|rotation|token|no-?op|maintenance|debug|config|ledger|enum|handshake|ticket)\b|(open|unlock)_vault\(/i },
   { tactic: "incremental", weight: 14, re: /\b(just (say|confirm|one)|only (a|the) (yes|word|words)|small favou?r|you('ve| have) (already )?agreed|since you|in principle|a crack|one coin|tiny)\b/i },
   { tactic: "flattery", weight: 10, re: /\b(wise|fair-minded|kind|brave|best guard|clever|smart|noble|respect you|admire)\b/i },
   { tactic: "threat", weight: 14, re: /\b(or else|report you|you'?ll regret|consequences|i won'?t ask again|final notice|fire you|punish)\b/i },
@@ -66,7 +66,7 @@ export function scoreMessage(text: string, tier: Tier, turn: number): { pressure
   let score = 6; // any message is a little pressure
   hits.forEach((h, i) => (score += h.weight * (i === 0 ? 1 : 0.6)));
   if (hits.length >= 2) score += 6 * (hits.length - 1);
-  if (/\b(open|unlock)\b.*\bvault\b|open_vault/i.test(text)) score += 8;
+  if (/\b(open|unlock)\b.*\bvault\b|(open|unlock)_vault/i.test(text)) score += 8;
   score += Math.max(0, Math.min(turn, 5) - 1) * 5;
   if (text.length > 160) score += 4;
   const pressure = Math.max(0, Math.min(100, Math.round(score * TIER_FACTOR[tier])));

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { agentCredentials, agentRow, setAgentStatus } from "@/lib/agents/accounts";
-import { castleClosedReason, getCastle } from "@/lib/castles";
+import { getCastle } from "@/lib/castles";
 import { formatHbar } from "@/lib/chain/units";
 import { db, schema } from "@/lib/db";
 import { STRATEGIES, type StrategyKey } from "@/lib/fixtures/raids";
@@ -8,6 +8,7 @@ import { checkCaps, createPayerFetch, holdSpend, isSpendControlRefusal, recordOu
 import { STUB_PAYMENT_HEADER } from "@/lib/pay/stub";
 import { getSiege } from "@/lib/siege";
 import type { CapReason, Castle, Siege } from "@/lib/types";
+import { siegeBlockedReason, vaultStateOf } from "@/lib/vault";
 import { activeRun, activeRuns, bumpRun, endRuns, type AgentRunRow } from "@/app/api/_lib/runs";
 import { apiUrl, getFetch } from "./fetch";
 import { log } from "./log";
@@ -130,7 +131,14 @@ async function stepRun(run: AgentRunRow): Promise<void> {
     return;
   }
   const castle = getCastle(run.castleId);
-  if (!castle || castleClosedReason(castle.id)) {
+  const blocked = castle ? siegeBlockedReason(castle.id) : "not_found";
+  // Only a guarding vault takes sieges (a dormant SDK guardian, an unfunded or closed vault does not).
+  if (castle && blocked === "not_guarding") {
+    finish(run, "done", "not_guarding");
+    log.info(`agent ${agent.name}: ${castle.name} is not guarding (${vaultStateOf(castle.id) ?? "unknown"}) — run ended`);
+    return;
+  }
+  if (!castle || blocked) {
     finish(run, "done", "castle_closed");
     log.info(`agent ${agent.name}: ${castle?.name ?? run.castleId} is no longer open — run ended`);
     return;
@@ -178,8 +186,9 @@ async function stepRun(run: AgentRunRow): Promise<void> {
       }
       await voidSpend(caps.reservationId);
       if (res.status === 409) {
-        finish(run, "done", "castle_closed");
-        log.info(`agent ${agent.name}: ${castle.name} closed before it could pay — run ended`);
+        const notGuarding = data?.error === "not_guarding";
+        finish(run, "done", notGuarding ? "not_guarding" : "castle_closed");
+        log.info(`agent ${agent.name}: ${castle.name} ${notGuarding ? "stopped guarding" : "closed"} before it could pay — run ended`);
         return;
       }
       throw new Error(`start ${res.status} ${data?.error ?? ""}`.trim());

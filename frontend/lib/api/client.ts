@@ -11,7 +11,11 @@ import type {
   RaiderAgent,
   Siege,
   StoredSiegeEvent,
+  TxRef,
+  VaultCloseReason,
+  VaultState,
 } from "@/lib/types";
+import { notTakingSiegesReason } from "@/lib/money/vault";
 
 /**
  * Typed fetchers for Siege's HTTP API (app/api/**). Browser-safe, no env access.
@@ -33,11 +37,23 @@ export class ApiError extends Error {
     const b = this.body as { error?: unknown } | null;
     return b && typeof b === "object" && typeof b.error === "string" ? b.error : undefined;
   }
+  /** 409 `{ error: "not_guarding", vaultState }`: the castle exists but isn't taking sieges. */
+  get notGuarding(): { vaultState?: VaultState } | undefined {
+    if (this.status !== 409 || this.code !== "not_guarding") return undefined;
+    const v = (this.body as { vaultState?: unknown }).vaultState;
+    return { vaultState: typeof v === "string" ? (v as VaultState) : undefined };
+  }
+}
+
+/** True for the 409 the siege start routes send when the castle isn't `guarding`. */
+export function isNotGuarding(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.notGuarding !== undefined;
 }
 
 function errorMessage(body: unknown): string | undefined {
   if (!body || typeof body !== "object") return typeof body === "string" && body ? body.slice(0, 200) : undefined;
-  const b = body as { error?: unknown; message?: unknown; reason?: unknown };
+  const b = body as { error?: unknown; message?: unknown; reason?: unknown; vaultState?: unknown };
+  if (b.error === "not_guarding") return notTakingSiegesReason(typeof b.vaultState === "string" ? (b.vaultState as VaultState) : undefined) ?? "This castle isn't taking sieges right now.";
   for (const v of [b.message, b.error, b.reason]) if (typeof v === "string" && v) return v;
   return undefined;
 }
@@ -122,6 +138,9 @@ export type StartSiegeResponse = {
   receipt: PaymentReceipt | Omit<PaidReceipt, "siegeId"> | Omit<FreeReceipt, "siegeId">;
 };
 
+export type CloseCastleResponse = { ok: true; tx: TxRef; refunded: Amount; inFlightRefunds: number };
+export type VaultStateResponse = { ok: true; castle?: Castle; change?: { from: VaultState; to: VaultState; reason: string; at: string } };
+
 export type PlayStartResponse = { siegeId: string; receipt: StartSiegeResponse["receipt"] };
 
 export type SiegeDetail = { siege: Siege; castle: Castle };
@@ -156,10 +175,23 @@ export const api = {
   castles: () => request<{ castles: Castle[] }>("/api/castles"),
   castle: (id: string) => request<CastleDetail>(`/api/castles/${enc(id)}`),
 
-  /** The raw x402-gated endpoint. Throws ApiError(402) with the PaymentRequired body when unpaid. */
+  /**
+   * Owner-only: close the vault on chain — the pot goes back to the Castellan and every in-flight
+   * paid siege is refunded. Throws ApiError(401) without the owner cookie (wrap in `asOwner`).
+   */
+  closeCastle: (id: string, reason: VaultCloseReason = "owner_closed") =>
+    request<CloseCastleResponse>(`/api/castles/${enc(id)}/close`, { method: "POST", json: { reason } }),
+  /** Dev only: force a vault state transition (e.g. guarding -> dormant) for demos and tests. */
+  setVaultState: (id: string, to: VaultState, reason: string) =>
+    request<VaultStateResponse>(`/api/castles/${enc(id)}/vault-state`, { method: "POST", json: { to, reason } }),
+
+  /**
+   * The raw x402-gated endpoint. Throws ApiError(402) with the PaymentRequired body when unpaid,
+   * ApiError(409) `not_guarding` when the castle isn't taking sieges (see `isNotGuarding`).
+   */
   startSiege: (body: StartSiegeBody, headers?: Record<string, string>) =>
     request<StartSiegeResponse>("/api/siege/start", { method: "POST", json: body, headers }),
-  /** Browser "Lay siege": the server pays from the arena's demo raider wallet. */
+  /** Browser "Lay siege": the server pays from the arena's demo raider wallet. 409 `not_guarding` as above. */
   playStart: (body: { castleId: string; free?: boolean }) =>
     request<PlayStartResponse>("/api/play/start", { method: "POST", json: body }),
 
@@ -196,15 +228,18 @@ export const api = {
 export type Api = typeof api;
 
 /**
- * Run an owner-only call (create/run/stop an agent). On 401 ask for the owner key once (browser
- * prompt), set the cookie, and retry. Throws the original error if the user cancels.
+ * Run an owner-only call (create/run/stop an agent, close a vault). On 401 ask for the owner key
+ * once (browser prompt), set the cookie, and retry. Throws the original error if the user cancels.
  */
-export async function asOwner<T>(fn: () => Promise<T>): Promise<T> {
+export async function asOwner<T>(
+  fn: () => Promise<T>,
+  prompt = "Owner key — only the owner can create, run or stop raider agents:",
+): Promise<T> {
   try {
     return await fn();
   } catch (e) {
     if (!(e instanceof ApiError) || e.status !== 401 || typeof window === "undefined") throw e;
-    const key = window.prompt("Owner key — only the owner can create, run or stop raider agents:")?.trim();
+    const key = window.prompt(prompt)?.trim();
     if (!key) throw e;
     await api.ownerLogin(key);
     return fn();

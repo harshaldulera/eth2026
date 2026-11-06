@@ -21,8 +21,18 @@ import { tinybarToWei } from "./units";
  * an explicit gas limit and awaited.
  */
 
-/** Explicit gas limits (the relay estimate is unreliable for payable calls). 800k / 300k / 400k. */
-export const GAS = { createVault: BigInt(800_000), recordAttempt: BigInt(300_000), release: BigInt(400_000) } as const;
+/** Explicit gas limits (the relay estimate is unreliable for payable calls). */
+export const GAS = {
+  createVault: BigInt(800_000),
+  recordAttempt: BigInt(300_000),
+  release: BigInt(400_000),
+  closeVault: BigInt(250_000),
+} as const;
+
+/** SiegeVault.CloseReason enum order: Expired, OrdersChanged, OwnerClosed. */
+export const CLOSE_REASON_INDEX = { expired: 0, orders_changed: 1, owner_closed: 2 } as const;
+export type CloseReasonName = keyof typeof CLOSE_REASON_INDEX;
+const CLOSE_REASON_NAMES = ["expired", "orders_changed", "owner_closed"] as const;
 
 export const VAULT_STATUS = ["None", "Open", "Broken", "Closed"] as const;
 export type VaultStatusName = (typeof VAULT_STATUS)[number];
@@ -59,14 +69,15 @@ function toVaultError(err: unknown, fn: string): VaultError {
   return new VaultError("rpc_error", `SiegeVault.${fn} failed: ${msg}`);
 }
 
-type WriteFn = "createVault" | "recordAttempt" | "release";
+type WriteFn = "createVault" | "recordAttempt" | "release" | "closeVault";
 
 /** Called with the tx hash right after the relay accepted it, BEFORE waiting for the receipt. */
 export type OnSent = (hash: Hash) => void | Promise<void>;
 
 async function write(fn: WriteFn, args: readonly unknown[], valueTinybar: bigint, onSent?: OnSent): Promise<TransactionReceipt> {
   const address = vaultAddress();
-  const value = tinybarToWei(valueTinybar);
+  // closeVault is not payable: send no value field at all for zero-value calls.
+  const value = valueTinybar > BigInt(0) ? { value: tinybarToWei(valueTinybar) } : {};
   const account = arenaAccount();
   // 1) simulate: decode custom errors before spending gas. Non-revert RPC hiccups fall through to the send.
   try {
@@ -75,7 +86,7 @@ async function write(fn: WriteFn, args: readonly unknown[], valueTinybar: bigint
       abi: siegeVaultAbi,
       functionName: fn,
       args: args as never,
-      value,
+      ...value,
       account,
     } as never);
   } catch (err) {
@@ -89,7 +100,7 @@ async function write(fn: WriteFn, args: readonly unknown[], valueTinybar: bigint
       abi: siegeVaultAbi,
       functionName: fn,
       args: args as never,
-      value,
+      ...value,
       gas: GAS[fn],
     } as never);
   } catch (err) {
@@ -114,15 +125,15 @@ async function write(fn: WriteFn, args: readonly unknown[], valueTinybar: bigint
   return receipt;
 }
 
-function logsOf<E extends "VaultCreated" | "AttemptRecorded" | "Broken">(receipt: TransactionReceipt, eventName: E) {
+function logsOf<E extends "VaultCreated" | "AttemptRecorded" | "Broken" | "VaultClosed">(receipt: TransactionReceipt, eventName: E) {
   const logs = parseEventLogs({ abi: siegeVaultAbi, logs: receipt.logs, eventName });
   if (!logs.length) throw new VaultError("no_event", `SiegeVault: ${eventName} event missing in ${receipt.transactionHash}`, receipt.transactionHash);
   return logs[0];
 }
 
-/** Open a vault. `pot` is sent as msg.value. */
-export async function createVault(p: { fee: bigint; durationSec: bigint; castellan: `0x${string}`; pot: bigint }) {
-  const receipt = await write("createVault", [p.fee, p.durationSec, p.castellan], p.pot);
+/** Open a vault. `pot` is sent as msg.value; `protectedTool` (1..64 bytes) is stored on chain as metadata. */
+export async function createVault(p: { fee: bigint; durationSec: bigint; castellan: `0x${string}`; pot: bigint; protectedTool: string }) {
+  const receipt = await write("createVault", [p.fee, p.durationSec, p.castellan, p.protectedTool], p.pot);
   const ev = logsOf(receipt, "VaultCreated");
   return {
     txHash: receipt.transactionHash,
@@ -130,7 +141,17 @@ export async function createVault(p: { fee: bigint; durationSec: bigint; castell
     pot: ev.args.pot,
     fee: ev.args.fee,
     deadline: ev.args.deadline,
+    protectedTool: ev.args.protectedTool,
   };
+}
+
+export type CloseResult = { txHash: Hash; refunded: bigint; reason: CloseReasonName };
+
+/** Close an Open vault (pot back to the castellan). Simulated first, so a revert surfaces as its error name. */
+export async function closeVault(p: { vaultId: bigint; reason: CloseReasonName }): Promise<CloseResult> {
+  const receipt = await write("closeVault", [p.vaultId, CLOSE_REASON_INDEX[p.reason]], BigInt(0));
+  const ev = logsOf(receipt, "VaultClosed");
+  return { txHash: receipt.transactionHash, refunded: ev.args.refunded, reason: CLOSE_REASON_NAMES[Number(ev.args.reason)] ?? p.reason };
 }
 
 export type AttemptResult = {

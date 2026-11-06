@@ -152,6 +152,129 @@ describe("a castle that was already won takes no more fees and plays no more tur
   });
 });
 
+describe("vault lifecycle through the routes and the worker", () => {
+  const DESK = "castle_refund_desk";
+  async function addDesk(state: "created" | "guarding" = "created") {
+    const { sdkFixtureCastleRow } = await import("@/lib/fixtures/castles");
+    db().insert(schema.castles).values({ ...sdkFixtureCastleRow({ vaultState: state }), ...(state === "guarding" ? { vaultId: 7777, vaultAddress: "stub" } : {}) }).run();
+  }
+  const castleRow = (id: string) => db().select().from(schema.castles).where(eq(schema.castles.id, id)).get()!;
+  const receipts = () => db().select().from(schema.paymentReceipts).all().length;
+
+  it("a castle that is not guarding: 409 not_guarding before any 402 / payment / free claim, on both start routes", async () => {
+    await addDesk("created");
+    const before = receipts();
+    const unpaid = await call<{ error: string; vaultState: string }>("POST", "/api/siege/start", { castleId: DESK });
+    expect(unpaid.status).toBe(409);
+    expect(unpaid.data).toMatchObject({ error: "not_guarding", vaultState: "created" });
+    expect((await call("POST", "/api/siege/start", { castleId: DESK }, pay())).status).toBe(409);
+    const free = await call<{ error: string }>("POST", "/api/siege/start", { castleId: DESK, free: true, wallet: "w-free" });
+    expect(free.data.error).toBe("not_guarding");
+    const play = await call<{ error: string }>("POST", "/api/play/start", { castleId: DESK });
+    expect(play.status).toBe(409);
+    expect(play.data.error).toBe("not_guarding");
+    expect(receipts()).toBe(before);
+    // the free siege was not used up
+    const all = await call<{ castles: { id: string }[] }>("GET", "/api/castles");
+    expect(all.data.castles.map((c) => c.id)).toContain(DESK);
+    const board = await call<{ castles: { id: string }[] }>("GET", "/api/castles?vaultState=guarding");
+    expect(board.data.castles.map((c) => c.id)).not.toContain(DESK);
+    expect(board.data.castles).toHaveLength(5);
+  });
+
+  it("dev vault-state endpoint: owner only, legal transitions only, funded creates the vault; dormant refunds the in-flight fee", async () => {
+    await addDesk("created");
+    const owner = await ownerCookie();
+    const vs = (to: string, headers = owner) => call<{ ok?: boolean; error?: string; vaultId?: number }>("POST", `/api/castles/${DESK}/vault-state`, { to, reason: `test ${to}` }, headers);
+    expect((await vs("connected", {})).status).toBe(401);
+    expect((await vs("guarding")).data.error).toBe("illegal_transition");
+    expect((await vs("broken")).status).toBe(409);
+    for (const to of ["connected", "verified", "funded", "guarding"]) expect((await vs(to)).status).toBe(200);
+    expect(castleRow(DESK)).toMatchObject({ vaultState: "guarding", status: "open", vaultAddress: "stub" });
+    expect(castleRow(DESK).vaultId).toBeGreaterThan(0);
+
+    const id = await paidSiege(DESK);
+    await say(id, MUST_NOT_BREAK[0]);
+    expect((await vs("dormant")).status).toBe(200);
+    expect(receiptOf(id).state).toBe("refund_due");
+    expect((await say(id, MUST_NOT_BREAK[1])).status).toBe(409);
+    expect((await call<{ error: string }>("POST", "/api/siege/start", { castleId: DESK }, pay())).data.error).toBe("not_guarding");
+    await settleTick();
+    expect(receiptOf(id).state).toBe("refunded");
+    expect(getSiege(id)!.settlement).toMatchObject({ state: "void", reason: "guardian_dormant", refund: { state: "refunded" } });
+    expect((await vs("guarding")).status).toBe(200);
+    expect((await paidSiege(DESK)).length).toBeGreaterThan(0);
+  });
+
+  it("dev endpoint is refused on testnet unless SIEGE_DEV_ENDPOINTS=1", async () => {
+    await addDesk("created");
+    process.env.CHAIN_MODE = "testnet";
+    process.env.OWNER_SECRET = "a-long-private-owner-key";
+    resetEnv();
+    try {
+      const owner = await ownerCookie();
+      const r = await call<{ error: string }>("POST", `/api/castles/${DESK}/vault-state`, { to: "connected" }, owner);
+      expect(r.status).toBe(404);
+      expect(r.data.error).toBe("dev_endpoint_disabled");
+      process.env.SIEGE_DEV_ENDPOINTS = "1";
+      expect((await call("POST", `/api/castles/${DESK}/vault-state`, { to: "connected" }, owner)).status).toBe(200);
+    } finally {
+      delete process.env.SIEGE_DEV_ENDPOINTS;
+      process.env.CHAIN_MODE = "stub";
+      delete process.env.OWNER_SECRET;
+      resetEnv();
+    }
+  });
+
+  it("POST /api/castles/[id]/close: owner only; closes on chain, returns the pot, refunds the in-flight siege, audits vault.state", async () => {
+    await addDesk("guarding");
+    const id = await paidSiege(DESK);
+    await say(id, MUST_NOT_BREAK[0]);
+    const pot = String(castleRow(DESK).potTinybar);
+    expect((await call("POST", `/api/castles/${DESK}/close`, { reason: "orders_changed" })).status).toBe(401);
+    const owner = await ownerCookie();
+    expect((await call("POST", `/api/castles/${DESK}/close`, { reason: "nonsense" }, owner)).status).toBe(400);
+    expect((await call<{ error: string }>("POST", `/api/castles/${DESK}/close`, { reason: "expired" }, owner)).data.error).toBe("not_expired");
+    const r = await call<{ ok: boolean; tx: { txId: string }; refunded: string; inFlightRefunds: number }>("POST", `/api/castles/${DESK}/close`, { reason: "orders_changed" }, owner);
+    expect(r.status).toBe(200);
+    expect(r.data).toMatchObject({ ok: true, refunded: pot, inFlightRefunds: 1 });
+    expect(r.data.tx.txId).toMatch(/^stub:/);
+    expect(castleRow(DESK)).toMatchObject({ vaultState: "closed", status: "closed", potTinybar: 0, vaultStateReason: "orders_changed" });
+    await settleTick();
+    expect(receiptOf(id).state).toBe("refunded");
+    expect((await call("POST", `/api/castles/${DESK}/close`, { reason: "owner_closed" }, owner)).status).toBe(409);
+    await new Promise((res) => setTimeout(res, 5));
+    const audit = db().select().from(schema.auditLog).where(eq(schema.auditLog.castleId, DESK)).all().filter((a) => a.type === "vault.state");
+    expect(JSON.parse(audit.at(-1)!.message)).toMatchObject({ type: "vault.state", from: "guarding", to: "closed", reason: "orders_changed" });
+  });
+
+  it("the worker: a payout moves the vault to broken; an expired vault is closed on chain", async () => {
+    const { seed } = await import("@/scripts/seed");
+    await seed({ quiet: true });
+    const id = await paidSiege(WOOD);
+    for (const t of WOODEN_BREAK) await say(id, t);
+    await settleTick();
+    expect(castleRow(WOOD)).toMatchObject({ status: "broken", vaultState: "broken", vaultStateReason: "paid out to 0.0.stub-raider" });
+
+    const GRANITE = "castle_granite_hold";
+    const live = await paidSiege(GRANITE);
+    await say(live, MUST_NOT_BREAK[0]);
+    db().update(schema.castles).set({ deadline: Date.now() - 1000 }).where(eq(schema.castles.id, GRANITE)).run();
+    await settleTick();
+    expect(castleRow(GRANITE)).toMatchObject({ vaultState: "closed", status: "closed", vaultStateReason: "expired", potTinybar: 0 });
+    expect(receiptOf(live).state).toBe("refunded");
+  });
+
+  it("an agent run on a castle that stops guarding ends with not_guarding", async () => {
+    const agent = await createAgent({ name: "Moth" });
+    db().update(schema.castles).set({ vaultState: "funded" }).where(eq(schema.castles.id, WOOD)).run();
+    startRun(agent.id, WOOD, 3);
+    await agentsTick();
+    const run = db().select().from(schema.agentRuns).where(eq(schema.agentRuns.agentId, agent.id)).get()!;
+    expect(run).toMatchObject({ status: "done", stopReason: "not_guarding" });
+  });
+});
+
 describe("owner-only agent controls and the deny beat", () => {
   it("create / run / stop need the owner cookie; budgets are capped", async () => {
     expect((await call("POST", "/api/agents", { name: "Drainer", budget: "100000000000" })).status).toBe(401);

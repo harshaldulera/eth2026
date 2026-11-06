@@ -8,6 +8,29 @@ test/SiegeVault.t.sol     Foundry tests (no forge-std needed; a small Vm interfa
 script/Deploy.s.sol       Foundry deploy script
 ```
 
+## Vault lifecycle
+
+```
+createVault(fee, duration, castellan, tool)   arena only, msg.value = starting pot      -> Open
+recordAttempt(vaultId, siegeId, raider)       arena only, msg.value == fee, before deadline
+release(vaultId, raider, transcriptHash, siegeId, sig)   arena + verifier signature   -> Broken (pays pot + fee)
+closeVault(vaultId, reason)                   see below, refunds the pot to the castellan -> Closed
+```
+
+**Protected tool.** Each vault records the tool call that counts as a break: `"unlock_vault"` for hosted guardians, or whatever an SDK harness protects (for example `"issue_refund"`). It must be 1 to 64 **bytes** (not characters) or `createVault` reverts `BadArgs`. It is stored in the public mapping `protectedTool(vaultId)` and emitted in `VaultCreated(vaultId, castellan, pot, fee, deadline, protectedTool)`. It is metadata only: the contract never interprets it, and it stays readable after the vault breaks or closes.
+
+**Close reasons** (`enum CloseReason`, a `uint8` on the ABI). Every close needs the vault to be `Open` (else `BadStatus`, checked first), refunds the whole pot to the castellan, never to the caller, and emits `VaultClosed(vaultId, refunded, reason)`.
+
+| reason | value | when | who | other callers |
+|---|---|---|---|---|
+| `Expired` | 0 | at or after the deadline (`NotExpired` before) | castellan or arena | `NotAllowed` |
+| `OrdersChanged` | 1 | any time | arena only (auto-close when the guardian's orders hash changes) | `NotArena` |
+| `OwnerClosed` | 2 | any time | castellan or arena | `NotAllowed` |
+
+A value above 2 fails ABI decoding and reverts with no data. After a close, `recordAttempt` and `release` revert `BadStatus`, and a second close of any reason reverts `BadStatus`. Earnings already in `castellanBalance` are not part of the pot and stay withdrawable.
+
+In-flight sieges' fees were never forwarded to the contract (only a settled siege calls `recordAttempt` or `release`), so the contract has nothing to refund for them. The app refunds those off chain from the treasury when it closes a vault or a guardian goes dormant.
+
 ## Units on Hedera
 
 Inside the EVM, `msg.value`, balances and the `fee` / `pot` numbers are **tinybars** (1 HBAR = 1e8). The JSON-RPC relay (Hashio, chainId 296) speaks 18-decimal **weibars**, so a value you send over RPC is `tinybars * 1e10`. Only send multiples of 1e10. Function *arguments* such as `createVault(fee, ...)` are not converted, so pass them in tinybars.
@@ -15,10 +38,19 @@ Inside the EVM, `msg.value`, balances and the `fee` / `pot` numbers are **tinyba
 Example: open a vault with a 1 ℏ fee and a 20 ℏ starting pot, lasting 7 days:
 
 ```
-cast send $VAULT "createVault(uint256,uint64,address)" 100000000 604800 $CASTELLAN \
-  --value 2000000000000000000 --rpc-url https://testnet.hashio.io/api --private-key $KEY --legacy --gas-limit 400000
+cast send $VAULT "createVault(uint256,uint64,address,string)" 100000000 604800 $CASTELLAN unlock_vault \
+  --value 2000000000000000000 --rpc-url https://testnet.hashio.io/api --private-key $KEY --legacy --gas-limit 500000
 #         fee = 1e8 tinybars                         value = 20e8 tinybars * 1e10 weibars
 ```
+
+Close it early because the castellan asked (reason 2 = OwnerClosed; use 1 for OrdersChanged, 0 once expired):
+
+```
+cast send $VAULT "closeVault(uint256,uint8)" $VAULT_ID 2 --rpc-url https://testnet.hashio.io/api --private-key $KEY --legacy --gas-limit 300000
+cast call $VAULT "protectedTool(uint256)(string)" $VAULT_ID --rpc-url https://testnet.hashio.io/api
+```
+
+These signatures changed from the earlier `createVault(uint256,uint64,address)` / `closeVault(uint256)`. A vault contract deployed before this change has the old ABI, so redeploy it and update `VAULT_ADDRESS`.
 
 Always pass an explicit gas limit on Hedera. Pay Raiders at addresses that already have a Hedera account, such as the agent accounts the app creates. Paying an EVM address that has no account yet relies on a lazy-create (a hollow account), which costs extra gas. This path has not been tested on testnet, so give `release` plenty of gas (for example 1,000,000).
 
@@ -30,7 +62,7 @@ The executable suite lives in the app and runs without Foundry, using an in-memo
 cd frontend && npx vitest run lib/chain/contracts.test.ts     # or: npm run contracts:test
 ```
 
-It covers the constructor checks, onlyArena on every privileged function, the split math (an odd fee, plus a property check over many fees and splits), `WrongFee`, `Replay` and `Expired`, release payouts (exact balance delta), every signature failure (wrong signer, tampered fields, wrong domain, high-s malleation, 64-byte and garbage signatures), free-siege protection (`msg.value == 0` gives `WrongFee`), close and withdraw, reentrancy through a malicious castellan contract, and the solvency invariant `balance == Σ pots + Σ castellanBalance + arenaBalance`. The invariant is checked over a scripted sequence and over a 150-step seeded random walk.
+It covers the constructor checks, onlyArena on every privileged function, the split math (an odd fee, plus a property check over many fees and splits), `WrongFee`, `Replay` and `Expired`, release payouts (exact balance delta), every signature failure (wrong signer, tampered fields, wrong domain, high-s malleation, 64-byte and garbage signatures), free-siege protection (`msg.value == 0` gives `WrongFee`), the protected tool (stored, emitted, readable; empty and 65-byte tools give `BadArgs`, 64 bytes is accepted, length is counted in UTF-8 bytes), every close reason (who may call it, before and after the deadline, exact refund to the castellan, the `VaultClosed` reason, `BadStatus` on a broken, closed or unknown vault, `BadStatus` for `recordAttempt` / `release` after a close, `PayFailed` for a castellan that rejects HBAR), withdraw, reentrancy through a malicious castellan contract on both the expiry and the owner-close path, and the solvency invariant `balance == Σ pots + Σ castellanBalance + arenaBalance`. The invariant is checked over two scripted sequences (one mixing all three close reasons with a break and withdrawals) and over a 300-step seeded random walk that must succeed with every close reason at least once.
 
 Once Foundry is installed:
 
@@ -71,6 +103,6 @@ forge create src/SiegeVault.sol:SiegeVault --rpc-url https://testnet.hashio.io/a
 - **Signatures.** Only 65-byte signatures are accepted. High-s signatures (EIP-2) are rejected, as is `v` outside {27, 28} (0 and 1 are normalised). A zero recovery is also rejected. The domain separator binds the chain id and the contract address.
 - **Replay.** Each `siegeId` settles on chain at most once, across all vaults and for both attempt and release.
 - **Free sieges** can never pay out. `release` requires `msg.value == fee`, and the arena only forwards a fee that a Raider actually paid.
-- **Arena key alone** cannot drain pots, because `release` needs the verifier signature. What it can do: open vaults, record attempts (which only add funds), close expired vaults (the refund goes to the castellan) and withdraw its own 5%. **Arena key plus verifier key together** can pay any open pot to any address, so do not keep both in one long-lived hot process if it can be avoided.
-- **Release after the deadline** is allowed while a vault is still `Open`, so a siege that is in flight when the deadline passes can still be paid. Once anyone calls `closeVault` the vault is final.
+- **Arena key alone** cannot drain pots, because `release` needs the verifier signature. What it can do: open vaults, record attempts (which only add funds), close any open vault with any reason (the refund always goes to the castellan, never to the arena) and withdraw its own 5%. A compromised arena key can therefore grief a castle by closing it early, but cannot steal its pot. **Arena key plus verifier key together** can pay any open pot to any address, so do not keep both in one long-lived hot process if it can be avoided.
+- **Release after the deadline** is allowed while a vault is still `Open`, so a siege that is in flight when the deadline passes can still be paid. Once anyone calls `closeVault` (any reason) the vault is final, so the app must refund and void in-flight sieges when it closes a vault.
 - If a castellan is a contract that rejects HBAR, its refund and withdraw revert (`PayFailed`) and its funds stay in the contract. If a Raider rejects payment, `release` reverts and leaves the vault untouched.

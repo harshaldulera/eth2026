@@ -39,6 +39,13 @@ export const chain: ChainPort = {
     }
   },
   createTopic: async (castleId: string) => (await impl()).createTopic(castleId),
+  closeVault: async (vaultId, reason) => {
+    try {
+      return await (await impl()).closeVault(vaultId, reason);
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  },
 };
 
 /**

@@ -32,6 +32,31 @@ export type Tier = "wooden" | "stone" | "iron";
 
 export type CastleStatus = "open" | "broken" | "closed";
 
+/**
+ * Vault lifecycle (Lane B produces most transitions; Lane A owns funded/broken/closed).
+ *   hosted: created → verified → funded → guarding
+ *   sdk:    created → connected → verified (smoke siege passed) → funded → guarding ⇄ dormant
+ *   end:    broken (paid out) | closed (deadline, orders changed, owner)
+ * Only `guarding` castles take sieges and are listed on the board.
+ */
+export type VaultState = "created" | "connected" | "verified" | "funded" | "guarding" | "dormant" | "broken" | "closed";
+
+/** How a guardian is reached: our hosted runtime, or an external harness through the @siege/guard SDK. */
+export type TransportKind = "hosted" | "sdk";
+
+/** The protected tool for hosted guardians. External harnesses name their own (e.g. "issue_refund"). */
+export const HOSTED_PROTECTED_TOOL = "unlock_vault";
+
+export type VaultCloseReason = "expired" | "orders_changed" | "owner_closed";
+
+export type VaultStateChange = {
+  castleId: string;
+  from: VaultState;
+  to: VaultState;
+  reason: string;
+  at: string;
+};
+
 export type Castle = {
   id: string;
   name: string;
@@ -57,6 +82,14 @@ export type Castle = {
   vaultId: number | null;
   /** HCS audit topic id for this castle, null until created. */
   topicId: string | null;
+  /** Tool call that counts as a break: "unlock_vault" for hosted guardians, whatever an SDK harness protected. */
+  protectedTool: string;
+  vaultState: VaultState;
+  /** Reason given with the last vault state transition. */
+  vaultStateReason?: string;
+  transport: TransportKind;
+  /** SDK guardians: last heartbeat seen (shown as "last seen" when dormant). */
+  lastSeenAt?: string;
   /** Unix ms when the vault closes. */
   deadline: number;
   createdAt: string;
@@ -96,6 +129,8 @@ export type Siege = {
   messages: SiegeMessage[];
   /** Free daily siege: never pays out. */
   free: boolean;
+  /** Which transport answered this siege (fixed at start). */
+  transport: TransportKind;
   receipt?: PaymentReceipt;
   transcriptHash?: `0x${string}`;
   /** On-chain recordAttempt tx (held/banished sieges). */
@@ -241,7 +276,8 @@ export type SiegeEventType =
   | "end"
   | "attempt" // Lane A: fee split recorded on chain (held/banished)
   | "release" // Lane A: vault paid out on chain (broken)
-  | "approval"; // Lane A: raider agent asked its owner / owner decided
+  | "approval" // Lane A: raider agent asked its owner / owner decided
+  | "vault_state"; // vault lifecycle transition (payload: VaultStateChange); siegeId is ""
 
 export type SiegeEvent = {
   /** Empty string for agent/approval events not tied to a siege yet. */
@@ -249,6 +285,10 @@ export type SiegeEvent = {
   castleId?: string;
   type: SiegeEventType;
   turn?: number;
+  /** Set on every siege event (start/message/decision/end/attempt/release). */
+  transport?: TransportKind;
+  /** Proxy request id of the guardian reply (decision events, and the message event it answers). */
+  requestId?: string;
   payload: Record<string, unknown>;
   at: string;
 };
@@ -260,6 +300,9 @@ export type StoredSiegeEvent = SiegeEvent & { id: number };
 export type CastleFilter = {
   tier?: Tier;
   status?: CastleStatus;
+  /** The board passes "guarding": only guarding castles take sieges. */
+  vaultState?: VaultState;
+  transport?: TransportKind;
   minPot?: Amount;
   sort?: "pot" | "streak" | "fee" | "recent";
 };
@@ -295,7 +338,15 @@ export interface PayPort {
 /** Lane A — lib/chain */
 export interface ChainPort {
   readonly mode: "stub" | "testnet";
-  createVault(i: { castleId: string; pot: Amount; fee: Amount; durationSec: number; castellan: AccountId }): Promise<
+  createVault(i: {
+    castleId: string;
+    pot: Amount;
+    fee: Amount;
+    durationSec: number;
+    castellan: AccountId;
+    /** Metadata stored on chain: the tool call that counts as a break. */
+    protectedTool: string;
+  }): Promise<
     { ok: true; vaultId: number; tx: TxRef } | { ok: false; reason: string }
   >;
   /** Forward the fee into the vault and split it (held/banished sieges). */
@@ -307,6 +358,14 @@ export interface ChainPort {
   /** Write a compact event to the castle's HCS topic. Never blocks gameplay. */
   audit(event: SiegeEvent): Promise<{ ok: true; topicId: string; seq: number } | { ok: false; reason: string }>;
   createTopic(castleId: string): Promise<{ ok: true; topicId: string; tx: TxRef } | { ok: false; reason: string }>;
+  /**
+   * Close a vault: returns the pot to the Castellan on chain and refunds every in-flight paid siege.
+   * "orders_changed" is the auto-close path (Lane B raises it from the proxy's prompt-hash check);
+   * "owner_closed" is the Castellan's choice; "expired" needs the deadline to have passed.
+   */
+  closeVault(vaultId: number, reason: VaultCloseReason): Promise<
+    { ok: true; tx: TxRef; refunded: Amount; inFlightRefunds: number } | { ok: false; reason: string }
+  >;
 }
 
 export type FeeSplit = { castellan: Amount; pot: Amount; arena: Amount };
@@ -314,6 +373,44 @@ export type FeeSplit = { castellan: Amount; pot: Amount; arena: Amount };
 /** Lane B — lib/guardian */
 export interface GuardianPort {
   respond(castleId: string, siegeMessages: SiegeMessage[]): Promise<GuardianDecision>;
+}
+
+/**
+ * Lane B — lib/transport. The siege state machine talks ONLY to this (lint-enforced):
+ * `hosted` wraps our 0G guardian, `sdk` relays to an external harness over the @siege/guard socket.
+ */
+/** Where a guardian reply is asked for: the proxy tags its request record with these (turn defaults to the last raider turn). */
+export type GuardianRespondContext = { siegeId?: string; turn?: number };
+
+export interface GuardianTransport {
+  readonly kind: TransportKind;
+  respond(castleId: string, siegeMessages: SiegeMessage[], ctx?: GuardianRespondContext): Promise<GuardianDecision>;
+  /** Current vault state as this transport sees it (e.g. sdk: dormant after three missed heartbeats). */
+  status(castleId: string): Promise<VaultState>;
+}
+
+/** Lane B — lib/proxy: one record per inference request through the vault-scoped model key. Hashes only, never content. */
+export type ProxyRecord = {
+  requestId: string;
+  vaultId: string;
+  siegeId?: string;
+  turn?: number;
+  promptHash: `0x${string}`;
+  protectedToolCalled: boolean;
+  at: string;
+};
+
+export interface ProxyPort {
+  issueKey(vaultId: string): Promise<{ modelKey: string; baseURL: string }>;
+  record(requestId: string): Promise<ProxyRecord | null>;
+}
+
+/** Shared — lib/vault/state: the one place vault transitions happen (DB, event, HCS, Arkiv). */
+export interface VaultStatePort {
+  get(castleId: string): Promise<VaultState | null>;
+  transition(castleId: string, to: VaultState, reason: string): Promise<
+    { ok: true; change: VaultStateChange } | { ok: false; reason: "not_found" | "illegal_transition" }
+  >;
 }
 
 /** Lane B — lib/siege */

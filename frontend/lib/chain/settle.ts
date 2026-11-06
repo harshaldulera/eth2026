@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { env } from "@/lib/config/env";
 import { schema, type DB } from "@/lib/db";
-import type { FeeSplit, SiegeEvent, Verification } from "@/lib/types";
+import type { FeeSplit, SiegeEvent, VaultCloseReason, VaultState, Verification } from "@/lib/types";
 import { accountEvmAddress } from "./mirror";
 import { configuredChainId } from "./evm";
 import { releaseTypedData, STUB_VAULT_ADDRESS, type ReleaseTypedData } from "./releaseSig";
@@ -18,6 +18,16 @@ export type ReceiptRow = typeof schema.paymentReceipts.$inferSelect;
 export type SettleRows = { siege: SiegeRow; castle: CastleRow; receipt: ReceiptRow | null };
 
 export type Refusal = { ok: false; reason: string };
+
+/** Same bounds as SiegeVault.createVault's `tool`: 1..64 bytes. */
+export const validProtectedTool = (tool: unknown): tool is string =>
+  typeof tool === "string" && Buffer.byteLength(tool, "utf8") >= 1 && Buffer.byteLength(tool, "utf8") <= 64;
+
+/** Vault states in which the castle's on-chain vault exists and is Open (funded and not broken/closed). */
+export const VAULT_OPEN_STATES: ReadonlySet<VaultState> = new Set<VaultState>(["funded", "guarding", "dormant"]);
+
+/** Void reason written on the sieges a closed vault strands (their fees are refunded). */
+export const closeVoidReason = (reason: VaultCloseReason) => `castle_closed_${reason}`;
 
 export function loadSettle(d: DB, siegeId: string): ({ ok: true } & SettleRows) | Refusal {
   const siege = d.select().from(schema.sieges).where(eq(schema.sieges.id, siegeId)).get();
@@ -177,21 +187,48 @@ export function auditCastle(d: DB, event: SiegeEvent): CastleRow | null {
 const str = (v: unknown, max = 120): string | undefined =>
   typeof v === "string" && v.length > 0 ? v.slice(0, max) : undefined;
 
+/** HCS message type for an event: vault transitions are "vault.state"; siege events keep their event type. */
+export function auditType(event: SiegeEvent): string {
+  return event.type === "vault_state" ? "vault.state" : event.type;
+}
+
 /**
- * Compact audit JSON (<= 1000 bytes): {v:1,type,siegeId,castleId,turn?,hash?,requestId?,txId?,at}.
- * Only ids and hashes leave the server; message text and orders never do.
+ * Compact audit JSON (<= 1000 bytes). Only ids and hashes leave the server; message text and orders never do.
+ *   siege events: {v:1,type,siegeId,castleId,turn?,transport?,hash?,requestId?,txId?,at}
+ *                 (transport + requestId = which guardian transport answered and the proxy request id, plan A4)
+ *   vault_state:  {v:1,type:"vault.state",castleId,from,to,reason,at}
  */
 export function auditMessage(event: SiegeEvent, castleId: string): string {
   const p = (event.payload ?? {}) as Record<string, unknown>;
+  if (event.type === "vault_state") {
+    const msg: Record<string, unknown> = {
+      v: 1,
+      type: "vault.state",
+      castleId: castleId.slice(0, 80),
+      from: str(p.from, 20),
+      to: str(p.to, 20),
+      reason: str(p.reason, 200) ?? "",
+      at: event.at,
+    };
+    let out = JSON.stringify(msg);
+    // Reasons are free text (multi-byte characters): shrink until it fits.
+    while (Buffer.byteLength(out, "utf8") > AUDIT_MAX_BYTES && typeof msg.reason === "string" && msg.reason.length > 0) {
+      msg.reason = msg.reason.slice(0, Math.floor(msg.reason.length / 2));
+      out = JSON.stringify(msg);
+    }
+    return out;
+  }
   const tx = p.tx as { txId?: unknown } | undefined;
+  const transport = event.transport ?? p.transport;
   const msg: Record<string, unknown> = {
     v: 1,
     type: event.type,
     siegeId: str(event.siegeId, 80) ?? "",
     castleId: castleId.slice(0, 80),
     turn: typeof event.turn === "number" ? event.turn : undefined,
+    transport: transport === "hosted" || transport === "sdk" ? transport : undefined,
     hash: str(p.transcriptHash) ?? str(p.hash),
-    requestId: str(p.requestId),
+    requestId: str(event.requestId) ?? str(p.requestId),
     txId: str(p.txId) ?? str(tx?.txId),
     at: event.at,
   };
