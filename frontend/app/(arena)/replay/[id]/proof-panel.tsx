@@ -162,8 +162,8 @@ export function ProofPanel({ replay, className }: { replay: ReplayWithVerify; cl
                   <span className="truncate text-ink" title={q.requestId}>
                     {q.requestId}
                   </span>
-                  <span className={cn("font-ui text-[10px]", q.promptHash ? (q.mock ? "text-warn" : "text-safe") : "text-ink-dim")}>
-                    {q.promptHash ? (q.mock ? "MOCK" : "PROXY ✓") : q.requestId.startsWith("0g-stub") ? "STUB" : "—"}
+                  <span className={cn("font-ui text-[10px]", q.proxied ? (q.mock ? "text-warn" : "text-safe") : "text-ink-dim")}>
+                    {q.proxied ? (q.mock ? "MOCK" : "PROXY ✓") : q.requestId.startsWith("0g-stub") ? "STUB" : "—"}
                   </span>
                   {q.toolCalls?.length ? <span className="text-money">{q.toolCalls.join(", ")}</span> : null}
                   {rec?.record ? (
