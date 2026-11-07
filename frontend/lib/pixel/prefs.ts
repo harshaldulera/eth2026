@@ -102,9 +102,12 @@ export function prefAttributes(p: Prefs): Record<"data-skin" | "data-crt" | "dat
  * Inline script for `<head>`: applies data-skin / data-crt / data-calm before first paint.
  * Kept here so the store and the script agree on keys and parsing.
  */
+/** Pages that always render in one skin, whatever the visitor saved (the landing page is neon). */
+export const FORCED_SKIN: Readonly<Record<string, "crt" | "neon">> = Object.freeze({ "/welcome": "neon" });
+
 export function bootstrapScript(): string {
   const k = PREF_STORAGE_KEYS;
-  return `(function(){try{var d=document.documentElement,q=new URLSearchParams(location.search),s=null;function g(n){try{return localStorage.getItem(n)}catch(e){return null}}function b(v){if(v==null)return null;v=String(v).toLowerCase();if(v==="1"||v==="true"||v==="on"||v==="yes")return true;if(v==="0"||v==="false"||v==="off"||v==="no")return false;return null}var sk=(q.get("skin")||"").toLowerCase();if(sk!=="crt"&&sk!=="neon")sk=(g(${JSON.stringify(k.skin)})||"").toLowerCase();if(sk==="crt"||sk==="neon")d.setAttribute("data-skin",sk);var c=b(q.get("crt"));if(c===null)c=b(g(${JSON.stringify(k.crt)}));if(c!==null)d.setAttribute("data-crt",c?"on":"off");var m=b(q.get("calm"));if(m===null)m=b(g(${JSON.stringify(k.calm)}));if(m)d.setAttribute("data-calm","1");else d.removeAttribute("data-calm")}catch(e){}})()`;
+  return `(function(){try{var d=document.documentElement,q=new URLSearchParams(location.search),s=null;function g(n){try{return localStorage.getItem(n)}catch(e){return null}}function b(v){if(v==null)return null;v=String(v).toLowerCase();if(v==="1"||v==="true"||v==="on"||v==="yes")return true;if(v==="0"||v==="false"||v==="off"||v==="no")return false;return null}var sk=(q.get("skin")||"").toLowerCase();if(sk!=="crt"&&sk!=="neon")sk=(g(${JSON.stringify(k.skin)})||"").toLowerCase();var fs=${JSON.stringify(FORCED_SKIN)}[String(location.pathname||"").replace(/[/]+$/,"")];if(fs)sk=fs;if(sk==="crt"||sk==="neon")d.setAttribute("data-skin",sk);var c=b(q.get("crt"));if(c===null)c=b(g(${JSON.stringify(k.crt)}));if(c!==null)d.setAttribute("data-crt",c?"on":"off");var m=b(q.get("calm"));if(m===null)m=b(g(${JSON.stringify(k.calm)}));if(m)d.setAttribute("data-calm","1");else d.removeAttribute("data-calm")}catch(e){}})()`;
 }
 
 // ─── store ────────────────────────────────────────────────────────────────────────────────

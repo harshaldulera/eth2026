@@ -103,11 +103,11 @@ describe("store", () => {
 });
 
 describe("bootstrapScript", () => {
-  function run(search: string, stored: Record<string, string>) {
+  function run(search: string, stored: Record<string, string>, pathname = "/") {
     const root = fakeRoot({ "data-skin": "crt", "data-crt": "on" });
     const storage = fakeStorage(stored);
     const fn = new Function("document", "location", "localStorage", "URLSearchParams", bootstrapScript());
-    fn({ documentElement: root }, { search }, storage, URLSearchParams);
+    fn({ documentElement: root }, { search, pathname }, storage, URLSearchParams);
     return Object.fromEntries(root.a);
   }
 
@@ -116,6 +116,11 @@ describe("bootstrapScript", () => {
   });
   it("lets the query win and honours calm", () => {
     expect(run("?skin=neon&crt=0&calm=1", { "siege.skin": "crt" })).toEqual({ "data-skin": "neon", "data-crt": "off", "data-calm": "1" });
+  });
+  it("pins the landing page to neon, whatever was saved or asked for", () => {
+    expect(run("", { "siege.skin": "crt" }, "/welcome")["data-skin"]).toBe("neon");
+    expect(run("?skin=crt", {}, "/welcome/")["data-skin"]).toBe("neon");
+    expect(run("", { "siege.skin": "crt" }, "/hall")["data-skin"]).toBe("crt");
   });
   it("ignores junk", () => {
     expect(run("?skin=<script>", { "siege.crt": "sideways" })).toEqual({ "data-skin": "crt", "data-crt": "on" });
