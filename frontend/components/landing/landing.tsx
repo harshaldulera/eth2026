@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type * as React from "react";
 import Link from "next/link";
-import { ArrowRight, Bot, Coins, Eye, FileCheck2, KeyRound, MessageSquareText, Package, ScrollText, ShieldAlert, Wallet } from "lucide-react";
+import { ArrowRight, BookOpen, Bot, Code2, Coins, ExternalLink, Eye, FileCheck2, KeyRound, MessageSquareText, Package, PlugZap, ScrollText, ShieldAlert, Swords, Upload, Wallet } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { usePolling } from "@/lib/hooks/usePolling";
 import { useCalmMotion } from "@/lib/hooks/usePrefs";
@@ -30,6 +30,7 @@ export function Landing() {
       <HowItWorks />
       <SampleOp />
       <TwoSides />
+      <Build />
       <Proof />
       <Stack />
       <FinalCta />
@@ -44,6 +45,7 @@ const ANCHORS = [
   { href: "#how", label: "How it works" },
   { href: "#hunters", label: "Hunters" },
   { href: "#teams", label: "Teams" },
+  { href: "#build", label: "Docs & SDK" },
   { href: "#proof", label: "Proof" },
 ];
 
@@ -315,7 +317,7 @@ function TwoSides() {
           { icon: <Package aria-hidden />, text: "Already running one? Connect it with the siege-guard package on npm: your harness, your model, our hunters." },
           { icon: <FileCheck2 aria-hidden />, text: "Each breach is a finding: the exact conversation, the tool call it caused, and a verified payout." },
         ]}
-        cta={{ href: "/publish", label: "PUBLISH AN AGENT" }}
+        cta={{ href: "#build", label: "SEE THE SDK & HOW-TOS" }}
       />
     </section>
   );
@@ -340,6 +342,150 @@ function Side(p: { id: string; tone: "money" | "accent"; eyebrow: string; title:
         </Link>
       </div>
     </PixelPanel>
+  );
+}
+
+// ─── docs, SDK, how-tos ───────────────────────────────────────────────────────────────────
+
+const REPO = "https://github.com/harshaldulera/eth2026";
+const NPM = "https://www.npmjs.com/package/siege-guard";
+
+type Way = {
+  icon: React.ReactNode;
+  who: string;
+  title: string;
+  /** One plain sentence: what it is. */
+  what: string;
+  /** What you actually do, in three short steps. */
+  steps: string[];
+  code?: string;
+  links: { href: string; label: string; external?: boolean }[];
+};
+
+const WAYS: Way[] = [
+  {
+    icon: <Upload aria-hidden />,
+    who: "No code",
+    title: "Publish an agent",
+    what: "Write your agent's instructions and pick the one tool it must never call. Siege hosts it and hunters try to break it.",
+    steps: ["Describe the agent and its protected tool", "Deposit the bounty pot", "Watch the ops come in"],
+    links: [
+      { href: "/docs#j1", label: "How-to" },
+      { href: "/publish", label: "Open publish" },
+    ],
+  },
+  {
+    icon: <PlugZap aria-hidden />,
+    who: "SDK",
+    title: "Plug in your running agent",
+    what: "Already have an agent? The siege-guard package connects it as it is: your prompt, your tools, your machine. Nothing to host.",
+    steps: ["Install siege-guard", "Point your model client at the Siege proxy", "Run it: the vault goes live"],
+    code: "npm i siege-guard openai",
+    links: [
+      { href: "/docs#j2", label: "How-to" },
+      { href: NPM, label: "npm", external: true },
+      { href: `${REPO}/tree/main/packages/guard-sdk`, label: "Source", external: true },
+    ],
+  },
+  {
+    icon: <Bot aria-hidden />,
+    who: "No code",
+    title: "Run an agent unit",
+    what: "A unit is an AI hunter that runs ops for you, from its own Hedera account, with hard spending caps. If it hits a cap, your pager asks you first.",
+    steps: ["Create a unit and fund it", "Set its caps and targets", "Approve from your phone if it asks"],
+    links: [
+      { href: "/docs#j3", label: "How-to" },
+      { href: "/raider", label: "Open agents" },
+    ],
+  },
+  {
+    icon: <Swords aria-hidden />,
+    who: "Code",
+    title: "Attack from your own code",
+    what: "Write your own attacking agent. It pays the fee over x402 and talks to the vault through a small HTTP API.",
+    steps: ["Copy the raid-bot example", "Add your Hedera account", "Run it against any vault"],
+    code: "node --env-file=.env index.mjs",
+    links: [
+      { href: "/docs#j5", label: "How-to" },
+      { href: `${REPO}/tree/main/examples/raid-bot`, label: "raid-bot", external: true },
+      { href: `${REPO}/blob/main/docs/API.md`, label: "API reference", external: true },
+    ],
+  },
+];
+
+function Build() {
+  return (
+    <section id="build" className="mx-auto max-w-6xl scroll-mt-20 px-4 pb-20 sm:px-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <SectionHead eyebrow="Docs, SDK & how-tos" title="Four ways to build on Siege." />
+        <Link href="/docs" className={cn(pixelButtonVariants({ variant: "outline", size: "md" }), "w-fit")}>
+          <BookOpen aria-hidden /> READ THE DOCS
+        </Link>
+      </div>
+      <p className="mt-4 max-w-3xl text-base leading-relaxed text-ink-dim">
+        Pick the one that fits. Two need no code at all. Every how-to also works against a local copy of Siege on your laptop, with no real money, before you
+        go live on Hedera testnet.
+      </p>
+      <ul className="mt-10 grid gap-5 md:grid-cols-2">
+        {WAYS.map((w) => (
+          <li key={w.title}>
+            <PixelPanel className="h-full">
+              <div className="flex h-full flex-col gap-4 p-5 sm:p-6">
+                <div className="flex items-center gap-3">
+                  <span className="text-accent [&_svg]:size-5">{w.icon}</span>
+                  <h3 className="font-ui text-sm tracking-[0.1em] text-ink uppercase">{w.title}</h3>
+                  <span className="ml-auto border-2 border-line px-1.5 py-0.5 font-ui text-[9px] tracking-[0.14em] text-ink-dim uppercase">{w.who}</span>
+                </div>
+                <p className="text-sm leading-relaxed text-ink">{w.what}</p>
+                <ol className="space-y-1.5">
+                  {w.steps.map((st, i) => (
+                    <li key={st} className="flex gap-3 text-sm text-ink-dim">
+                      <span className="w-4 shrink-0 font-pixel text-[10px] leading-5 text-accent">{i + 1}</span>
+                      {st}
+                    </li>
+                  ))}
+                </ol>
+                {w.code ? (
+                  <pre className="overflow-x-auto border-2 border-line bg-bg px-3 py-2 font-mono text-[13px] text-money">
+                    <code>$ {w.code}</code>
+                  </pre>
+                ) : null}
+                <div className="mt-auto flex flex-wrap gap-2 pt-1">
+                  {w.links.map((l) =>
+                    l.external ? (
+                      <a key={l.href} href={l.href} target="_blank" rel="noreferrer" className={pixelButtonVariants({ variant: "ghost", size: "sm" })}>
+                        {l.label} <ExternalLink aria-hidden />
+                      </a>
+                    ) : (
+                      <Link key={l.href} href={l.href} className={pixelButtonVariants({ variant: l.label === "How-to" ? "outline" : "ghost", size: "sm" })}>
+                        {l.label} {l.label === "How-to" ? <ArrowRight aria-hidden /> : null}
+                      </Link>
+                    ),
+                  )}
+                </div>
+              </div>
+            </PixelPanel>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-5 flex flex-col gap-3 border-2 border-dashed border-line px-5 py-4 text-sm text-ink-dim sm:flex-row sm:items-center sm:justify-between">
+        <span className="flex items-center gap-2">
+          <Code2 aria-hidden className="size-4 text-accent" />
+          Want the details? The docs also say plainly what Siege proves, and what it does not.
+        </span>
+        <div className="flex flex-wrap gap-4 font-ui text-[11px] tracking-[0.12em] uppercase">
+          <Link href="/docs#overview" className="text-accent hover:text-ink">
+            How it fits together
+          </Link>
+          <Link href="/docs#claims" className="text-accent hover:text-ink">
+            What we claim
+          </Link>
+          <a href={REPO} target="_blank" rel="noreferrer" className="text-accent hover:text-ink">
+            GitHub ↗
+          </a>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -450,6 +596,12 @@ function Footer() {
           <Link href="/docs" className="hover:text-ink">
             Docs
           </Link>
+          <a href={NPM} target="_blank" rel="noreferrer" className="hover:text-ink">
+            SDK
+          </a>
+          <a href={REPO} target="_blank" rel="noreferrer" className="hover:text-ink">
+            GitHub
+          </a>
         </nav>
       </div>
     </footer>
