@@ -9,7 +9,8 @@ const text = JSON.stringify(DOC_SECTIONS);
 describe("developer docs", () => {
   it("docs/API.md is the generated copy of the page content (run: npx tsx scripts/gen-api-md.ts)", () => {
     const file = path.resolve(process.cwd(), "../docs/API.md");
-    expect(readFileSync(file, "utf8")).toBe(docsMarkdown());
+    // Compare text, not line endings: a Windows checkout (core.autocrlf) writes the file with CRLF.
+    expect(readFileSync(file, "utf8").replace(/\r\n/g, "\n")).toBe(docsMarkdown());
   });
 
   it("covers every journey and the J5 contract", () => {

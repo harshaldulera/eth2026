@@ -21,9 +21,16 @@ A live op, played on 7 Nov 2026 at 20:34 UTC through the running app (`npm run d
 - Arkiv entity `0xfb0502479273ce511250a1d6eebbc4584cf385f1b336f3f8ffd8bd63f6f0aceb`: https://rabdi.explorer.arkiv.network/entity/0xfb0502479273ce511250a1d6eebbc4584cf385f1b336f3f8ffd8bd63f6f0aceb (tx https://rabdi.explorer.arkiv.network/tx/0xf61bd665d4c8df14b7fc39e8b9ab89125f6b7f28beb3156e1f1dedf26c31b08b)
 - read back from the chain: `arkiv.schema = siege.op`, `opId = siege_d5c191e71ccb439e`, `status = held`, `turn = 5`, `transcriptHash = 0xf75947bfff842a45f869c3b9c90f676a7e1c809b71366d731c7092458d44f82c`, `swarmRef = 1907b1c219d15cb938cd72434a226453db16bd6b5694d7ce581e330ecf5e10a9`
 - the transcript on Swarm: https://api.gateway.ethswarm.org/bytes/1907b1c219d15cb938cd72434a226453db16bd6b5694d7ce581e330ecf5e10a9 (also https://bzz.limo/bytes/1907b1c219d15cb938cd72434a226453db16bd6b5694d7ce581e330ecf5e10a9)
+  (uploaded as raw bytes, before transcripts were named, so this link downloads a file; the worker re-uploads such references as `transcript.json`, and the op goes back to Arkiv with the new reference)
 - the app's replay of this op (`GET /api/replay/siege_d5c191e71ccb439e`): source **swarm**, "Transcript read from Swarm" **pass**, "Transcript hash recomputed here matches the op's" **pass**
 
 What you see at the Swarm links is the sealed envelope, not the text (the next section). Op entities are short-lived by design (10 minutes after the op ends), so the entity link above is a record of what was on chain, not something that stays openable. For judging, play an op and open its entity within those ten minutes. The transcript stays on Swarm as long as the worker keeps it alive (re-uploads twice a day for a week).
+
+### Opening a transcript in a browser
+
+Each transcript is uploaded as a named file, `transcript.json` with `Content-Type: application/json` (`POST /bzz?name=transcript.json`). So `https://api.gateway.ethswarm.org/bzz/<ref>/` (or `https://bzz.limo/bzz/<ref>/`) opens in the browser and shows the sealed envelope. The trailing slash is needed: the public gateway redirects the form without it. A transcript uploaded today, sealed exactly like a real one: https://api.gateway.ethswarm.org/bzz/c47970c571d7453de530e01c0b93facb302c31bca21880ec45638470a8f91b30/
+
+The first uploads went through raw `POST /bytes`, which stores bytes with no name or type, so the gateway served them as `application/octet-stream` and a browser downloaded them. Reads still fall back to `GET /bytes/<ref>` for those references, and the worker re-uploads them as `transcript.json` in its next pass.
 
 ## What is uploaded
 
@@ -45,7 +52,7 @@ We hold no postage batch. Uploads go through Swarm's public gateway, `https://ap
 
 - batch id used: `0000…0000` (the null stamp), swapped by the gateway
 - wallet that bought the batch: the gateway's node, not us; we could not confirm which Gnosis address from the outside (the batch list at `/batches` on the gateway shows one owner buying depth-17 batches every ~40 minutes that last ~25 hours, which matches the gateway's defaults)
-- Bee node or service: the public gateway above, through its Bee API (`POST /bytes`, `GET /bytes/{ref}`)
+- Bee node or service: the public gateway above, through its Bee API (`POST /bzz?name=transcript.json`, `GET /bzz/{ref}/`)
 
 `SWARM_GATEWAY_URL` and `SWARM_POSTAGE_BATCH_ID` switch this to our own node and batch without a code change.
 

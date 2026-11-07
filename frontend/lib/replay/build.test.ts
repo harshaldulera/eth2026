@@ -279,7 +279,7 @@ describe("tampering and odd shapes", () => {
     const ref = "2b527e58fbaaab506f66bfcb558c5b39264a9fce549c720ec6e3c1e63ab7d65d";
     recordSwarmRef(id, ref);
     const r = await buildReplay(id);
-    expect(r!.transcript).toMatchObject({ source: "database", ref, url: `https://api.gateway.ethswarm.org/bytes/${ref}` });
+    expect(r!.transcript).toMatchObject({ source: "database", ref, url: `https://api.gateway.ethswarm.org/bzz/${ref}/` });
     // The test runner is a stub server: no secret, no gateway read. Not a tamper verdict.
     expect(check(r, "transcript")).toMatchObject({ state: "na", detail: `reference ${ref.slice(0, 10)}…${ref.slice(-6)}, not read: this server is not in SWARM_MODE=live, so it cannot open the sealed bytes` });
     expect(check(r, "transcript")?.href).toBeUndefined();
@@ -336,10 +336,10 @@ describe("tampering and odd shapes", () => {
       expect(gw.posts()).toHaveLength(1);
       expect(Buffer.from(gw.posts()[0].body!).toString("utf8")).not.toContain(WOODEN_BREAK[0]);
       const r = await replay(id);
-      expect(r.transcript).toMatchObject({ source: "swarm", ref, url: `https://api.gateway.ethswarm.org/bytes/${ref}`, matches: true });
-      expect(check(r, "transcript")).toMatchObject({ state: "pass", label: "Transcript read from Swarm", href: `https://api.gateway.ethswarm.org/bytes/${ref}` });
+      expect(r.transcript).toMatchObject({ source: "swarm", ref, url: `https://api.gateway.ethswarm.org/bzz/${ref}/`, matches: true });
+      expect(check(r, "transcript")).toMatchObject({ state: "pass", label: "Transcript read from Swarm", href: `https://api.gateway.ethswarm.org/bzz/${ref}/` });
       expect(check(r, "hash")?.state).toBe("pass");
-      expect(gw.gets().map((c) => c.url)).toEqual([`https://gw.test/bytes/${ref}`]);
+      expect(gw.gets().map((c) => c.url)).toEqual([`https://gw.test/bzz/${ref}/`]);
     });
 
     it("an edited database message is caught: Swarm keeps what was said", async () => {

@@ -8,22 +8,29 @@
  *                     the public gateway's stamps last about a day (see arkiv/swarm.md). The same
  *                     bytes give the same reference, so the entity's swarmRef never changes.
  *   tried_at/attempts backoff for both retries and keep-alive re-uploads (1, 2, 4 … min, up to 1 h)
+ *   format            how `ref` was uploaded: "file" (transcript.json via /bzz, opens in a browser)
+ *                     or "bytes" (raw, from before transcripts were named; downloads as a file).
+ *                     A "bytes" row is due for re-upload right away: the worker moves it to "file".
  */
 import { rawSqlite } from "@/lib/db/raw";
+
+export type UploadFormat = "file" | "bytes";
 
 const DDL = `
   CREATE TABLE IF NOT EXISTS swarm_uploads (
     siege_id TEXT PRIMARY KEY, body BLOB NOT NULL, transcript_hash TEXT NOT NULL, ref TEXT,
     created_at INTEGER NOT NULL, uploaded_at INTEGER, tried_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
-    needs_reupload INTEGER NOT NULL DEFAULT 0);
+    needs_reupload INTEGER NOT NULL DEFAULT 0, format TEXT NOT NULL DEFAULT 'bytes');
   CREATE TABLE IF NOT EXISTS swarm_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`;
 const checked = new WeakSet<object>();
 function sql() {
   const s = rawSqlite(DDL);
   if (!checked.has(s)) {
-    // A dev database from before needs_reupload existed (this branch only): add the column.
+    // A dev database from before these columns existed (this branch only): add them. Rows that
+    // already have a reference were uploaded as raw bytes, which is what format's default says.
     const cols = s.prepare("PRAGMA table_info(swarm_uploads)").all() as { name: string }[];
     if (!cols.some((c) => c.name === "needs_reupload")) s.exec("ALTER TABLE swarm_uploads ADD COLUMN needs_reupload INTEGER NOT NULL DEFAULT 0");
+    if (!cols.some((c) => c.name === "format")) s.exec("ALTER TABLE swarm_uploads ADD COLUMN format TEXT NOT NULL DEFAULT 'bytes'");
     checked.add(s);
   }
   return s;
@@ -41,6 +48,7 @@ export type UploadRow = {
   lastError: string | null;
   /** A replay found Swarm not answering for the reference: re-upload in the next pass, whatever the schedule. */
   needsReupload: boolean;
+  format: UploadFormat;
 };
 
 type Raw = {
@@ -54,8 +62,11 @@ type Raw = {
   attempts: number;
   last_error: string | null;
   needs_reupload: number;
+  format: string;
 };
+const asFormat = (f: string): UploadFormat => (f === "file" ? "file" : "bytes");
 const fromRaw = (r: Raw): UploadRow => ({
+  format: asFormat(r.format),
   siegeId: r.siege_id,
   body: new Uint8Array(r.body),
   transcriptHash: r.transcript_hash,
@@ -81,8 +92,11 @@ export function rememberUpload(siegeId: string, body: Uint8Array, transcriptHash
     .run(siegeId, Buffer.from(body), transcriptHash.toLowerCase(), now);
 }
 
+/** Every upload from now on is a named file (lib/swarm/gateway.ts); `format` exists for the rows from before. */
 export function markUploaded(siegeId: string, ref: string, now = Date.now()): void {
-  sql().prepare("UPDATE swarm_uploads SET ref = ?, uploaded_at = ?, tried_at = ?, attempts = 0, last_error = NULL, needs_reupload = 0 WHERE siege_id = ?").run(ref, now, now, siegeId);
+  sql()
+    .prepare("UPDATE swarm_uploads SET ref = ?, uploaded_at = ?, tried_at = ?, attempts = 0, last_error = NULL, needs_reupload = 0, format = 'file' WHERE siege_id = ?")
+    .run(ref, now, now, siegeId);
 }
 
 export function markFailed(siegeId: string, error: string, now = Date.now()): void {
@@ -105,10 +119,12 @@ export function uploadRow(siegeId: string): UploadRow | null {
   return r ? fromRaw(r) : null;
 }
 
-/** Just the reference column: `{ ref: null }` for a sealed transcript that has not landed, null for no row. */
-export function uploadRef(siegeId: string): { ref: string | null; transcriptHash: string } | null {
-  const r = sql().prepare("SELECT ref, transcript_hash FROM swarm_uploads WHERE siege_id = ?").get(siegeId) as { ref: string | null; transcript_hash: string } | undefined;
-  return r ? { ref: r.ref, transcriptHash: r.transcript_hash } : null;
+/** Just the reference columns: `{ ref: null }` for a sealed transcript that has not landed, null for no row. */
+export function uploadRef(siegeId: string): { ref: string | null; transcriptHash: string; format: UploadFormat } | null {
+  const r = sql().prepare("SELECT ref, transcript_hash, format FROM swarm_uploads WHERE siege_id = ?").get(siegeId) as
+    | { ref: string | null; transcript_hash: string; format: string }
+    | undefined;
+  return r ? { ref: r.ref, transcriptHash: r.transcript_hash, format: asFormat(r.format) } : null;
 }
 
 /** Retry gaps after the 1st, 2nd, 3rd … failure: 1, 2, 4 … minutes, at most an hour. */
@@ -120,15 +136,16 @@ export function pendingUploads(now: number, limit = 20): UploadRow[] {
 }
 
 /**
- * Rows due for a keep-alive re-upload: last uploaded before `before` and created after `since`,
- * or flagged by a replay (then the horizon does not apply); in both cases once the backoff has passed.
+ * Rows due for a re-upload, once the backoff has passed: last uploaded before `before` and created
+ * after `since` (the keep-alive), flagged by a replay, or still raw bytes (moved to a named file
+ * right away). The last two ignore the horizon.
  */
 export function staleUploads(before: number, since: number, now: number, limit = 20): UploadRow[] {
   return (
     sql()
       .prepare(
-        `SELECT * FROM swarm_uploads WHERE ref IS NOT NULL AND ((uploaded_at < ? AND created_at >= ?) OR needs_reupload = 1) AND ${BACKOFF_SQL}
-         ORDER BY needs_reupload DESC, uploaded_at ASC LIMIT ?`,
+        `SELECT * FROM swarm_uploads WHERE ref IS NOT NULL AND ((uploaded_at < ? AND created_at >= ?) OR needs_reupload = 1 OR format != 'file') AND ${BACKOFF_SQL}
+         ORDER BY needs_reupload DESC, format = 'file' ASC, uploaded_at ASC LIMIT ?`,
       )
       .all(before, since, now, limit) as Raw[]
   ).map(fromRaw);

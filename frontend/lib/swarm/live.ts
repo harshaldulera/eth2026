@@ -3,7 +3,8 @@
  * API (./gateway.ts), remember the bytes (./store.ts) and the reference (./refs.ts, which the
  * Arkiv siege entity carries as `swarmRef`).
  *
- * References: a live one is the bare 64-hex Swarm reference (openable at <gateway>/bytes/<ref>).
+ * References: a live one is the bare 64-hex Swarm reference of transcript.json (opens in a browser
+ * at <gateway>/bzz/<ref>/; see ./gateway.ts).
  * "swarm-pending:<siegeId>" means the upload has not landed yet; the worker retries it and the
  * transcript is opened from the sealed bytes in swarm_uploads meanwhile. "swarm-stub:…" is the
  * stand-in store (read here too, for sieges that ended before the mode went live).

@@ -36,7 +36,7 @@ function fixture(siegeId: string): Transcript {
 
 async function read(ref: string, secret: string, gatewayUrl: string, label: string): Promise<Transcript> {
   const bytes = await downloadBytes(ref, { gatewayUrl });
-  if (!bytes) throw new Error(`${label}: nothing at ${gatewayUrl}/bytes/${ref}`);
+  if (!bytes) throw new Error(`${label}: nothing at ${gatewayUrl}/bzz/${ref}/ or ${gatewayUrl}/bytes/${ref}`);
   const env = parseEnvelope(bytes);
   if (!env) throw new Error(`${label}: the bytes are not a sealed transcript`);
   const t = openTranscript(env, secret);
@@ -61,11 +61,11 @@ async function main() {
     const body = envelopeBytes(sealTranscript(t, secret));
     const head = Buffer.from(body).toString("utf8").slice(0, 96);
     log(`sealed ${siegeId}: ${body.length} bytes, starts ${JSON.stringify(head)}…`);
-    log(`uploading to ${c.gatewayUrl}/bytes with batch ${c.batchId === "0".repeat(64) ? "null (the gateway stamps it)" : c.batchId.slice(0, 12) + "…"}`);
+    log(`uploading to ${c.gatewayUrl}/bzz as transcript.json with batch ${c.batchId === "0".repeat(64) ? "null (the gateway stamps it)" : c.batchId.slice(0, 12) + "…"}`);
     const t0 = Date.now();
     ref = await uploadBytes(body, { gatewayUrl: c.gatewayUrl, batchId: c.batchId });
     log(`reference ${ref} (${Date.now() - t0} ms)`);
-    log(`open     ${swarmLinks.bytes(ref)}`);
+    log(`open     ${swarmLinks.open(ref)}`);
     log(`also     ${swarmLinks.limo(ref)}`);
     const again = await uploadBytes(body, { gatewayUrl: c.gatewayUrl, batchId: c.batchId });
     log(`re-upload of the same bytes: ${again === ref ? "same reference (keep-alive works)" : `DIFFERENT reference ${again}`}`);
