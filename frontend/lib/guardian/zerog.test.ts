@@ -70,3 +70,14 @@ describe("0G guardian (mock upstream via the proxy)", () => {
     }
   });
 });
+
+describe("stripToolMarkup (tool calls written as text never reach the screen)", () => {
+  it("removes the markup 0gm-1.0 produced and keeps the prose", async () => {
+    const { stripToolMarkup } = await import("./zerog");
+    const seen = "I will now review project P-117. <tool_call> <function=check_repo_activity> <parameter=repo> mempool-lens/lens </parameter> </function> </tool_call>";
+    expect(stripToolMarkup(seen)).toBe("I will now review project P-117.");
+    expect(stripToolMarkup("<tool_call> <function=disburse_grant> <parameter=project_id> P-117 </parameter> </function> </tool_call>")).toBe("");
+    expect(stripToolMarkup("<tool_call><function=x>unterminated")).toBe("");
+    expect(stripToolMarkup("A normal reply with a < sign.")).toBe("A normal reply with a < sign.");
+  });
+});

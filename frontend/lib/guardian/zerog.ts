@@ -14,8 +14,28 @@ import { chatMessages, systemPrompt, type GuardianProfile } from "./prompt";
 import { businessAgent } from "./agents";
 import { DECOYS, PROTECTED_TOOL, tierPreset } from "./tiers";
 
-const MAX_ROUNDS = 3; // decoy round-trips per raider message before forcing a text reply
+/**
+ * Tool round-trips per raider message before forcing a text reply. Business agents look things up
+ * like production agents do (several lookups, re-checked each turn), so they get more room; with 3,
+ * 0gm-1.0 often ran out of rounds and answered with nothing or with tool-call markup as text.
+ */
+const MAX_ROUNDS_GAME = 3;
+const MAX_ROUNDS_BUSINESS = 6;
 const REFUSAL = "The gate stays shut. Try something else.";
+const NO_REPLY = "I couldn't finish checking that. Could you ask again?";
+/** Inference-only note (never stored or shown): asks a business agent for its answer in words. */
+const NUDGE = "(Reply to me now in plain text with what you found. No more tool calls.)";
+
+/**
+ * Some models write a tool call into the text instead of making it (e.g. `<tool_call><function=x>…`).
+ * That is not a call (it never counts as a breach) and must not reach the screen: strip it.
+ */
+export function stripToolMarkup(text: string): string {
+  return text
+    .replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, "")
+    .replace(/<\/?(function|parameter)(=[^>]*)?>/g, "")
+    .trim();
+}
 
 function parseArgs(s: string): Record<string, unknown> {
   try {
@@ -44,15 +64,20 @@ export async function respondAs(
   const toolResult = (name: string, args: Record<string, unknown>) =>
     (agent ? agent.tools.find((t) => t.def.function.name === name)?.result?.(args) : DECOYS[name]?.result(args)) ?? JSON.stringify({ ok: true });
   const messages: ChatMessage[] = chatMessages(systemPrompt({ ...g, castleId }), history);
+  const maxRounds = agent ? MAX_ROUNDS_BUSINESS : MAX_ROUNDS_GAME;
 
   const toolCalls: ToolCall[] = [];
   const requestIds: string[] = [];
   let costUsdMicro = 0;
   let reply = "";
   let move: GuardianMove = "hold";
+  let retried = false;
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const req: ChatRequest = { model, messages, tools, tool_choice: round === MAX_ROUNDS - 1 ? "none" : "auto", temperature: 0.2, max_tokens: proxy.zgConfig.maxTokens };
+  for (let round = 0; round < maxRounds; round++) {
+    // Last round for a business agent: no tools are offered, so ask for the answer in words. A user-role
+    // note, not a system one: the proxy hashes system messages to prove which prompt ran.
+    if (agent && round === maxRounds - 1 && round > 0 && !retried) messages.push({ role: "user", content: NUDGE });
+    const req: ChatRequest = { model, messages, tools, tool_choice: round === maxRounds - 1 ? "none" : "auto", temperature: 0.2, max_tokens: proxy.zgConfig.maxTokens };
     const r = await proxy.chat(key, req, ctx);
     if (!r.ok && r.error === "upstream_rejected" && "record" in r) {
       // The model's provider refused the prompt outright: the attack didn't land, so the gate holds.
@@ -63,10 +88,20 @@ export async function respondAs(
     if (!r.ok) throw new Error(`proxy ${r.status}: ${r.error}`);
     requestIds.push(r.record.requestId);
     costUsdMicro += Number(r.record.costUsdMicro ?? 0) || 0;
-    if (r.result.message.content) reply = r.result.message.content.trim();
+    const text = r.result.message.content ? stripToolMarkup(r.result.message.content) : "";
+    if (text) reply = text;
 
     const calls = r.result.message.tool_calls ?? [];
-    if (calls.length === 0) break;
+    if (calls.length === 0) {
+      // A business agent that answers with nothing at all (0gm-1.0 does this now and then): ask once
+      // more for the answer in words, rather than show an empty reply.
+      if (agent && !reply && !retried && round < maxRounds - 1) {
+        retried = true;
+        messages.push({ role: "user", content: NUDGE });
+        continue;
+      }
+      break;
+    }
     const parsed = calls.map((c) => ({ id: c.id, name: c.function.name, args: parseArgs(c.function.arguments) }));
     toolCalls.push(...parsed.map(({ name, args }) => ({ name, args })));
 
@@ -84,7 +119,7 @@ export async function respondAs(
   }
 
   return {
-    reply: reply || "…",
+    reply: reply || (agent ? NO_REPLY : "…"),
     move,
     toolCalls,
     requestId: requestIds[requestIds.length - 1] ?? "",
