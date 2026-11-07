@@ -12,7 +12,7 @@ import { enqueue, entityRecord, OP_TTL_MIN } from "./outbox";
 import { guardianProfile, raiderProfile } from "./profiles";
 
 const MIN = 60_000;
-/** Ended ops stay on Arkiv this long, so the "just ended" row shows before it expires. */
+/** Ended ops are re-sent for this long after they end, so the final status and the Swarm reference land. */
 const RECENT_MS = OP_TTL_MIN * MIN;
 
 export type ReconcileResult = { vaults: number; ops: number; profiles: number };

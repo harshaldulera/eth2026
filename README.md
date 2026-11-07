@@ -133,7 +133,7 @@ curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: appli
 
 If the keyless endpoint answers `ANON_COST_LIMITED`, get a free key at [hub.arkiv.network](https://hub.arkiv.network) and append it to the URL.
 
-Why the arena cannot run on a private database instead: an owner's listing is **theirs** (readonly, owned by their wallet; only they can delist it, and we cannot edit it), operators and third-party attack agents **discover vaults and live ops from the chain** without trusting our API, and claims **expire on their own** (an op entity leaves ten minutes after the op ends, a vault at its deadline) with no janitor to trust. Each of these is on screen: owner and expiry on every vault card, the live-op light, and the query and block number printed under the Grid.
+Why the arena cannot run on a private database instead: an owner's listing is **theirs** (readonly, owned by their wallet; only they can delist it, and we cannot edit it), operators and third-party attack agents **discover vaults and live ops from the chain** without trusting our API, and claims **expire on their own** (an ended op's entity stays a week as the pointer to its transcript on Swarm and then leaves, one without a transcript ten minutes after it ends, a vault at its deadline) with no janitor to trust. Each of these is on screen: owner and expiry on every vault card, the live-op light, and the query and block number printed under the Grid.
 
 | | Where |
 |---|---|

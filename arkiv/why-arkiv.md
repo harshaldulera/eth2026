@@ -6,7 +6,7 @@
 
 **Operators could only find vaults through our API.** Today The Grid, the operator's target picker and anyone's script read the same query from the chain (see [how-you-use-arkiv.md](how-you-use-arkiv.md)). Someone building their own operator agent can discover vaults, pots and live ops without our server and without trusting our numbers to match what we show. With Postgres, discovery dies with our API, and the "open arena" is just our website.
 
-**Claims would need a janitor.** An op is an operator's claim on a vault. On Arkiv it disappears ten minutes after it ends, and a vault disappears at its deadline. In Postgres we would need a cleanup job, and anyone reading our API would have to trust that it ran.
+**Claims and archives would need a janitor.** An op is an operator's claim on a vault while it runs; once it ends, it is the public pointer to its transcript on Swarm. On Arkiv the pointer expires a week after the op, when the Swarm worker stops keeping the transcript alive (an op with no transcript on Swarm goes ten minutes after it ends), and a vault disappears at its deadline. In Postgres we would need a cleanup job, and anyone reading our API would have to trust that it ran.
 
 **Our history would be ours to edit.** The arena's own records (pots, streaks, op outcomes, every guard's and operator's record) are signed writes from one public wallet, readable by anyone at any block. In Postgres we could quietly change a streak.
 
