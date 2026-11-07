@@ -39,7 +39,7 @@ export function TopBar() {
 
 function RoutedHud() {
   const pathname = usePathname();
-  if (pathname?.startsWith("/wall")) return null;
+  if (pathname?.startsWith("/wall") || pathname?.startsWith("/welcome")) return null;
   return <Hud pathname={pathname} />;
 }
 
