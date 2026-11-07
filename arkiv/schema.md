@@ -56,7 +56,7 @@ All `vault` columns, plus:
 
 ## `op`: an operator's claim on a vault
 
-One op, live while it runs. Written at start, on every turn and at the end. While it runs it lives 10 minutes past its last write and is extended before it runs out. Once it ends, it depends on the transcript: with the transcript on Swarm (a real 64-hex `swarmRef`), the entity stays 7 days past the op's end as the public pointer to that transcript, the same week the Swarm worker keeps the transcript alive, so pointer and transcript leave together. Without one, it is gone 10 minutes after its last write. Either way no cleanup job runs. The LIVE light reads `status = live`, so it goes dark the moment an op ends.
+One op, live while it runs. Written at start, on every turn and at the end. While it runs it lives 10 minutes past its last write and is extended before it runs out. Once it ends, it depends on the transcript: with the transcript on Swarm (a real 64-hex `swarmRef`), the entity stays 7 days past the op's end as the public pointer to that transcript, the same week the Swarm worker keeps the transcript alive, so pointer and transcript leave together. Without one, it is gone 10 minutes after its last write. An entity that already got its week keeps it, even if a later write drops the reference (a re-upload that has not landed yet), because the chain never shortens an expiry. Either way no cleanup job runs. The LIVE light reads `status = live`, so it goes dark the moment an op ends.
 
 | Column | Type | Indexed | Notes |
 |---|---|---|---|

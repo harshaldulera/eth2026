@@ -7,10 +7,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 process.env.SIEGE_FAST = "1";
 
 const batches: Record<string, unknown[]>[] = [];
+/** A key the fake chain no longer has (the entity expired): a patch naming it reverts. */
+let goneKey: string | null = null;
 vi.mock("./client", () => ({
   arenaAddress: () => "0xA69d59B6d6e55Aa6da960405D4150ea59460bb18",
   arkivWriter: () => ({
     executeBatch: vi.fn(async (b: Record<string, unknown[]>) => {
+      if (goneKey && (b.patches as { entityKey: string }[] | undefined)?.some((p) => p.entityKey === goneKey)) throw new Error("entity not found");
       batches.push(b);
       return { txHash: `0xtx${batches.length}`, createdEntities: (b.creates ?? []).map((_, i) => `0xkey${batches.length}_${i}`) };
     }),
@@ -47,6 +50,7 @@ const live = (): Siege => ({ ...base, status: "in_progress", endedAt: undefined 
 beforeEach(async () => {
   freshFixtureDb();
   batches.length = 0;
+  goneKey = null;
   base = await siege.start({ castleId: "castle_splinter_gate", raider: "0.0.r", receipt: { free: true, payer: "0.0.r" } });
 });
 
@@ -154,6 +158,26 @@ describe("the drainer keeps archived ops a week (fake Arkiv client)", () => {
     expect(b.patches[0].set.swarmRef.value).toBe(REF);
     expect(b.extensions).toEqual([{ entityKey: "0xop", expiration: ExpirationTime.atDate(new Date(end + 7 * DAY)) }]);
     expect(entityRecord("op", base.id)?.expiresAtMs).toBe(end + 7 * DAY);
+  });
+
+  it("a reference that lands after the 10-minute entity expired: the patch fails, the next pass creates a week-long entity", async () => {
+    const end = Date.now() - 20 * MIN;
+    const data = ended(end);
+    record(base.id, payloadFingerprint({ kind: "op", data }), Date.now() - 10 * MIN); // expired on chain
+    goneKey = "0xop";
+    enqueue({ kind: "op", data, swarmRef: REF });
+    const first = await drain({ holder: "t" });
+    expect(first.failed).toBe(1);
+    expect(batches).toEqual([]);
+    expect(entityRecord("op", base.id)).toBeNull(); // the dead key is forgotten
+    const second = await drain({ holder: "t" });
+    expect(second.errors).toEqual([]);
+    const [create] = batches[0].creates as { values: Record<string, { value: unknown }>; expiration: unknown }[];
+    expect(create.values.swarmRef.value).toBe(REF);
+    expect(create.expiration).toEqual(ExpirationTime.atDate(new Date(end + 7 * DAY)));
+    const rec = entityRecord("op", base.id)!;
+    expect(rec.key).not.toBe("0xop");
+    expect(rec.expiresAtMs).toBe(end + 7 * DAY);
   });
 
   it("an archived op already holding these values sends nothing, even when forced", async () => {
