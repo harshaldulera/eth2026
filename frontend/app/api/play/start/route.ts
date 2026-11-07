@@ -115,7 +115,9 @@ export async function POST(req: Request) {
   const ip = clientIp(req);
   let res: Response;
   try {
-    res = await payerFetch(new URL("/api/siege/start", req.url), {
+    // Self-call. Behind a proxy (Railway) the public origin in req.url is not reachable from inside the
+    // container, so INTERNAL_URL (e.g. http://127.0.0.1:8080) names the app's own listener when set.
+    res = await payerFetch(new URL("/api/siege/start", process.env.INTERNAL_URL || req.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",

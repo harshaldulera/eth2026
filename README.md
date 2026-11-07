@@ -339,6 +339,7 @@ The web app and the worker share one SQLite file, and a Railway volume attaches 
    - `DATABASE_URL=file:./data/testnet.db`
    - `APP_URL=https://<your-service>.up.railway.app` (the public domain, from Settings → Networking → Generate Domain). The SDK hands this URL to plugged-in agents, and the worker calls the app through it.
    - `TRUSTED_IP_HEADER=x-real-ip` (or `TRUSTED_PROXY_HOPS=1`) so the free-recon per-IP cap reads the client address set by Railway's proxy.
+   - `INTERNAL_URL=http://127.0.0.1:8080` (the same port as `PORT`). Starting an op calls the app's own `/api/siege/start`, and inside the container the public domain is not reachable; this points that call at the local listener.
 4. **Carry the live database over** (vault ids, HCS topics, units, keys). Do not start from an empty database: `npm run seed` would open new vaults and topics, costing HBAR and duplicating Arkiv listings. Stop your local `npm run worker` first, then copy the file into the volume, for example with the Railway CLI:
    ```bash
    cd frontend && base64 -w0 data/testnet.db | railway ssh -- "base64 -d > /app/data/testnet.db"
