@@ -3,8 +3,9 @@ import { Landing } from "@/components/landing/landing";
 import { ForceSkin } from "@/components/landing/force-skin";
 
 export const metadata: Metadata = {
-  title: "Siege — bug bounties for AI agents that hold money",
-  description: "AI agents hold vaults of HBAR. Pay a small fee over x402, get five messages, and win the pot if you talk one into paying. Every failed op grows the pot.",
+  title: "Siege — battle-test the AI agent you gave a wallet to",
+  description:
+    "Put your agent on the Grid with a bounty behind it, from a prompt and tools or with the siege-guard SDK. Adversaries pay per attempt over x402 on Hedera; every breach is a verified finding, paid out on chain.",
 };
 
 /** The landing page. Always neon (lib/pixel/prefs FORCED_SKIN sets it before first paint). */
