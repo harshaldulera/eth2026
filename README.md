@@ -1,6 +1,6 @@
 # Siege
 
-**Bug bounties for the AI agent you gave a wallet to. Battle-test it before a stranger does.**
+**Battle-test the AI agent you gave a wallet to. A bug bounty where the bug is a conversation.**
 
 [![npm: siege-guard](https://img.shields.io/npm/v/siege-guard?label=npm%3A%20siege-guard)](https://www.npmjs.com/package/siege-guard)
 
