@@ -8,7 +8,7 @@ Bonus claimed: **yes**, with the public gateway's stamps (see "Postage" below).
 
 | | Where | Why |
 |---|---|---|
-| The op entity (`siege.op`): op id, vault, status, turns, operator, `transcriptHash`, `swarmRef` | Arkiv ([schema.md](schema.md)) | Small, queryable, expires 10 minutes after the op ends |
+| The op entity (`siege.op`): op id, vault, status, turns, operator, `transcriptHash`, `swarmRef` | Arkiv ([schema.md](schema.md)) | Small, queryable; once the op ends with its transcript on Swarm, it stays 7 days, the same week the worker keeps the transcript alive |
 | The transcript: every message, turn by turn, sealed | Swarm | Too big for an entity attribute; must outlive our server |
 | Guard orders, payments, approvals, keys | Neither | Secrets and money never go on a public store |
 
@@ -24,7 +24,7 @@ A live op, played on 7 Nov 2026 at 20:34 UTC through the running app (`npm run d
   (uploaded as raw bytes, before transcripts were named, so this link downloads a file; the worker re-uploads such references as `transcript.json`, and the op goes back to Arkiv with the new reference)
 - the app's replay of this op (`GET /api/replay/siege_d5c191e71ccb439e`): source **swarm**, "Transcript read from Swarm" **pass**, "Transcript hash recomputed here matches the op's" **pass**
 
-What you see at the Swarm links is the sealed envelope, not the text (the next section). Op entities are short-lived by design (10 minutes after the op ends), so the entity link above is a record of what was on chain, not something that stays openable. For judging, play an op and open its entity within those ten minutes. The transcript stays on Swarm as long as the worker keeps it alive (re-uploads twice a day for a week).
+What you see at the Swarm links is the sealed envelope, not the text (the next section). This op ran before ended ops were kept, so its entity expired 10 minutes after it ended and the link above is a record of what was on chain. An op that ends with its transcript on Swarm now stays on Arkiv for 7 days after its end (`opExpiry` in `frontend/lib/arkiv/outbox.ts`), so the entity link of any op played since stays openable for a week. The transcript stays on Swarm as long as the worker keeps it alive (re-uploads twice a day for a week).
 
 ### Opening a transcript in a browser
 
@@ -50,9 +50,10 @@ The secret lives only in `frontend/.env` on the server. Lose it and every archiv
 
 We hold no postage batch. Uploads go through Swarm's public gateway, `https://api.gateway.ethswarm.org` (a Bee node behind [ethersphere/swarm-gateway](https://github.com/ethersphere/swarm-gateway)). We send the null batch id (64 zeros) in `Swarm-Postage-Batch-Id`; the gateway replaces it with a batch its own node buys (its stamp manager, `src/stamp.ts`, buys a new depth-17 batch whenever the current one is 85% full or has under an hour left). So:
 
-- batch id used: `0000…0000` (the null stamp), swapped by the gateway
-- wallet that bought the batch: the gateway's node, not us; we could not confirm which Gnosis address from the outside (the batch list at `/batches` on the gateway shows one owner buying depth-17 batches every ~40 minutes that last ~25 hours, which matches the gateway's defaults)
-- Bee node or service: the public gateway above, through its Bee API (`POST /bzz?name=transcript.json`, `GET /bzz/{ref}/`)
+- **Who gave us the batch:** the Swarm Foundation's public gateway, `api.gateway.ethswarm.org`. It runs [ethersphere/swarm-gateway](https://github.com/ethersphere/swarm-gateway) in auto-buy mode. Its own `/metrics` show this (read on 7 Nov 2026): `stamp_purchase_counter 5`, `stamp_purchase_failed_counter 0`, `stamp_topup_counter 0`, `stamp_usable_count_gauge 1`, `stamp_ttl_gauge 77822` (about 21.6 hours left on the batch in use).
+- **Batch id in our request:** `0000000000000000000000000000000000000000000000000000000000000000` (the null stamp), sent as `Swarm-Postage-Batch-Id`. The gateway swaps in its current batch (`getPostageStamp()` in `src/stamp.ts`).
+- **Wallet that bought the batches:** Gnosis address `0x93ed59de7d6778d18e2a9a10e446dfca892b8cbf`. We found it in the gateway's own list of every batch on the network (`GET https://api.gateway.ethswarm.org/batches`, 8,049 batches on 7 Nov 2026): it is the only owner that matches the gateway's auto-buy pattern, with 30 batches, all depth 17, all immutable, each about a day long, and a new one every few hundred blocks. List them with `GET https://api.gateway.ethswarm.org/batches/owner/93ed59de7d6778d18e2a9a10e446dfca892b8cbf`. Its newest batch then was `bffdda5eb9c3cddd8d06ce1922a09f6a51d76f069376149a8776325e574a3c6b` (about 20 hours to live). The gateway does not say which batch stamped a given upload (`/stamps` is not exposed), so this wallet is our reading of the public data, not a statement from the gateway's operator.
+- **Bee node or service:** the public gateway above, through its Bee API (`POST /bzz?name=transcript.json`, `GET /bzz/{ref}/`).
 
 `SWARM_GATEWAY_URL` and `SWARM_POSTAGE_BATCH_ID` switch this to our own node and batch without a code change.
 

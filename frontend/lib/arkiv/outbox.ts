@@ -165,30 +165,57 @@ const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 /** A siege lives this long past its last write; live sieges are refreshed before it runs out. */
 export const OP_TTL_MIN = 10;
+/**
+ * An ended op whose transcript is on Swarm stays this long past its end, as the public pointer to
+ * that transcript. Matches the Swarm worker's keep-alive horizon (`KEEP_ALIVE_HORIZON_MS`, a test
+ * holds them equal): the entity leaves Arkiv about when its transcript stops being kept alive.
+ */
+export const OP_ARCHIVE_DAYS = 7;
 const MAX_LIFE_MS = 180 * DAY; // chain max is ~182.5 days
+
+/** A reference to bytes really on Swarm (bare 64-hex), not the local stand-in's `swarm-stub:…`. */
+export const isSwarmRef = (ref: string | undefined): ref is string => !!ref && /^[0-9a-f]{64}$/i.test(ref);
+
+/**
+ * When an op entity should expire. A live op, or an ended one with no transcript on Swarm: 10 minutes
+ * past this write. An ended op whose transcript is on Swarm: a week past its end (never sooner than
+ * the 10 minutes, so a reference that lands late still gets a short life rather than none).
+ */
+export function opExpiry(siege: Siege, swarmRef: string | undefined, now: number): { expiresAtMs: number; archived: boolean } {
+  const short = now + OP_TTL_MIN * MIN;
+  const endMs = siege.endedAt ? Date.parse(siege.endedAt) : NaN;
+  if (!Number.isFinite(endMs) || !isSwarmRef(swarmRef)) return { expiresAtMs: short, archived: false };
+  const archiveEnd = endMs + OP_ARCHIVE_DAYS * DAY;
+  return archiveEnd > short ? { expiresAtMs: archiveEnd, archived: true } : { expiresAtMs: short, archived: false };
+}
 
 type Plan = { expiration: Expiry; expiresAtMs: number } | null;
 
+function opPlan(p: Extract<Payload, { kind: "op" }>, now: number): { expiration: Expiry; expiresAtMs: number } {
+  const { expiresAtMs, archived } = opExpiry(p.data, p.swarmRef, now);
+  return { expiration: archived ? ExpirationTime.atDate(new Date(expiresAtMs)) : ExpirationTime.fromMinutes(OP_TTL_MIN), expiresAtMs };
+}
+
 /** Expiry for a create (null = do not create: the castle's deadline has passed). */
-function createLife(p: Payload, now: number): Plan {
+export function createLife(p: Payload, now: number): Plan {
   if (p.kind === "vault") {
     const target = Math.min(p.data.deadline, now + MAX_LIFE_MS);
     if (target <= now + MIN) return null;
     return { expiration: ExpirationTime.atDate(new Date(target)), expiresAtMs: target };
   }
-  if (p.kind === "op") return { expiration: ExpirationTime.fromMinutes(OP_TTL_MIN), expiresAtMs: now + OP_TTL_MIN * MIN };
+  if (p.kind === "op") return opPlan(p, now);
   return { expiration: ExpirationTime.max(), expiresAtMs: now + MAX_LIFE_MS };
 }
 
 /** Extension for an update, only when it moves the expiry later (the chain refuses shortening). */
-function extendLife(p: Payload, current: number, now: number): Plan {
+export function extendLife(p: Payload, current: number, now: number): Plan {
   if (p.kind === "vault") {
     const target = Math.min(p.data.deadline, now + MAX_LIFE_MS);
     return target > current + MIN ? { expiration: ExpirationTime.atDate(new Date(target)), expiresAtMs: target } : null;
   }
   if (p.kind === "op") {
-    const target = now + OP_TTL_MIN * MIN;
-    return target > current + 30_000 ? { expiration: ExpirationTime.fromMinutes(OP_TTL_MIN), expiresAtMs: target } : null;
+    const plan = opPlan(p, now);
+    return plan.expiresAtMs > current + 30_000 ? plan : null;
   }
   return current < now + 30 * DAY ? { expiration: ExpirationTime.max(), expiresAtMs: now + MAX_LIFE_MS } : null;
 }

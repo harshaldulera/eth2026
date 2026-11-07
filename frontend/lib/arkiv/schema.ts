@@ -21,7 +21,8 @@
  * Other rules: only `.indexed()` columns can be filtered on; any column but bytes can be sorted on;
  * every query filters `.ownedBy(...)` so strangers writing under our schema names never reach the
  * board. Money is u64 in the asset's smallest unit (tinybars). Times are u64 unix milliseconds.
- * Tiers are 1 / 2 / 3. Ops live 10 minutes past their last write; profiles the chain maximum (~182 days).
+ * Tiers are 1 / 2 / 3. Ops live 10 minutes past their last write, or a week past their end once their
+ * transcript is on Swarm (outbox.ts `opExpiry`); profiles the chain maximum (~182 days).
  */
 import { bool, defineSchema, str, u64 } from "@arkiv-network/sdk/schema";
 import { arkivConfig } from "./config";
