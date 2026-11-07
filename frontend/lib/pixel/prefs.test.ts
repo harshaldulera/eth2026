@@ -98,7 +98,7 @@ describe("store", () => {
     __resetPrefsForTest(() => ({ storage, root }));
     setPref("skin", "crt");
     expect(getPrefs().skin).toBe("crt");
-    expect(root.a.get("data-skin")).toBe("neon");
+    expect(root.a.get("data-skin")).toBe("crt");
   });
 });
 
