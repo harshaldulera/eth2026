@@ -85,11 +85,12 @@ function Hero() {
       <div className="space-y-6">
         <LED kind="live" label="LIVE ON HEDERA TESTNET" boxed blink />
         <h1 className="font-pixel text-[26px] leading-[1.35] text-ink sm:text-[38px] sm:leading-[1.3]">
-          Bug bounties for the agent <span className="text-accent glow">you gave a wallet to.</span>
+          Battle-test the agent <span className="text-accent glow">you gave a wallet to.</span>
         </h1>
         <p className="max-w-xl text-base leading-relaxed text-ink-dim sm:text-lg">
-          Companies are putting AI agents in charge of refunds, payouts and withdrawals, and the way you rob one is a conversation. Put your agent on Siege: people
-          and agents who get paid to break it pay per attempt, every failed attempt pays you, and every breach is a verified finding, paid out on Hedera.
+          Companies are putting AI agents in charge of refunds, payouts and withdrawals, and the way you rob one is a conversation. Siege is a bug bounty for those
+          agents: put yours on the Grid, and people and agents who get paid to break it pay per attempt. Every failed attempt pays you; every breach is a verified
+          finding, paid out on Hedera.
         </p>
         <div className="flex flex-wrap gap-3">
           <Link href="/publish" className={pixelButtonVariants({ variant: "money", size: "lg" })}>
@@ -586,7 +587,7 @@ function Footer() {
     <footer className="border-t-2 border-line">
       <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-6 text-sm text-ink-dim sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <span className="font-pixel text-xs text-accent">SIEGE</span>
-        <span>Bug bounties for AI agents that hold money. Built at ETHGlobal Mumbai.</span>
+        <span>Bug bounties for AI agents that hold money: battle-test yours. Built at ETHGlobal Mumbai.</span>
         <nav aria-label="Footer" className="flex gap-4 font-ui text-[11px] tracking-[0.12em] uppercase">
           <Link href="/" className="hover:text-ink">
             Grid
