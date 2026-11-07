@@ -33,7 +33,7 @@ describe("parsePref / readPrefs", () => {
 
   it("defaults with nothing stored", () => {
     expect(readPrefs(null)).toEqual(DEFAULT_PREFS);
-    expect(getServerPrefs()).toEqual({ skin: "crt", crt: true, muted: false, calm: false });
+    expect(getServerPrefs()).toEqual({ skin: "neon", crt: true, muted: false, calm: false });
   });
 
   it("query beats storage, storage beats defaults", () => {
@@ -68,14 +68,14 @@ describe("store", () => {
     subscribePrefs(l);
     onPrefChange(side);
 
-    setPref("skin", "neon");
-    expect(storage.m.get("siege.skin")).toBe("neon");
-    expect(root.a.get("data-skin")).toBe("neon");
+    setPref("skin", "crt");
+    expect(storage.m.get("siege.skin")).toBe("crt");
+    expect(root.a.get("data-skin")).toBe("crt");
     expect(root.a.get("data-crt")).toBe("on");
     expect(l).toHaveBeenCalledTimes(1);
-    expect(side).toHaveBeenCalledWith("skin", expect.objectContaining({ skin: "neon" }));
+    expect(side).toHaveBeenCalledWith("skin", expect.objectContaining({ skin: "crt" }));
 
-    setPref("skin", "neon");
+    setPref("skin", "crt");
     expect(l).toHaveBeenCalledTimes(1);
 
     setPref("crt", false);
@@ -89,22 +89,22 @@ describe("store", () => {
 
     setPref("muted", true);
     expect(storage.m.get("siege.sfx.muted")).toBe("1");
-    expect(getPrefs()).toEqual({ skin: "neon", crt: false, muted: true, calm: false });
+    expect(getPrefs()).toEqual({ skin: "crt", crt: false, muted: true, calm: false });
   });
 
   it("still applies when storage throws", () => {
     const storage = { getItem: () => null, setItem: () => { throw new Error("quota"); } };
     const root = fakeRoot();
     __resetPrefsForTest(() => ({ storage, root }));
-    setPref("skin", "neon");
-    expect(getPrefs().skin).toBe("neon");
+    setPref("skin", "crt");
+    expect(getPrefs().skin).toBe("crt");
     expect(root.a.get("data-skin")).toBe("neon");
   });
 });
 
 describe("bootstrapScript", () => {
   function run(search: string, stored: Record<string, string>, pathname = "/") {
-    const root = fakeRoot({ "data-skin": "crt", "data-crt": "on" });
+    const root = fakeRoot({ "data-skin": "neon", "data-crt": "on" });
     const storage = fakeStorage(stored);
     const fn = new Function("document", "location", "localStorage", "URLSearchParams", bootstrapScript());
     fn({ documentElement: root }, { search, pathname }, storage, URLSearchParams);
@@ -123,7 +123,7 @@ describe("bootstrapScript", () => {
     expect(run("", { "siege.skin": "crt" }, "/hall")["data-skin"]).toBe("crt");
   });
   it("ignores junk", () => {
-    expect(run("?skin=<script>", { "siege.crt": "sideways" })).toEqual({ "data-skin": "crt", "data-crt": "on" });
+    expect(run("?skin=<script>", { "siege.crt": "sideways" })).toEqual({ "data-skin": "neon", "data-crt": "on" });
   });
   it("agrees with readPrefs", () => {
     const stored = { "siege.skin": "neon", "siege.calm": "1" };

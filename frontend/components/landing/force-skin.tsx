@@ -14,14 +14,14 @@ export function ForceSkin({ skin }: { skin: "crt" | "neon" }) {
     const before = root.getAttribute("data-skin");
     root.setAttribute("data-skin", skin);
     return () => {
-      // A hard load of this page started in the forced skin: fall back to the saved one, else crt.
+      // A hard load of this page started in the forced skin: fall back to the saved one, else neon.
       let saved: string | null = null;
       try {
         saved = localStorage.getItem(PREF_STORAGE_KEYS.skin);
       } catch {
         saved = null;
       }
-      const back = before && before !== skin ? before : saved === "neon" || saved === "crt" ? saved : "crt";
+      const back = before && before !== skin ? before : saved === "neon" || saved === "crt" ? saved : "neon";
       root.setAttribute("data-skin", back);
     };
   }, [skin]);

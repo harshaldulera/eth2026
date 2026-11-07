@@ -24,7 +24,7 @@ export type Prefs = {
 export type PrefKey = keyof Prefs;
 
 /** What the server renders and what the first client render sees. */
-export const DEFAULT_PREFS: Readonly<Prefs> = Object.freeze({ skin: "crt", crt: true, muted: false, calm: false });
+export const DEFAULT_PREFS: Readonly<Prefs> = Object.freeze({ skin: "neon", crt: true, muted: false, calm: false });
 
 export const PREF_STORAGE_KEYS: Readonly<Record<PrefKey, string>> = Object.freeze({
   skin: "siege.skin",

@@ -41,7 +41,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      data-skin="crt"
+      data-skin="neon"
       data-crt="on"
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} ${pressStart.variable} ${vt323.variable} ${silkscreen.variable} dark h-full antialiased`}
