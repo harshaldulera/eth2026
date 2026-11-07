@@ -120,7 +120,7 @@ export function CreateAgentForm({ onCreated, taken, className }: { onCreated?: (
         perCastleCap: pc,
         dailyCap: d,
         stopAfterLosses: l,
-        ...(!ownerDevice && zg ? { zgKey: zg.key } : {}),
+        ...(zg ? { zgKey: zg.key } : {}),
       });
       if ("agent" in res) {
         const { agent } = res;
@@ -247,12 +247,12 @@ export function CreateAgentForm({ onCreated, taken, className }: { onCreated?: (
             </label>
           ) : null}
         </fieldset>
-        {!ownerDevice ? (
-          <div className="space-y-1.5">
-            <ZgConnect label={UNITS.zgLabel} compact onConnected={setZg} onCleared={() => setZg(null)} />
-            <p className="text-[11px] text-ink-dim">{UNITS.zgHint}</p>
-          </div>
-        ) : null}
+        {/* Always shown: the owner flag is also set by publishing a vault, which does not make this the
+            arena owner's device, and the server then needs the key. */}
+        <div className="space-y-1.5">
+          <ZgConnect label={UNITS.zgLabel} compact onConnected={setZg} onCleared={() => setZg(null)} />
+          <p className="text-[11px] text-ink-dim">{UNITS.zgHint}</p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <HbarInput label="Budget" value={budget} onChange={setBudget} hint={ownerDevice ? "funds its own account" : UNITS.budgetHint} />
           <HbarInput label="Per-vault cap" value={perCastle} onChange={setPerCastle} />
