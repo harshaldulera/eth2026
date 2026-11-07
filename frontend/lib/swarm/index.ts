@@ -11,7 +11,7 @@
  * The replay (lib/replay/build.ts) reads through `swarm.get` and says where the transcript came from.
  */
 import type { SwarmPort, Transcript } from "@/lib/types";
-import { swarmConfig, type SwarmConfig } from "./config";
+import { swarmConfig, swarmLinks, type SwarmConfig } from "./config";
 import { createLiveSwarm, type LiveDeps, type LiveSwarm } from "./live";
 import { requestReupload, uploadRef, uploadStats, workerSeenAt } from "./store";
 import { swarmStub } from "./stub";
@@ -87,6 +87,14 @@ export function sealedCopy(siegeId: string): Transcript | null {
   const t = liveSwarm()?.copy(siegeId) ?? null;
   if (t) requestReupload(siegeId);
   return t;
+}
+
+/**
+ * The public link for an op's reference: the named file (opens in a browser), or, for a reference
+ * still uploaded as raw bytes (the worker is moving it), the bytes link (downloads).
+ */
+export function swarmLink(siegeId: string, ref: string): string {
+  return uploadRef(siegeId)?.format === "bytes" ? swarmLinks.bytes(ref) : swarmLinks.open(ref);
 }
 
 /** The startup line and the docs: what this process will do with transcripts. */

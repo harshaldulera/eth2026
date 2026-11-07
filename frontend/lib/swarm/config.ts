@@ -60,8 +60,13 @@ export const isSwarmLive = () => swarmConfig().mode === "live";
 /**
  * Public links for a reference. Always the public gateways, never SWARM_GATEWAY_URL: uploads
  * through our own node are retrievable from any gateway, and a localhost link helps nobody.
+ *
+ *   open / limo  a transcript uploaded as transcript.json: the browser shows it (the trailing
+ *                slash is required; the gateway redirects the slash-less form)
+ *   bytes        a reference uploaded as raw bytes (before transcripts were named): it downloads
  */
 export const swarmLinks = {
+  open: (ref: string) => `${PUBLIC_GATEWAY}/bzz/${ref}/`,
+  limo: (ref: string) => `https://bzz.limo/bzz/${ref}/`,
   bytes: (ref: string) => `${PUBLIC_GATEWAY}/bytes/${ref}`,
-  limo: (ref: string) => `https://bzz.limo/bytes/${ref}`,
 };

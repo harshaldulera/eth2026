@@ -7,7 +7,9 @@ import { siege } from "@/lib/siege";
 import { createSwarm, NULL_BATCH_ID } from "@/lib/swarm";
 import { fakeGateway } from "@/lib/swarm/fake-gateway";
 import type { LiveSwarm } from "@/lib/swarm/live";
-import { swarmRefFor } from "@/lib/swarm/refs";
+import { rawSqlite } from "@/lib/db/raw";
+import { recordSwarmRef, swarmRefFor } from "@/lib/swarm/refs";
+import { uploadRow } from "@/lib/swarm/store";
 import type { PaidReceipt } from "@/lib/types";
 import { setWorkerQuiet } from "./log";
 import { swarmTick } from "./swarm";
@@ -63,9 +65,29 @@ describe("the worker's Swarm loop", () => {
     expect(write).toHaveBeenCalledTimes(1);
   });
 
+  it("a transcript from before it was named moves to transcript.json, and the op goes back to Arkiv with the new reference", async () => {
+    const s = await siege.start({ castleId: "castle_splinter_gate", raider: "0.0.raider", receipt: paid() });
+    for (const line of WOODEN_BREAK) await siege.message(s.id, line);
+    const ended = (await import("@/lib/siege/read")).getSiege(s.id)!;
+    const { ref } = await port.put({ siegeId: s.id, castleId: s.castleId, messages: ended.messages, transcriptHash: ended.transcriptHash! });
+    // Make it look as it did before: raw bytes on the gateway, format "bytes".
+    const old = g.seedBytes(new Uint8Array(uploadRow(s.id)!.body));
+    rawSqlite("SELECT 1").prepare("UPDATE swarm_uploads SET ref = ?, format = 'bytes' WHERE siege_id = ?").run(old, s.id);
+    recordSwarmRef(s.id, old);
+    expect(old).not.toBe(ref);
+    const write = vi.spyOn(arkiv, "writeSiege");
+
+    clock += 24 * 60 * 60_000; // well past any earlier pass (the throttle is module state)
+    await swarmTick(clock, port);
+    expect(swarmRefFor(s.id)).toBe(ref); // the named-file reference, same as a fresh upload of these bytes
+    expect(uploadRow(s.id)).toMatchObject({ ref, format: "file" });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0][0]).toMatchObject({ id: s.id });
+  });
+
   it("throttles to one pass a minute", async () => {
     const tick = vi.spyOn(port, "tick");
-    clock += 48 * 60 * 60_000; // past the last pass the first test made (the throttle is module state)
+    clock += 48 * 60 * 60_000; // past the last pass the earlier tests made (the throttle is module state)
     await swarmTick(clock, port);
     await swarmTick(clock + 1_000, port);
     expect(tick).toHaveBeenCalledTimes(1);

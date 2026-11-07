@@ -17,7 +17,7 @@ import { verifier } from "@/lib/siege";
 import { getSiege, messageRows } from "@/lib/siege/read";
 import { reasonText, refundText, verifyText } from "@/lib/siege/text";
 import { transcriptHash } from "@/lib/siege/transcript";
-import { isSwarmLive, REFERENCE_RE, sealedCopy, STUB_PREFIX, swarm, swarmLinks, swarmPending, swarmWorkerAlive, type SealedState } from "@/lib/swarm";
+import { isSwarmLive, REFERENCE_RE, sealedCopy, STUB_PREFIX, swarm, swarmLink, swarmPending, swarmWorkerAlive, type SealedState } from "@/lib/swarm";
 import { swarmRefFor } from "@/lib/swarm/refs";
 import type { SiegeMessage } from "@/lib/types";
 import type { HcsEntry, ReplayCheck, ReplayData, ReplayTurn } from "./types";
@@ -175,7 +175,7 @@ export async function buildReplay(siegeId: string): Promise<ReplayData | null> {
     }
   }
   /** A live reference is openable on the gateway (the bytes are the sealed envelope, not the text). */
-  const refUrl = ref && REFERENCE_RE.test(ref) ? swarmLinks.bytes(ref) : undefined;
+  const refUrl = ref && REFERENCE_RE.test(ref) ? swarmLink(siegeId, ref) : undefined;
   /** Sealed at siege end but never landed: a worker is retrying it, or nothing is. */
   const sealed = ref ? null : swarmPending(siegeId, now);
   const workerAlive = swarmWorkerAlive(now);

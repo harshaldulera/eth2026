@@ -1,14 +1,23 @@
 /**
- * The Bee API, the two calls we use: POST /bytes (upload, returns the reference) and GET /bytes/{ref}
- * (download). Plain fetch, no SDK: the API is two endpoints and a header
- * (https://docs.ethswarm.org/api). Works against a Bee node or a gateway in front of one.
+ * The Bee API calls we use, plain fetch, no SDK (https://docs.ethswarm.org/api). Works against a
+ * Bee node or a gateway in front of one.
  *
+ *   upload    POST /bzz?name=transcript.json  (Content-Type: application/json)
+ *             A single file with a name and a type, so `GET /bzz/<ref>/` serves it as JSON and a
+ *             browser shows it instead of downloading anonymous bytes. Same bytes, same name, same
+ *             type: same reference, so re-uploads (the keep-alive) keep the reference.
+ *   download  GET /bzz/<ref>/, falling back to GET /bytes/<ref> for references uploaded before
+ *             transcripts were named (raw bytes, served as application/octet-stream).
+ *
+ * The trailing slash on /bzz/<ref>/ matters: the public gateway redirects the slash-less form.
  * On the public gateway the batch id we send is replaced by the gateway's own, so the null stamp
  * works. On your own node it must be a usable batch you bought.
  */
 
 export const UPLOAD_TIMEOUT_MS = 10_000;
 export const REFERENCE_RE = /^[0-9a-f]{64}$/;
+/** The file name every transcript is uploaded under (the envelope inside says which op it is). */
+export const TRANSCRIPT_FILE = "transcript.json";
 
 export type GatewayOpts = { gatewayUrl: string; batchId: string; fetch?: typeof fetch; timeoutMs?: number };
 
@@ -24,15 +33,15 @@ export class SwarmGatewayError extends Error {
 
 const trim = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 200);
 
-/** Upload bytes; returns the 64-hex Swarm reference. Throws SwarmGatewayError on refusal or timeout. */
+/** Upload a JSON document as transcript.json; returns the 64-hex Swarm reference. Throws SwarmGatewayError on refusal or timeout. */
 export async function uploadBytes(body: Uint8Array, o: GatewayOpts): Promise<string> {
   const f = o.fetch ?? fetch;
   let res: Response;
   let text: string;
   try {
-    res = await f(`${o.gatewayUrl}/bytes`, {
+    res = await f(`${o.gatewayUrl}/bzz?name=${TRANSCRIPT_FILE}`, {
       method: "POST",
-      headers: { "content-type": "application/octet-stream", "swarm-postage-batch-id": o.batchId },
+      headers: { "content-type": "application/json", "swarm-postage-batch-id": o.batchId },
       body: body as unknown as BodyInit,
       signal: AbortSignal.timeout(o.timeoutMs ?? UPLOAD_TIMEOUT_MS),
     });
@@ -51,12 +60,11 @@ export async function uploadBytes(body: Uint8Array, o: GatewayOpts): Promise<str
   return ref;
 }
 
-/** Download by reference. Null when the gateway has nothing for it (404); throws on other failures. */
-export async function downloadBytes(ref: string, o: Omit<GatewayOpts, "batchId">): Promise<Uint8Array | null> {
-  if (!REFERENCE_RE.test(ref)) return null;
+/** One GET: the body, or null on 404. */
+async function getOrNull(url: string, o: Omit<GatewayOpts, "batchId">): Promise<Uint8Array | null> {
   const f = o.fetch ?? fetch;
   try {
-    const res = await f(`${o.gatewayUrl}/bytes/${ref}`, { signal: AbortSignal.timeout(o.timeoutMs ?? UPLOAD_TIMEOUT_MS) });
+    const res = await f(url, { signal: AbortSignal.timeout(o.timeoutMs ?? UPLOAD_TIMEOUT_MS) });
     if (res.status === 404) return null;
     if (!res.ok) throw new SwarmGatewayError(`download from ${o.gatewayUrl} refused: HTTP ${res.status}`, res.status);
     return new Uint8Array(await res.arrayBuffer()); // the timeout covers the body too
@@ -64,4 +72,10 @@ export async function downloadBytes(ref: string, o: Omit<GatewayOpts, "batchId">
     if (e instanceof SwarmGatewayError) throw e;
     throw new SwarmGatewayError(`download from ${o.gatewayUrl} failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+/** Download by reference (named file first, then raw bytes). Null when neither has it; throws on other failures. */
+export async function downloadBytes(ref: string, o: Omit<GatewayOpts, "batchId">): Promise<Uint8Array | null> {
+  if (!REFERENCE_RE.test(ref)) return null;
+  return (await getOrNull(`${o.gatewayUrl}/bzz/${ref}/`, o)) ?? (await getOrNull(`${o.gatewayUrl}/bytes/${ref}`, o));
 }
